@@ -15,6 +15,34 @@ export function requestContext(): RequestHandler {
 }
 
 /**
+ * PostgreSQL text cannot hold U+0000: a NUL in a query string, path or JSON string would surface as a 500 from
+ * the driver (22021) wherever it reaches a query. Refuse it once, at the edge, as a 400.
+ */
+const NUL_ESCAPE = Buffer.from('\\u0000');
+function containsNul(value: unknown): boolean {
+  if (typeof value === 'string') return value.includes('\0');
+  if (Array.isArray(value)) return value.some(containsNul);
+  if (value && typeof value === 'object') return Object.entries(value).some(([k, v]) => k.includes('\0') || containsNul(v));
+  return false;
+}
+export function rejectNulInJson(_req: unknown, _res: unknown, buf: Buffer): void {
+  // Cheap pre-check on the raw bytes; only bodies that spell the escape are parsed again to be exact.
+  if (!buf.includes(NUL_ESCAPE)) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(buf.toString('utf8'));
+  } catch {
+    return; // the json parser reports malformed bodies itself
+  }
+  if (containsNul(parsed)) throw AppError.badRequest('INVALID_CHARACTERS', 'Text must not contain NUL characters');
+}
+export function rejectNulInUrl(): RequestHandler {
+  return (req, _res, next) => {
+    next(/%00/.test(req.originalUrl) || req.originalUrl.includes('\0') ? AppError.badRequest('INVALID_CHARACTERS', 'The URL must not contain NUL characters') : undefined);
+  };
+}
+
+/**
  * Tenant resolution for browser/user traffic: the request host is looked up in
  * tenant_domains. API-key traffic resolves its tenant from the key instead
  * (see api-key middleware), and platform routes carry no tenant.

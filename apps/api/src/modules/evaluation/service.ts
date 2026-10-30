@@ -721,6 +721,8 @@ export async function analyzeExamSimilarity(
   examId: string,
   threshold = 0.85,
 ) {
+  const exam = await trx('exams').where({ tenant_id: tenantId, id: examId }).first('id');
+  if (!exam) throw AppError.notFound('EXAM_NOT_FOUND');
   // Fetch all sealed attempts for the exam
   const attempts = await trx('exam_attempts')
     .where({ tenant_id: tenantId, exam_id: examId })

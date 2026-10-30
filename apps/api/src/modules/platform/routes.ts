@@ -65,7 +65,9 @@ export function platformRoutes(deps: AppDeps, jwt: JwtService): Router {
   }));
   r.use(gate);
   r.post('/auth/logout', asyncHandler(async (_req, res) => {
-    await deps.db('platform_sessions').where('id', res.locals['platformSessionId']).update({ revoked_at: deps.clock.now() });
+    // The bootstrap key (dev/test) has no session to revoke; only a session token ends a session.
+    const sessionId = res.locals['platformSessionId'] as string | undefined;
+    if (sessionId) await deps.db('platform_sessions').where('id', sessionId).update({ revoked_at: deps.clock.now() });
     res.status(204).end();
   }));
   r.get('/tenants', asyncHandler(async (_req, res) => {

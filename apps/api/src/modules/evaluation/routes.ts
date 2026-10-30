@@ -8,7 +8,7 @@ import {
   SimilarityAnalysisSchema,
 } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
-import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
+import { asyncHandler, validateBody, body, validateQuery, query, uuidParam } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
 import { requireUser, requirePermission, userPrincipal } from '../../middleware/auth.js';
 import type { JwtService } from '../auth/jwt.js';
@@ -27,6 +27,7 @@ import {
   analyzeExamSimilarity,
 } from './service.js';
 
+const EvaluatorQueueQuery = z.object({ examId: z.string().uuid().optional() });
 const ResultItemsBody = z.object({
   items: z
     .array(
@@ -91,10 +92,11 @@ export function evaluationRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/evaluator/me/assignments',
     user,
     requirePermission('marks:approve'),
+    validateQuery(EvaluatorQueueQuery),
     asyncHandler(async (req: Request, res: Response) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      const examId = req.query['examId'] ? String(req.query['examId']) : undefined;
+      const examId = query<typeof EvaluatorQueueQuery>(req).examId;
       const result = await tenantTx(deps, req, (trx) =>
         getEvaluatorQueue(trx, t.id, p.userId, examId),
       );

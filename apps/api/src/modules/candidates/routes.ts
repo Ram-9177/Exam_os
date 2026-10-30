@@ -29,7 +29,8 @@ const ReleaseBody = z.object({ reason: z.string().trim().min(5).max(2000) });
 
 async function examScopeOfAttempt(deps: AppDeps, req: Request): Promise<{ examId?: string }> {
   const t = requireTenant(req);
-  const a = await tenantTx(deps, req, (trx) => trx('exam_attempts').where({ tenant_id: t.id, id: req.params['attemptId'] }).first('exam_id'));
+  const attemptId = uuidParam(req, 'attemptId'); // a malformed id is a 400, never a uuid cast error from PostgreSQL
+  const a = await tenantTx(deps, req, (trx) => trx('exam_attempts').where({ tenant_id: t.id, id: attemptId }).first('exam_id'));
   return { examId: a?.exam_id };
 }
 

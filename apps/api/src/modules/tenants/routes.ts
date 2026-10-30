@@ -15,9 +15,10 @@ import {
   XlsxPreviewRequestSchema,
   XlsxImportRequestSchema,
   MailBounceReconcileSchema,
+  ROSTER_SYNC_SOURCES,
 } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
-import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
+import { asyncHandler, validateBody, body, validateQuery, query, uuidParam } from '../../lib/http.js';
 import { AppError } from '../../lib/errors.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
 import { requireUser, requirePermission, userPrincipal } from '../../middleware/auth.js';
@@ -53,6 +54,7 @@ const SsoConfigBody = z.object({
   allowedEmailDomains: z.array(z.string().min(3)).default([]),
   enabled: z.boolean().default(true),
 });
+const SyncJobsQuery = z.object({ source: z.enum(ROSTER_SYNC_SOURCES).optional() });
 const UserStatusBody = UserStatusSchema.extend({ reason: z.string().trim().max(500).optional() });
 const RoleBody = z.object({ role: z.enum(ROLE_CODES), scopeType: z.enum(SCOPE_TYPES).default('TENANT'), scopeId: z.string().uuid().nullable().default(null) });
 
@@ -486,9 +488,10 @@ export function tenantAdminRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/roster/sync-jobs',
     user,
     requirePermission('roster:read'),
+    validateQuery(SyncJobsQuery),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
-      const source = req.query['source'] ? String(req.query['source']) : undefined;
+      const source = query<typeof SyncJobsQuery>(req).source;
       const rows = await tenantTx(deps, req, (trx) =>
         trx('roster_sync_jobs')
           .where('tenant_id', t.id)

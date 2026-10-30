@@ -1,4 +1,4 @@
-import { Router, type Request } from 'express';
+import { Router, type Request, type RequestHandler } from 'express';
 import { z } from 'zod';
 import {
   PersonBatchSchema,
@@ -13,7 +13,7 @@ import {
   MailBounceReconcileSchema,
 } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
-import { asyncHandler, validateBody, body, validateQuery, query } from '../../lib/http.js';
+import { asyncHandler, validateBody, body, validateQuery, query, uuidParam } from '../../lib/http.js';
 import { requireApiKey, apiKeyPrincipal } from '../../middleware/api-key.js';
 import { idempotent } from '../../middleware/idempotency.js';
 import { rateLimit } from '../../middleware/rate-limit.js';
@@ -26,6 +26,12 @@ import { generateTemplate, previewRosterImport, executeRosterImport } from './cs
 import { reconcileBounce } from '../notifications/bounce.js';
 import { AppError } from '../../lib/errors.js';
 import { safeEqual } from '../../lib/crypto.js';
+
+/** Mail provider callbacks authenticate with the tenant's callback secret; an anonymous caller gets 401 before any body validation. */
+const requireCallbackToken: RequestHandler = (req, _res, next) => {
+  const presented = (req.header('authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
+  next(presented ? undefined : AppError.unauthorized('CALLBACK_TOKEN_REQUIRED'));
+};
 
 const ProviderHeader = 'x-examos-provider';
 
@@ -106,7 +112,7 @@ export function integrationRoutes(deps: AppDeps): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const out = await tenantTx(deps, req, async (trx) => {
-        const job = await trx('roster_sync_jobs').where({ tenant_id: t.id, id: req.params['id'] }).first();
+        const job = await trx('roster_sync_jobs').where({ tenant_id: t.id, id: uuidParam(req, 'id') }).first();
         if (!job) throw AppError.notFound('SYNC_JOB_NOT_FOUND');
         const rows = await trx('roster_sync_rows').where({ job_id: job.id }).orderBy('row_index');
         return { job, rows };
@@ -182,6 +188,7 @@ export function integrationRoutes(deps: AppDeps): Router {
   r.post(
     '/mail/callbacks',
     rateLimit(deps, { pool: 'mail-callback', limit: 1200, windowSeconds: 60, keyOf: (req) => req.ip ?? 'anon' }),
+    requireCallbackToken,
     validateBody(MailCallbackSchema),
     asyncHandler(async (req, res) => {
       const cb = body<typeof MailCallbackSchema>(req);
@@ -275,6 +282,7 @@ export function integrationRoutes(deps: AppDeps): Router {
   r.post(
     '/mail/bounces',
     rateLimit(deps, { pool: 'mail-callback', limit: 1200, windowSeconds: 60, keyOf: (req) => req.ip ?? 'anon' }),
+    requireCallbackToken,
     validateBody(MailBounceReconcileSchema),
     asyncHandler(async (req, res) => {
       const input = body<typeof MailBounceReconcileSchema>(req);

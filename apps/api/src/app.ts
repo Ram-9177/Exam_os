@@ -2,7 +2,7 @@ import express, { type Express } from 'express';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import type { AppDeps } from './types.js';
-import { requestContext, resolveTenantByHost } from './middleware/request-context.js';
+import { requestContext, resolveTenantByHost, rejectNulInJson, rejectNulInUrl } from './middleware/request-context.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { JwtService } from './modules/auth/jwt.js';
 import { AuthService } from './modules/auth/service.js';
@@ -48,8 +48,9 @@ export async function createApp(deps: AppDeps): Promise<App> {
   // Production sits behind one reverse proxy. Elsewhere only loopback callers (dev tools, tests) may present X-Forwarded-For.
   app.set('trust proxy', deps.config.isProduction ? 1 : 'loopback');
   app.use(helmet({ contentSecurityPolicy: false }));
-  app.use(express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: '5mb', verify: rejectNulInJson }));
   app.use(requestContext());
+  app.use(rejectNulInUrl());
   if (deps.config.NODE_ENV !== 'test') app.use(pinoHttp({ logger: deps.logger, genReqId: (req) => (req as express.Request).ctx?.requestId ?? 'n/a' }));
 
   app.get('/healthz', async (_req, res) => {

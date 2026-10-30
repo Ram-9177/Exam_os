@@ -4,6 +4,9 @@ Base: `/api/v1`. Tenant is resolved from the request Host header (dev: `localhos
 Auth: `Authorization: Bearer <accessToken>` (10-min RS256 JWT); refresh with `POST /auth/refresh {refreshToken}`; 401 with code `TOKEN_INVALID` → refresh once then retry; `SESSION_REVOKED` → logout.
 Student exam requests after admission MUST send header `x-device-session: <deviceSessionId returned by admit/reconnect>`.
 
+Outside `/api/v1` (path is absolute):
+GET  /healthz → {ok:true} | 503 {ok:false,error} (database + Redis liveness probe)
+
 ## Public (host tenant)
 GET  /tenant → {id, slug, name, timezone, ssoProvider}
 POST /auth/login {email,password} → {accessToken, refreshToken, expiresIn, user:{id,email,fullName,kind}}
@@ -11,7 +14,9 @@ POST /auth/refresh {refreshToken} → same shape
 POST /auth/activate {token,password} → same shape (token comes from the activation e-mail link ?token=)
 POST /auth/logout (auth) → 204
 GET  /auth/me (auth) → {userId,email,kind,grants:[{role,scopeType,scopeId}],tenant}
-GET  /auth/oidc/start?redirectUri= → {authorizationUrl,state}; POST /auth/oidc/callback {code,state} → token pair
+GET  /auth/oidc/start?redirectUri= → {authorizationUrl,state}
+POST /auth/oidc/callback {code,state} → token pair (no auto-provisioning: the SSO identity must match an existing account)
+GET  /auth/.well-known/jwks.json → {keys:[…]} public RS256 verification keys
 GET  /student/verify/:attemptId/:version → {valid,published,version,publishedAt,total,max}   (public result verification page)
 
 ## Student (role STUDENT; permission attempts:own)
@@ -46,7 +51,15 @@ POST /proctor/events {events:[{sourceEventId,attemptId,signalClass,clientRecorde
 GET  /exams?status&examType&academicYear&semester&departmentCode&schoolCode&q → {exams:[{id,code,title,status,examType,academicYear,semester,securityProfile,durationMinutes,windowStartAt,windowEndAt,courseCode,courseName,departmentCode,departmentName,schoolCode,schoolName}]}
 POST /exams {code,title,courseCode,examType,academicYear,semester,maxMarks,securityProfile,durationMinutes,windowStartAt,windowEndAt,warningThreshold,policy} → 201 {examId}
 GET  /exams/:id → {exam, attemptCounts}
-POST /exams/:id/submit-for-review | approve | schedule | open-precheck | start | close | archive | cancel → {from,to}   (close → {from,to:'CLOSED',sealing:{sealed,pending}}: every open attempt's deadline becomes now in one statement, then attempts are sealed one transaction each — inline up to 200 / 8 s, the rest by the worker's seal-closed-exams loop within seconds; a per-attempt deadline-sweep loop seals students whose own time ran out while the exam stays LIVE)
+POST /exams/:id/submit-for-review (exams:write) → {from,to:'PAPER_REVIEW'}
+POST /exams/:id/approve (exams:write) → {from,to:'APPROVED'}
+POST /exams/:id/schedule (exams:write) → {from,to:'SCHEDULED'}
+POST /exams/:id/open-precheck (exams:conduct) → {from,to:'PRECHECK'}
+POST /exams/:id/start (exams:conduct) → {from,to:'LIVE'}
+POST /exams/:id/close (exams:conduct) → {from,to:'CLOSED',sealing:{sealed,pending}}   (every open attempt's deadline becomes now in one statement, then attempts are sealed one transaction each — inline up to 200 / 8 s, the rest by the worker's seal-closed-exams loop within seconds; a per-attempt deadline-sweep loop seals students whose own time ran out while the exam stays LIVE)
+POST /exams/:id/archive (exams:write) → {from,to:'ARCHIVED'}
+POST /exams/:id/cancel (exams:write) → {from,to:'CANCELLED'}
+     All eight are bodiless state-machine transitions checked by assertTransition (409 ILLEGAL_TRANSITION otherwise).
 POST /exams/:id/allocations {studentExternalIds:[], provider:'uos', extraTimeMinutes} → {allocated, skipped:[{externalId,reason}]}
 POST /exams/:id/hall-tickets {} → {issued}
 GET  /exams/:id/hall-tickets/:userId/pdf → PDF binary (exams:read)
@@ -83,6 +96,7 @@ GET  /analytics/department/:departmentId (analytics:read scoped to departmentId)
 GET  /analytics/overview (analytics:read) → {overview:{departments:[{id,code,name,studentCount,publishedRecordsCount,passRate,avgPercentage}]}}
 
 ## Candidates (post-exam)
+GET  /candidates/queue?examId (marks:approve, exam-scoped) → {summary:{total,awaitingMarks,marked}, candidates:[{attemptId,status,fullName,registerNumber,hallTicket,resultVersion,totalMarks,maxMarks,markedAt,marking:'AWAITING_MARKS'|'MARKED'|'PUBLISHED'}]}   (examiner queue; carries no integrity or proctoring fields)
 POST /candidates/:attemptId/forensics/run → packet
 POST /candidates/:attemptId/result-versions {items:[{questionId,maxMarks,marks,explanation,criteria?:[{code,max,awarded,evidence?}]}]} (EVALUATOR) → 201 {resultVersionId,version,total,max,invalidatedApprovals}
 GET  /candidates/:attemptId/checklist → {packet,exam,resultVersion,checks:[{code,ok,detail}],publishable}
@@ -115,15 +129,57 @@ POST /proctor/attempts/:id/resume {reasonCode,notes,idempotencyKey,deadlineExten
 GET  /proctor/attempts/:id/timeline → {attempt,events,warnings,epochs,network:[{ip,user_agent,first_seen_at,last_seen_at,observations,first_source,in_allowed_subnet}],deviceScans:[{id,phase,verdict,findings,ip,user_agent,scan_sha256,created_at}]}   (raw scans stay in the device_scans table; the evidence PDF lists both)
 
 ## Tenant admin (TENANT_ADMIN / SYSTEM_ADMIN)
-POST /tenant/users; GET /tenant/users?q&kind; POST|DELETE /tenant/users/:id/roles {role,scopeType,scopeId}
-PUT  /tenant/mail-config {transportKind,senderAddress,senderName,endpointSecret?,tokenSecret?,callbackSecret?,category?,settings}
-GET  /tenant/mail-dispatches; PUT /tenant/sso-config; POST /tenant/api-keys; DELETE /tenant/api-keys/:id; POST /tenant/webhooks; GET /tenant/webhooks/deliveries; POST /tenant/webhooks/deliveries/:id/replay; GET /tenant/audit
+POST /tenant/users {email,fullName,kind:'STUDENT'|'STAFF',externalId?,provider?,roles:[{role,scopeType?,scopeId?}]} (users:write) → 201 {userId,activationDispatchId} (activation mail queued; 409 STAFF_LOGIN_LIMIT when no staff seat is free)
+GET  /tenant/users?q&kind (users:read) → {users:[{id,email,fullName,kind,status,registerNumber,createdAt}]}   (max 200)
+GET  /tenant/staff-seats (users:read) → {limit,used,free,bundles,staff:[{…,roles:[{role,scopeType,scopeId}]}]}
+PATCH /tenant/users/:id/status {status:'ACTIVE'|'INACTIVE'|'SUSPENDED'|'PENDING_ACTIVATION', reason?} (users:write) → {status}
+GET  /tenant/users/:id/roles (users:read) → {roles:[{id,role,scopeType,scopeId,effectiveFrom,effectiveUntil}]}
+POST /tenant/users/:id/roles {role,scopeType,scopeId} (users:write) → 201 {grantId}
+DELETE /tenant/users/:id/roles {role,scopeType,scopeId} (users:write) → {revoked}
+PUT  /tenant/mail-config {transportKind,senderAddress,senderName,endpointSecret?,tokenSecret?,callbackSecret?,category?,settings} (mail:manage) → 204 (secrets sealed, never returned)
+GET  /tenant/mail-dispatches (mail:manage) → {dispatches:[{id,category,lane,toAddress,subject,status,attemptCount,transportKind,lastError,createdAt,acceptedAt}]}
+PUT  /tenant/sso-config {provider:'entra'|'google'|'generic',issuer,clientId,clientSecret?|clientSecretRef?,allowedEmailDomains,enabled} (tenant:manage) → 204
+POST /tenant/api-keys {label,scopes,expiresAt?,allowedIps?,connectionId?,env?:'live'|'test'} (integration:manage) → 201 {id,keyId,apiKey,note} (plaintext key shown once)
+GET  /tenant/api-keys (integration:manage) → {apiKeys:[{id,label,keyId,scopes,expiresAt,lastUsedAt,revokedAt,createdAt}]}
+DELETE /tenant/api-keys/:id (integration:manage) → 204 (revoked)
+POST /tenant/webhooks {url,description?,eventTypes} (integration:manage) → 201 {id,signingSecret,note} (secret shown once)
+GET  /tenant/webhooks (integration:manage) → {webhooks:[{id,url,description,eventTypes,status,createdAt}]}
+DELETE /tenant/webhooks/:id (integration:manage) → 204 (endpoint disabled)
+GET  /tenant/webhooks/deliveries (integration:manage) → {deliveries:[{id,eventType,status,attempts,lastStatusCode,lastError,nextAttemptAt,deliveredAt,url}]}
+POST /tenant/webhooks/deliveries/:id/replay (integration:manage) → 202
+GET  /tenant/audit (audit:read) → {events:[…]} (latest 500)
+
+## Platform (super admin; tenant-less)
+Authenticated by a platform session token (`Authorization: Bearer`, tid `platform`) or, outside production only, `x-platform-key: <PLATFORM_BOOTSTRAP_KEY>`; 401 PLATFORM_ACCESS_REQUIRED otherwise, 403 for a tenant user's token.
+POST /platform/auth/login {email,password,otp} (public; 10/5 min per IP) → {accessToken,expiresAt,email}   (401 LOGIN_FAILED; lockout after 5 failures)
+POST /platform/auth/logout → 204 (revokes the platform session; a no-op for the bootstrap key)
+GET  /platform/me → {email,via:'SESSION'|'BOOTSTRAP_KEY'}
+GET  /platform/tenants → {tenants:[{id,slug,name,status,timezone,staffLoginLimit,staffCount,studentCount,domains}]}
+POST /platform/tenants {slug,name,groupCode?,timezone?,domains,adminEmail,adminFullName,staffLoginLimit?:3|4} → 201 {tenantId,adminUserId}   (admin activation mail queued)
+PATCH /platform/tenants/:id {name?,status?:'ACTIVE'|'SUSPENDED',staffLoginLimit?:3|4,domains?} → 204   (suspension revokes every session; 409 DOMAIN_IN_USE, STAFF_LIMIT_BELOW_USAGE)
+GET  /platform/overview → {tenants:[{tenantId,name,slug,status,examsByStatus,attemptsInProgress,openIncidents}]}
+GET  /platform/tenants/:id/staff → {limit,used,free,bundles,staff:[…]}
+PUT  /platform/tenants/:id/staff/:userId/roles {roles:[RoleCode≠STUDENT],bundle?:'ADMIN_CONTROLLER'|'EXAM_OFFICE'|'CHIEF_REVIEWER'|'EXAMINER'} → 204   (422 ROLES_REQUIRED / ROLE_KIND_MISMATCH)
+POST /platform/tenants/:id/staff/:userId/reissue-activation → 202 {dispatchId}   (unlocks and mails a fresh activation link to the staff member's own mailbox)
+GET  /platform/audit → {events:[…]} (latest 100 platform-level audit events)
+
+## Simple Integration API (ERP; tenant from the API key)
+Authenticated by `Authorization: Bearer exk_<live|test>_<keyId>_<secret>` (or `x-api-key`); 401 API_KEY_INVALID without a valid key, 403 SCOPE_MISSING. Provider from the key's ERP connection or `X-ExamOS-Provider` (default `erp`). Roster batches require `Idempotency-Key`.
+PUT  /integration/v1/roster/persons/batch {rows:[Person],mode?:'UPSERT'|'CREATE_ONLY'|'UPDATE_ONLY',sourceLabel?} (roster:write) → {syncJobId,summary:{created,updated,unchanged,rejected,identityConflicts},rows:[{index,externalId,outcome,code,message}]}   (≤ 500 rows)
+PUT  /integration/v1/roster/academic-units/batch {rows:[AcademicUnit],mode?,sourceLabel?} (roster:write) → same shape
+PUT  /integration/v1/roster/courses/batch {rows:[Course],mode?,sourceLabel?} (roster:write) → same shape
+PUT  /integration/v1/roster/enrollments/batch {rows:[Enrollment],mode?,sourceLabel?} (roster:write) → same shape
+GET  /integration/v1/roster/sync-jobs/:id (roster:read) → {job,rows}   (400 INVALID_ID, 404 SYNC_JOB_NOT_FOUND)
+GET  /integration/v1/events?since&limit&types (events:read) → cursor feed of signed event envelopes {id,type,tenantId,occurredAt,version,data}
+GET  /integration/v1/results?examCode&since (results:read) → {examCode,results:[{examCode,examType,academicYear,semester,provider,studentExternalId,hallTicketNumber,marks,maxMarks,grade,publishedAt,resultVersionId}]}   (published results only)
+POST /integration/v1/webhooks {url,description?,eventTypes} (webhooks:manage) → 201 {id,signingSecret}
+POST /integration/v1/mail/callbacks {dispatchId,outcome:'ACCEPTED'|'FAILED',providerMessageId?,error?} (Power Automate flow; `Authorization: Bearer <tenant callback secret>`, 401 CALLBACK_TOKEN_REQUIRED before any validation) → {result}
 
 ## ERP Adapters, XLSX Import & Mail Completeness (Phase 7)
 GET  /integration/v1/roster/templates/:entity (roster:read) → CSV template download for PERSON | ACADEMIC_UNIT | COURSE | ENROLLMENT
 POST /integration/v1/roster/preview {entity, csvContent, mode, provider?} (roster:write) → {entity, total, summary:{created, updated, unchanged, rejected, identityConflicts}, sampleRows}
 POST /integration/v1/roster/import-xlsx {entity, csvContent, mode, provider?, sourceLabel?} (roster:write) → 200 {syncJobId, summary, rows}
-POST /integration/v1/mail/bounces {providerMessageId?, toAddress, reason?, diagnosticCode?, bouncedAt?} → {reconciled:boolean, dispatchId, toAddress}
+POST /integration/v1/mail/bounces {providerMessageId?, toAddress, reason?, diagnosticCode?, bouncedAt?} (`Authorization: Bearer <tenant callback secret>`; 401 CALLBACK_TOKEN_REQUIRED before any validation) → {reconciled:boolean, dispatchId, toAddress}
 POST /tenant/erp-connections {provider, label, baseUrl, credentialSecret?, webhookSecret?, syncScheduleCron?, mapping, status} (integration:manage) → 201 {id}
 GET  /tenant/erp-connections (integration:manage) → {connections:[{id,provider,label,base_url,sync_schedule_cron,mapping,status,last_sync_at,created_at}]}
 GET  /tenant/erp-connections/:id (integration:manage) → {connection}
