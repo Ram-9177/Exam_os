@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createTestContext, provisionTenant, createStaff, createApiKey, activationTokenFor, answerHash, cleanScan, type TestContext, type ProvisionedTenant } from './helpers.js';
 import { sweepExpiredAttempts } from '../src/modules/exams/service.js';
+import { runForensicsOnce } from '../src/modules/candidates/service.js';
 
 /**
  * Audit follow-ups that a strict examiner checks before go-live: the server
@@ -166,5 +167,41 @@ describe('exam-day hardening', () => {
     const release = await req().post(`/api/v1/candidates/${s.attemptId}/holds/release`).set(H(examCell.token)).send({ reason: 'reviewed with the department; no case to answer' });
     expect(release.status).toBeLessThan(300);
     expect((await packet()).status).toBe('ACADEMIC_MARKING_READY');
+  });
+  it('the forensics lane routes a packet whose checks throw to technical review and still processes the next packet', async () => {
+    // student 1 was sealed by the deadline sweep, student 0 submits now: two ATTEMPT_SEALED packets, oldest first
+    const poisoned = students[1]!;
+    const healthy = students[0]!;
+    const submit = await req().post(`/api/v1/student/attempts/${healthy.attemptId}/submit`).set(H(healthy.token)).set('x-device-session', healthy.device).send({ idempotencyKey: randomUUID() });
+    expect(submit.status).toBe(200);
+    const packet = (attemptId: string) => ctx.admin('candidate_review_packets').where({ attempt_id: attemptId }).first();
+    expect((await packet(poisoned.attemptId)).status).toBe('ATTEMPT_SEALED');
+    expect((await packet(healthy.attemptId)).status).toBe('ATTEMPT_SEALED');
+    expect(new Date((await packet(poisoned.attemptId)).created_at).getTime()).toBeLessThanOrEqual(new Date((await packet(healthy.attemptId)).created_at).getTime());
+    // Simulate a corrupt sealed manifest (e.g. restored from a bad backup) so the checks themselves throw.
+    // submission_manifests is append-only; only this test bypasses the trigger, as a superuser, to plant the corruption.
+    await ctx.admin.transaction(async (trx) => {
+      await trx.raw('SET LOCAL session_replication_role = replica');
+      await trx('submission_manifests').where({ attempt_id: poisoned.attemptId }).update({ manifest: JSON.stringify({ answers: 'corrupt' }) });
+    });
+
+    const processed = await runForensicsOnce(ctx.deps);
+    expect(processed).toBeGreaterThanOrEqual(2);
+    const bad = await packet(poisoned.attemptId);
+    expect(bad.status).toBe('TECHNICAL_REVIEW_REQUIRED');
+    expect(bad.hold_reason).toMatch(/^FORENSICS_FAILED: /);
+    const failedEvents = await ctx.admin('attempt_event_log').where({ attempt_id: poisoned.attemptId, event_type: 'forensics.failed' });
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0].actor).toBe('SYSTEM:forensics');
+    // the lane moved on: the packet after the poisoned one was checked and reached the marking queue
+    expect((await packet(healthy.attemptId)).status).toBe('ACADEMIC_MARKING_READY');
+
+    // the poisoned packet is no longer picked up, so the lane cannot loop on it
+    const before = (await packet(poisoned.attemptId)).version;
+    await runForensicsOnce(ctx.deps);
+    const after = await packet(poisoned.attemptId);
+    expect(after.status).toBe('TECHNICAL_REVIEW_REQUIRED');
+    expect(after.version).toBe(before);
+    expect(await ctx.admin('attempt_event_log').where({ attempt_id: poisoned.attemptId, event_type: 'forensics.failed' })).toHaveLength(1);
   });
 });

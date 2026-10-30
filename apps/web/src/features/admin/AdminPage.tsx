@@ -45,9 +45,12 @@ export function AdminPage() {
   )
     .filter(([id]) => perms.has(TAB_PERMISSION[id]))
     .map(([id, label]) => ({ id, label }));
-  const [tab, setTab] = useState<TabId>(tabs[0]?.id ?? 'users');
+  const [chosen, setTab] = useState<TabId | null>(null);
 
   if (tabs.length === 0) return <EmptyState title="No administration sections for your role">Ask a tenant administrator if you need access.</EmptyState>;
+  // Roles arrive after the first render, so the first permitted section is chosen here rather than in
+  // the initial state; a section the person cannot open is never rendered (it would only fetch a 403).
+  const tab: TabId = chosen && tabs.some((t) => t.id === chosen) ? chosen : tabs[0]!.id;
 
   return (
     <div>
