@@ -20,8 +20,8 @@ GET  /student/me/exams/:examId/hall-ticket.pdf → PDF binary with verification 
 GET  /student/me/ledger → {records:[{exam_type,academic_year,semester,marks,max_marks,grade,hall_ticket_number,published_at,examCode,examTitle,courseCode,courseName}], semesters:[{academic_year,semester,exams,marks,max_marks,percentage}], overall:{exams,semesters,marks,max_marks,percentage}}
 GET  /student/attempts/:id/paper (student own, exam LIVE) → {paper:{paper_id,title,total_marks,sections,setCode},questions:[{question_id,section_id,question_number,kind,prompt,max_marks,options}]} (expected_answer and rubric stripped)
 POST /student/attempts/:attemptId/prechecks {clientBuild} → 201 {runId, checks:[{code,status,source,diagnosticCode,remediationCode,instruction,optional}]}   (409 PRECHECK_NOT_OPEN until Exam Section opens it)
-POST /student/prechecks/:runId/items/verify {code, clientBuild?, clientClockMs?, keyboardSample?, canvasOps?, consentPolicyVersion?} → {checks:[...]}
-     codes: CLIENT_VERSION, CLOCK_SYNC(clientClockMs=Date.now()), KEYBOARD_INPUT(keyboardSample≥20 chars with letters, digits, punctuation), CANVAS_INPUT(canvasOps count; OPTIONAL — stylus optional), NETWORK_SAVE_ROUNDTRIP(after a practice save), CONSENT(consentPolicyVersion = policyVersion from GET /student/attempts/:id/policy), CAMERA, MICROPHONE (client-declared; high-tier profiles show UNVERIFIABLE honestly until the media pipeline exists)
+POST /student/prechecks/:runId/items/verify {code, clientBuild?, clientClockMs?, keyboardSample?, canvasOps?, consentPolicyVersion?, scan?} → {checks:[...]}
+     codes: CLIENT_VERSION, CLOCK_SYNC(clientClockMs=Date.now()), KEYBOARD_INPUT(keyboardSample≥20 chars with letters, digits, punctuation), CANVAS_INPUT(canvasOps count; OPTIONAL — stylus optional), NETWORK_SAVE_ROUNDTRIP(after a practice save), CONSENT(consentPolicyVersion = policyVersion from GET /student/attempts/:id/policy), CAMERA, MICROPHONE (client-declared; high-tier profiles show UNVERIFIABLE honestly until the media pipeline exists), SYSTEM_SCAN(scan = raw DeviceScan; the server derives findings, appends a device_scans row and records the item as CLIENT_DECLARED — a BLOCKING finding is REMEDIATE/FIX_DEVICE_SETTINGS, a clean scan is never a security PASS)
 GET  /student/attempts/:attemptId/policy → {attemptId,attemptStatus,examId,examTitle,examStatus,securityProfile,policyVersion,durationMinutes,windowStartAt,windowEndAt,consentPurposes,checks:[{code,mandatory,serverMeasured,optional,securityRelevant}],allowedClientBuilds,monitoringNotice}
      IDENTITY_SESSION and ELIGIBILITY are server-measured (400 if submitted)
 POST /student/prechecks/:runId/practice-saves {contentDigest: sha256 hex} → {revision, ackAt}
@@ -33,6 +33,8 @@ PUT  /student/attempts/:attemptId/answers/:questionId {clientOperationId(uuid), 
      contentSha256 = SHA-256 hex of canonical JSON (keys sorted recursively, no whitespace) of {blocks:[{id,kind,content}]} AFTER applying ops in order. Block order matters. upsert appends new blocks at end; reorder moves block after `after` (null = first).
 GET  /student/attempts/:attemptId/answers/:questionId → {questionId, serverRevision, content:{blocks}, contentSha256}
 POST /student/attempts/:attemptId/heartbeat (every 20s) → {status, serverNow, deadlineAt, authorizationGeneration}
+POST /student/attempts/:attemptId/device-scans {scan: DeviceScan} (attempt ACTIVE/RECOVERY_PENDING/SUSPENDED; every 60 s from the workspace) → 202 {scanId, verdict:'CLEAN'|'REVIEW'|'BLOCKED', findings:[DeviceScanFinding]}   (append-only device_scans row; BLOCKING findings raise the mapped proctor signal — DUAL_SCREEN_DETECTED, AUTOMATION_DETECTED, VIRTUAL_MACHINE_DETECTED, SCREEN_CAPTURE_ATTEMPT — for human review; never a warning, never a pause; 400 if the client sends a verdict instead of a scan)
+     Network: every readiness/admission/in-exam request (prechecks, admit, heartbeat, answers PUT, reconnect, submit, proctor/events, SYSTEM_SCAN verify) upserts attempt_network_observations(attempt_id, ip) and admission stores admitted_ip. Exam policy ipPolicy: LOG (default; attempt_event_log network.address_changed) · REVIEW (also a NETWORK_ADDRESS_CHANGED signal for a human) · LOCK (in-exam requests from another address → 409 NETWORK_ADDRESS_LOCKED after the observation, event and signal commit on their own; a proctor resume with rebindDevice clears admitted_ip and the next reconnect re-binds it). requireManagedEndpoint + allowedSubnets → 409 NETWORK_NOT_ALLOWED outside the lab network, recorded the same way.
 POST /student/attempts/:attemptId/reconnect → {status:'ACTIVE', deadlineAt, deviceSessionId, serverNow, answers:[{questionId,serverRevision,contentSha256}]}
 POST /student/attempts/:attemptId/submit {idempotencyKey(uuid)} → {receiptId, manifestSha256, sealedAt, manifest}
 GET  /student/attempts/:attemptId/booklet (student own, or staff) → {tenant,exam,student:{name,registerNumber,hallTicket},status,sealedAt,manifestSha256,questions:[{questionId,answer:{blocks},answerSha256,revision,marks,maxMarks,explanation,criteria}],total:{marks,max,version},validation:{examiner,examinerApprovedAt,controller,publishedAt},verificationHash,verificationUrl}
@@ -72,7 +74,7 @@ GET  /student/me/exams/:examId/seb-config (attempts:own) → `.seb` Safe Exam Br
 ## Safe Exam Browser & Client Policy (EXAM_CELL_OPERATOR, CONTROLLER)
 POST /exams/:id/seb-config {allowQuit,quitPassword?,kioskMode,blockVirtualMachines,blockScreenCapture,blockClipboard,prohibitedProcesses?} (exams:write) → 201 {sebConfigKey,generatedAt,downloadUrl} (builds deterministic XML plist and audits `seb_config.generated`)
 GET  /exams/:id/seb-config (exams:read) → `.seb` Safe Exam Browser XML plist configuration file download (audits `seb_config.downloaded`)
-PUT  /exams/:id/client-policy {sebConfigKey?,allowedClientBuilds?,requireManagedEndpoint?,allowedSubnets?} (exams:write) → {policy}
+PUT  /exams/:id/client-policy {sebConfigKey?,allowedClientBuilds?,requireManagedEndpoint?,allowedSubnets?,ipPolicy?:'LOG'|'REVIEW'|'LOCK'} (exams:write) → {policy}
 GET  /exams/:id/client-policy (exams:read) → {policy}
 
 ## Academic Analytics (HOD, REPORT_VIEWER, EXAM_CELL_OPERATOR, CONTROLLER)
@@ -109,7 +111,7 @@ GET  /proctor/incidents?examId&status&limit → {incidents:[{id,attempt_id,exam_
 POST /proctor/incidents/:id/decision {action:'DISMISS'|'CONFIRM_WARNING'|'MARK_TECHNICAL'|'ESCALATE'|'INVALIDATE_REQUEST', reasonCode, notes, idempotencyKey} → {decisionId,attemptStatus,suspensionKind,authorizationGeneration,epoch:{no,confirmedCount,open},lifetimeWarnings}
 POST /proctor/attempts/:id/technical-holds {reasonCode,notes,idempotencyKey}
 POST /proctor/attempts/:id/resume {reasonCode,notes,idempotencyKey,deadlineExtensionMinutes,rebindDevice} (CHIEF_PROCTOR)
-GET  /proctor/attempts/:id/timeline → {attempt,events,warnings,epochs}
+GET  /proctor/attempts/:id/timeline → {attempt,events,warnings,epochs,network:[{ip,user_agent,first_seen_at,last_seen_at,observations,first_source,in_allowed_subnet}],deviceScans:[{id,phase,verdict,findings,ip,user_agent,scan_sha256,created_at}]}   (raw scans stay in the device_scans table; the evidence PDF lists both)
 
 ## Tenant admin (TENANT_ADMIN / SYSTEM_ADMIN)
 POST /tenant/users; GET /tenant/users?q&kind; POST|DELETE /tenant/users/:id/roles {role,scopeType,scopeId}

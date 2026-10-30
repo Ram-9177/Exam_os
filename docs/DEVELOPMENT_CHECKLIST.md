@@ -9,7 +9,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Row-level security on every tenant table, forced, app role without bypass | Tested | tenancy.test.ts (zero rows without context, cross-tenant insert refused) |
 | Append-only audit with per-tenant hash chain; evidence tables append-only at privilege + trigger level | Tested | tenancy.test.ts |
 | Tenant provisioning (platform bootstrap key) with admin activation mail | Tested | helpers/provisionTenant |
-| Platform admin accounts replacing the bootstrap key | Not Started | — |
+| Platform admin accounts replacing the bootstrap key: one super admin per deployment (password + sealed TOTP, replay-proof codes, platform-bound sessions, lockout); bootstrap key refused in production | Tested | platform-and-staff.test.ts; `npm run platform:create-admin` |
 | Per-tenant rate-limit pools (student saves vs integration) | Tested (limiter) / Not Started (load proof) | auth.test.ts lockout; Gate G load test pending |
 
 ## Identity and access
@@ -20,6 +20,8 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Refresh rotation with reuse detection (family revocation) | Tested | auth.test.ts |
 | Permissions re-read from role_grants per request; scoped ABAC (exam/department) | Tested | auth.test.ts, exam-flow (student vs staff routes) |
 | Single-use activation links; no passwords in mail | Tested | auth.test.ts |
+| Login/refresh/activation sessions record ip and user agent (context, never a verdict) | Tested | network-and-scans.test.ts |
+| 3–4 named staff logins per tenant (service check + database trigger + platform-set limit), duty bundles grant every staff role, students unlimited and never staff roles, no self role/status change | Tested | platform-and-staff.test.ts |
 | OIDC (Microsoft Entra / Google Workspace): discovery, PKCE, nonce, JWKS verification, no JIT provisioning, domain allowlist | Tested | auth.test.ts (fake IdP) |
 | MFA for high-impact roles | Not Started | — |
 
@@ -67,6 +69,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | --- | --- | --- |
 | Precheck runs/items with sources; server-measured identity/eligibility/consent | Tested | exam-flow, recovery |
 | Clock sync, keyboard functional test (no WPM), optional canvas/stylus test, practice save round-trip | Tested | exam-flow |
+| System scan (SYSTEM_SCAN): server-derived findings from the raw client scan (displays, automation, VM/remote-desktop hints, screen sharing, full-screen/cookies, window/viewport, timezone, battery); blocking findings remediate; clean scans stay CLIENT_DECLARED | Tested | exam-flow (dual display → REMEDIATE, clean → PASS), network-and-scans.test.ts |
 | Secure client verification via SEB Config Key hash; allowed client builds | Tested | recovery.test.ts, secure-client.test.ts |
 | SEB configuration generator (POST /exams/:id/seb-config), kiosk mode XML plist, download authorization, and audit trail | Tested | secure-client.test.ts, docs/seb-rollout.md |
 | MANAGED_ENDPOINT lab network subnet attestation and client policy management | Tested | secure-client.test.ts |
@@ -88,6 +91,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Atomic seal: manifest, receipt, candidate packet, idempotent submit, late writes refused | Tested | exam-flow |
 | Server deadline authority at close (expire + seal) | Tested | exam-flow |
 | Canvas vector blocks stored and server-side PDF render pipeline | Tested | documents.test.ts, web renders |
+| Whiteboard: pen, highlighter, eraser, line, arrow, rectangle, ellipse, text; colours, widths, fill, text sizes, paper (grid/ruled/dots), undo/redo, clear, grow; one scene builder (`@examos/contracts` canvas-render) for workspace, booklet, evaluator and server PDF; erasers only remove earlier items; contract limits enforced client- and server-side | Tested | apps/web/test/drawing.test.tsx, booklet.test.tsx; documents.test.ts (PDF) |
 | Offline draft recovery UI | In Progress | apps/web |
 
 ## Proctoring
@@ -98,6 +102,8 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Fifth-warning atomic suspension under concurrent saves; alert mail | Tested | exam-flow (race) |
 | Resume with new epoch, history retained, deadline extension, device re-bind | Tested | exam-flow, recovery |
 | Technical hold (no epoch change) | Tested | recovery.test.ts |
+| IP tracking: attempt_network_observations on every readiness/admission/in-exam request, admitted_ip binding, ipPolicy LOG/REVIEW/LOCK (record-then-refuse under LOCK; proctor resume + rebind releases), lab-subnet refusal for managed endpoints; addresses in the proctor timeline and the evidence PDF | Tested | network-and-scans.test.ts |
+| In-exam device scans every 60 s (append-only device_scans); blocking findings → mapped review signals grouped per incident, never a warning or a pause; student told what to fix; scans in the proctor timeline and the evidence PDF | Tested | network-and-scans.test.ts |
 | Rolling media buffer, 5-second clips, 5 snapshots, gap detection, evidence viewer | Not Started | Gate C/D |
 | AI vision/audio signal producers | Not Started | Gate C/D |
 
@@ -129,15 +135,15 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Student: exam list with one status-driven action, hall ticket drawer (printable), lobby polling, ledger | Tested | smoke-tested; readiness/time reducers unit-tested |
 | Student Profile & ID: identity card, photo upload with consent modal, verification QR code, SVG performance progression chart | Tested | apps/web/test/profile.test.tsx |
 | Academic Analytics: department dashboard for HOD/Controller, KPI metrics, semester rollups, course distributions, strict privacy assurance | Tested | apps/web/test/analytics.test.tsx |
-| 15-minute readiness screen (one step at a time, no WPM, optional drawing, consent, camera preview, verdict stamp) | Tested | apps/web/test/readiness-screen.test.tsx, readiness.test.ts; smoke-tested end to end |
-| Exam workspace: server-derived timer, question map, paragraph + canvas editor, autosave with baseRevision/clientOperationId/contentSha256, 409 rebase, draft queue, heartbeat, paused overlay, device-mismatch screen, signal reporting, submit with receipt | Tested | apps/web/test/exam-workspace.test.tsx, sync.test.ts, answers.test.ts, canonical.test.ts; smoke-tested (typed + drew → 200, hash matched server) |
+| 15-minute readiness screen (one step at a time, no WPM, optional drawing, automatic system scan with rescan, consent, camera preview, verdict stamp) | Tested | apps/web/test/readiness-screen.test.tsx, readiness.test.ts; smoke-tested end to end |
+| Exam workspace: server-derived timer, question map, paragraph + whiteboard editor, autosave with baseRevision/clientOperationId/contentSha256, 409 rebase, draft queue, heartbeat, periodic system scan with plain-language notice, paused overlay, device-mismatch screen, signal reporting, submit with receipt | Tested | apps/web/test/exam-workspace.test.tsx, sync.test.ts, answers.test.ts, canonical.test.ts; smoke-tested (typed + drew → 200, hash matched server) |
 | Digital answer booklet with print layout (A4, page per question) | Tested | apps/web/test/booklet.test.tsx; printed to PDF in smoke test |
 | Exam Section: hierarchical exam list, new exam, conduct controls with consequence dialogs, allocations, hall tickets, Readiness Board (10 s), exceptions, Candidates with checklist drawer (approve/hold/release/authorize), export lock message | Tested | apps/web/test/readiness-board.test.tsx; smoke-tested through the full post-exam chain |
 | Safe Exam Browser integration: student .seb download on exam cards, Exam Section SEB generator and policy panel | Tested | apps/web/test/secure-client.test.tsx |
 | Evaluator marks screen (assigned queue, anonymization, one explanation per question, criteria) | Tested | apps/web/test/evaluation.test.tsx; smoke-tested |
-| Proctor console (5 s queue, decisions, technical hold, resume for Chief Proctor, timeline) | In Progress | smoke-tested; no render test yet |
+| Proctor console (5 s queue, decisions, technical hold, resume for Chief Proctor, timeline with network addresses and device scans) | Tested | apps/web/test/proctor.test.tsx (queue, drawer, timeline sections); decisions smoke-tested |
 | Tenant admin (users/roles, mail config, mail log, SSO, API keys, webhooks, deliveries replay, audit) | In Progress | smoke-tested; no render test yet |
-| Question paper rendering in the workspace | Not Started | placeholder question list (`?questions=` or Q1..Q5) until the paper module exists |
+| Question paper rendering in the workspace (released paper, question navigator, prompt per question) | Tested | apps/web/test/exam-workspace.test.tsx (mocked released paper) |
 
 ## Operations
 | Feature | Status | Evidence |
