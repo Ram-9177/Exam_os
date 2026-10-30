@@ -1,0 +1,82 @@
+import type { AttemptStatus, CandidateStatus, ExamStatus, PaperStatus } from './enums.js';
+
+/**
+ * Transition tables. The service layer refuses any transition not listed here
+ * (review §3). Keeping them as data makes them testable and auditable.
+ */
+
+export const ATTEMPT_TRANSITIONS: Readonly<Record<AttemptStatus, readonly AttemptStatus[]>> = {
+  ALLOCATED: ['PRECHECK_AVAILABLE', 'VOIDED_BY_AUTHORITY'],
+  PRECHECK_AVAILABLE: ['PRECHECK_RUNNING', 'VOIDED_BY_AUTHORITY', 'EXPIRED'],
+  PRECHECK_RUNNING: ['READY', 'PRECHECK_AVAILABLE', 'VOIDED_BY_AUTHORITY', 'EXPIRED'],
+  READY: ['ADMITTED', 'PRECHECK_RUNNING', 'VOIDED_BY_AUTHORITY', 'EXPIRED'],
+  ADMITTED: ['ACTIVE', 'VOIDED_BY_AUTHORITY', 'EXPIRED'],
+  ACTIVE: ['RECOVERY_PENDING', 'SUSPENDED', 'SUBMITTING', 'EXPIRED', 'VOIDED_BY_AUTHORITY'],
+  RECOVERY_PENDING: ['ACTIVE', 'SUSPENDED', 'SUBMITTING', 'EXPIRED', 'VOIDED_BY_AUTHORITY'],
+  SUSPENDED: ['ACTIVE', 'EXPIRED', 'VOIDED_BY_AUTHORITY'],
+  SUBMITTING: ['SUBMITTED', 'ACTIVE'],
+  SUBMITTED: [],
+  EXPIRED: [],
+  VOIDED_BY_AUTHORITY: [],
+};
+
+export const CANDIDATE_TRANSITIONS: Readonly<Record<CandidateStatus, readonly CandidateStatus[]>> = {
+  ATTEMPT_SEALED: ['FORENSIC_CHECKS_RUNNING', 'TECHNICAL_REVIEW_REQUIRED'],
+  FORENSIC_CHECKS_RUNNING: ['FORENSIC_REVIEW_READY', 'TECHNICAL_REVIEW_REQUIRED', 'IDENTITY_REVIEW_REQUIRED', 'INTEGRITY_HOLD'],
+  FORENSIC_REVIEW_READY: ['ACADEMIC_MARKING_READY', 'INTEGRITY_HOLD', 'IDENTITY_REVIEW_REQUIRED', 'TECHNICAL_REVIEW_REQUIRED'],
+  ACADEMIC_MARKING_READY: ['EXAM_CELL_REVIEW', 'MARKING_MODERATION_REQUIRED', 'TECHNICAL_REVIEW_REQUIRED', 'IDENTITY_REVIEW_REQUIRED', 'INTEGRITY_HOLD'],
+  MARKING_MODERATION_REQUIRED: ['ACADEMIC_MARKING_READY', 'EXAM_CELL_REVIEW'],
+  EXAM_CELL_REVIEW: ['CANDIDATE_APPROVED', 'INTEGRITY_HOLD', 'TECHNICAL_REVIEW_REQUIRED', 'IDENTITY_REVIEW_REQUIRED', 'MARKING_MODERATION_REQUIRED', 'RESCHEDULE_APPROVED', 'INVALIDATED_BY_AUTHORIZED_DECISION'],
+  CANDIDATE_APPROVED: ['CONTROLLER_AUTHORIZED', 'EXAM_CELL_REVIEW'],
+  CONTROLLER_AUTHORIZED: ['PUBLISHED', 'EXAM_CELL_REVIEW'],
+  PUBLISHED: ['REVALUATION_PENDING'],
+  TECHNICAL_REVIEW_REQUIRED: ['FORENSIC_REVIEW_READY', 'EXAM_CELL_REVIEW', 'RESCHEDULE_APPROVED'],
+  IDENTITY_REVIEW_REQUIRED: ['FORENSIC_REVIEW_READY', 'EXAM_CELL_REVIEW', 'INTEGRITY_HOLD'],
+  INTEGRITY_HOLD: ['EXAM_CELL_REVIEW', 'INVALIDATED_BY_AUTHORIZED_DECISION'],
+  REVALUATION_PENDING: ['ACADEMIC_MARKING_READY'],
+  RESCHEDULE_APPROVED: [],
+  INVALIDATED_BY_AUTHORIZED_DECISION: [],
+};
+
+export const EXAM_TRANSITIONS: Readonly<Record<ExamStatus, readonly ExamStatus[]>> = {
+  DRAFT: ['PAPER_REVIEW', 'CANCELLED'],
+  PAPER_REVIEW: ['APPROVED', 'DRAFT', 'CANCELLED'],
+  APPROVED: ['SCHEDULED', 'PAPER_REVIEW', 'CANCELLED'],
+  SCHEDULED: ['PRECHECK', 'APPROVED', 'CANCELLED'],
+  PRECHECK: ['LIVE', 'CANCELLED'],
+  LIVE: ['CLOSED'],
+  CLOSED: ['ARCHIVED'],
+  ARCHIVED: [],
+  CANCELLED: [],
+};
+
+export const PAPER_TRANSITIONS: Readonly<Record<PaperStatus, readonly PaperStatus[]>> = {
+  DRAFT: ['REVIEW'],
+  REVIEW: ['APPROVED', 'DRAFT'],
+  APPROVED: ['SUPERSEDED'],
+  SUPERSEDED: [],
+};
+
+export function canTransition<S extends string>(table: Readonly<Record<S, readonly S[]>>, from: S, to: S): boolean {
+  return table[from].includes(to);
+}
+
+export class IllegalTransitionError extends Error {
+  readonly code = 'ILLEGAL_TRANSITION';
+  constructor(
+    readonly entity: string,
+    readonly from: string,
+    readonly to: string,
+  ) {
+    super(`${entity}: illegal transition ${from} -> ${to}`);
+  }
+}
+
+export function assertTransition<S extends string>(entity: string, table: Readonly<Record<S, readonly S[]>>, from: S, to: S): void {
+  if (!canTransition(table, from, to)) throw new IllegalTransitionError(entity, from, to);
+}
+export const TENANT_TRANSITIONS = { ACTIVE: ['SUSPENDED'], SUSPENDED: ['ACTIVE'] } as const;
+export const USER_TRANSITIONS = {
+  ACTIVE: ['INACTIVE', 'SUSPENDED'], INACTIVE: ['ACTIVE', 'SUSPENDED'],
+  SUSPENDED: ['ACTIVE', 'INACTIVE'], PENDING_ACTIVATION: ['ACTIVE', 'INACTIVE', 'SUSPENDED'],
+} as const;

@@ -1,0 +1,278 @@
+/*
+ * ExamOS web — "the calm examination hall".
+ *
+ * Material: ledger paper, blue-black ink, one accent (wet ink) reserved for the
+ * primary action and the live timer. Status colours are used only for status,
+ * and never alone — every status also carries text or an icon.
+ *
+ * Fonts are bundled from node_modules (no CDN): the lockdown client blocks
+ * external domains, so nothing in the exam workspace may leave the origin.
+ */
+@import 'tailwindcss';
+
+@import '@fontsource-variable/newsreader/opsz.css';
+@import '@fontsource-variable/newsreader/opsz-italic.css';
+@import '@fontsource-variable/atkinson-hyperlegible-next/index.css';
+@import '@fontsource-variable/atkinson-hyperlegible-mono/index.css';
+
+:root {
+  color-scheme: light dark;
+
+  --paper: #f3f4ef; /* ledger paper, faintly green-grey */
+  --sheet: #fbfbf8; /* a fresh sheet lying on the desk */
+  --sheet-2: #ecede6; /* the sheet underneath */
+  --ink: #1a2030; /* blue-black ink */
+  --ink-2: #4a5266; /* faded ink: secondary text */
+  --ink-3: #7a8194; /* pencil: placeholders, hints */
+  --rule: #d6d9d0; /* printed rule lines */
+  --rule-2: #c3c7bc; /* heavier rule */
+  --rule-blue: #c9d4e6; /* the blue ruling of an answer booklet */
+  --margin-rose: #d9a3a0; /* the red margin line of an answer booklet */
+  --accent: #1e3fb8; /* wet ink: primary action + live timer */
+  --accent-ink: #ffffff;
+  --accent-soft: #e4e9f8;
+  --ready: #1f7a3f;
+  --ready-soft: #dcefe2;
+  --fix: #8a5300;
+  --fix-soft: #f6e8cf;
+  --stop: #b3261e;
+  --stop-soft: #f8dcda;
+  --note: #4a5266;
+  --note-soft: #e7e8e4;
+  --focus: #1e3fb8;
+  --selection: #d7dff5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #15171b; /* slate */
+    --sheet: #1c1f25;
+    --sheet-2: #22262d;
+    --ink: #e9e8e1;
+    --ink-2: #a3a7b0;
+    --ink-3: #7f8490;
+    --rule: #2f333b;
+    --rule-2: #3c414a;
+    --rule-blue: #2c3444;
+    --margin-rose: #6e3f3d;
+    --accent: #9db0ff;
+    --accent-ink: #0f1430;
+    --accent-soft: #232a45;
+    --ready: #6ccb8a;
+    --ready-soft: #16301f;
+    --fix: #e2a93b;
+    --fix-soft: #35270a;
+    --stop: #f28b82;
+    --stop-soft: #3a1917;
+    --note: #a3a7b0;
+    --note-soft: #262a31;
+    --focus: #9db0ff;
+    --selection: #2b3660;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-sheet: var(--sheet);
+  --color-sheet-2: var(--sheet-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-2: var(--rule-2);
+  --color-rule-blue: var(--rule-blue);
+  --color-margin-rose: var(--margin-rose);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-ready: var(--ready);
+  --color-ready-soft: var(--ready-soft);
+  --color-fix: var(--fix);
+  --color-fix-soft: var(--fix-soft);
+  --color-stop: var(--stop);
+  --color-stop-soft: var(--stop-soft);
+  --color-note: var(--note);
+  --color-note-soft: var(--note-soft);
+
+  --font-serif: 'Newsreader Variable', ui-serif, Georgia, 'Times New Roman', serif;
+  --font-sans: 'Atkinson Hyperlegible Next Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Atkinson Hyperlegible Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+
+  --text-display: 3.5rem;
+  --text-display--line-height: 1;
+  --text-h1: 2.25rem;
+  --text-h1--line-height: 1.1;
+  --text-h2: 1.625rem;
+  --text-h2--line-height: 1.15;
+  --text-h3: 1.25rem;
+  --text-h3--line-height: 1.25;
+}
+
+@layer base {
+  html {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+  }
+  ::selection {
+    background: var(--selection);
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-serif);
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    text-wrap: balance;
+    font-variation-settings: 'opsz' 72;
+  }
+  h3 {
+    font-variation-settings: 'opsz' 36;
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+  table {
+    border-collapse: collapse;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* A sheet lying on the desk: crisp edge, no soft shadow. */
+  .sheet {
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-md);
+  }
+  .sheet-raised {
+    background: var(--sheet);
+    border: 1px solid var(--rule-2);
+    border-radius: var(--radius-md);
+    box-shadow:
+      0 1px 0 var(--rule),
+      0 18px 40px -24px rgb(26 32 48 / 0.35);
+  }
+  /* The rubber stamp — the one loud element in the system. Used only for a final verdict. */
+  .stamp {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border: 3px double currentColor;
+    padding: 0.35em 0.75em;
+    border-radius: 4px;
+    transform: rotate(-2.5deg);
+    line-height: 1;
+    opacity: 0.92;
+  }
+  /* Blue-ruled answer paper with the rose margin line. */
+  .ruled {
+    --lh: 2rem;
+    line-height: var(--lh);
+    background-color: var(--sheet);
+    background-image:
+      linear-gradient(to right, transparent 0, transparent calc(3.5rem - 1px), var(--margin-rose) calc(3.5rem - 1px), var(--margin-rose) 3.5rem, transparent 3.5rem),
+      repeating-linear-gradient(to bottom, transparent 0, transparent calc(var(--lh) - 1px), var(--rule-blue) calc(var(--lh) - 1px), var(--rule-blue) var(--lh));
+    background-attachment: local;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .ruled-inset {
+    padding-left: 4.25rem;
+    padding-right: 1.5rem;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .hairline-rows > * + * {
+    border-top: 1px solid var(--rule);
+  }
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+}
+
+/* ---------- print: the digital answer booklet ---------- */
+@page {
+  size: A4;
+  margin: 16mm 14mm 18mm 18mm;
+}
+@media print {
+  html {
+    background: #fff;
+    color: #111;
+    font-size: 11pt;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .booklet {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: #fff !important;
+  }
+  .booklet-cover {
+    break-after: page;
+  }
+  .booklet-question {
+    break-before: page;
+    break-inside: avoid-page;
+  }
+  .booklet-end {
+    break-before: page;
+  }
+  .ruled {
+    --lh: 8mm;
+    background-color: #fff;
+  }
+  a[href]::after {
+    content: '';
+  }
+}
+.print-only {
+  display: none;
+}
