@@ -5,12 +5,13 @@
  *   npm run demo -w @examos/api
  *
  * Creates tenant `demo` (hosts: localhost, demo.examos.local) with:
- *   admin@demo.local / Demo-Admin!2026                 (TENANT_ADMIN)
- *   examcell@demo.local / Demo-Staff!2026              (EXAM_CELL_OPERATOR)
- *   chief@demo.local / Demo-Staff!2026                 (CHIEF_PROCTOR)
- *   evaluator@demo.local / Demo-Staff!2026             (EVALUATOR)
- *   controller@demo.local / Demo-Staff!2026            (CONTROLLER)
+ *   admin@demo.local / Demo-Admin!2026                 ADMIN_CONTROLLER bundle (+ SYSTEM_ADMIN, HOD, REPORT_VIEWER)
+ *   examcell@demo.local / Demo-Staff!2026              EXAM_OFFICE bundle (Exam Section + Question Setter)
+ *   chief@demo.local / Demo-Staff!2026                 CHIEF_REVIEWER bundle (Chief Proctor + Paper Reviewer)
+ *   evaluator@demo.local / Demo-Staff!2026             EXAMINER bundle (Evaluator + Moderator)
  *   student01..student12@demo.local / Demo-Student!2026 (STUDENT)
+ * Four staff logins is the per-tenant cap the database enforces; every other
+ * account is a student.
  * plus a BASIC_BROWSER exam with its readiness check already open and a
  * SECURE_BYOD exam that is scheduled.
  */
@@ -55,26 +56,11 @@ async function main() {
       console.log(`
 Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on http://localhost:5173)
 
-=== 🌟 Simplified 3-Persona Access ===
-  1. ALL-IN-ONE SUPER ADMIN:
-     • admin@demo.local / Demo-Admin!2026
-       -> Has ALL roles: Administration, Exams, Invigilation, Marking, Analytics. No account switching needed!
-
-  2. CHIEF EXAMINER / CONTROLLER:
-     • controller@demo.local / Demo-Staff!2026
-       -> Has all academic & exam roles: Conduct, Papers, Invigilation, Evaluation, Analytics, Waivers.
-
-  3. CANDIDATE / STUDENT:
-     • student01@demo.local / Demo-Student!2026 (through student12@demo.local)
-       -> Candidate portal: Readiness check, Exam workspace, Results ledger, Hall ticket, ID card.
-
-=== Granular Specialized Staff Accounts (Optional for multi-proctor testing) ===
-  • examcell@demo.local    / Demo-Staff!2026      Exam Section Operator
-  • chief@demo.local       / Demo-Staff!2026      Chief Proctor
-  • evaluator@demo.local   / Demo-Staff!2026      Examiner / Evaluator
-  • moderator@demo.local   / Demo-Staff!2026      External Moderator
-  • setter@demo.local      / Demo-Staff!2026      Question Setter
-  • reviewer@demo.local    / Demo-Staff!2026      Paper Reviewer
+=== Staff logins (four per tenant — the cap the database enforces) ===
+  • admin@demo.local     / Demo-Admin!2026   Tenant admin + Controller of Examinations + security auditor + analytics
+  • examcell@demo.local  / Demo-Staff!2026   Examination Section + Question Setter (conduct, readiness board, papers)
+  • chief@demo.local     / Demo-Staff!2026   Chief Proctor + Paper Reviewer (incidents, holds, resume, paper approval)
+  • evaluator@demo.local / Demo-Staff!2026   Examiner + Moderator (marks, double-evaluation moderation)
 
 === Student Accounts (Password: Demo-Student!2026) ===
   • student01@demo.local .. student12@demo.local  (Student profile, ID card, readiness run, exam workspace, ledger)
@@ -105,48 +91,19 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
   must(await req().put('/api/v1/tenant/mail-config').set(A).send({ transportKind: 'capture', senderAddress: 'exam@demo.local', senderName: 'Examination Cell (demo)' }), 'mail config');
 
   const staff: Record<string, string> = {};
-  for (const [email, role, name] of [
-    ['examcell@demo.local', 'EXAM_CELL_OPERATOR', 'Exam Section Operator'],
-    ['chief@demo.local', 'CHIEF_PROCTOR', 'Chief Proctor'],
-    ['evaluator@demo.local', 'EVALUATOR', 'Examiner'],
-    ['moderator@demo.local', 'MODERATOR', 'External Moderator'],
-    ['controller@demo.local', 'CONTROLLER', 'Controller of Examinations'],
-    ['setter@demo.local', 'QUESTION_SETTER', 'Question Setter'],
-    ['reviewer@demo.local', 'PAPER_REVIEWER', 'Paper Reviewer'],
+  // Four named staff logins per tenant (the cap the database enforces): the admin plus three duty bundles.
+  for (const [email, bundle, name] of [
+    ['examcell@demo.local', 'EXAM_OFFICE', 'Examination Section'],
+    ['chief@demo.local', 'CHIEF_REVIEWER', 'Chief Proctor'],
+    ['evaluator@demo.local', 'EXAMINER', 'Examiner'],
   ] as const) {
-    must(await req().post('/api/v1/tenant/users').set(A).send({ email, fullName: name, kind: 'STAFF', roles: [{ role }] }), `create ${email}`);
+    must(await req().post('/api/v1/tenant/users').set(A).send({ email, fullName: name, kind: 'STAFF', bundle, roles: [] }), `create ${email}`);
     staff[email] = await activate(tenantId, email, 'Demo-Staff!2026');
   }
-
-  // Grant admin@demo.local super-admin privileges across all staff areas
-  const adminUser = await admin('users').where({ tenant_id: tenantId, email: 'admin@demo.local' }).first();
-  for (const role of ['SYSTEM_ADMIN', 'CONTROLLER', 'EXAM_CELL_OPERATOR', 'CHIEF_PROCTOR', 'EVALUATOR', 'MODERATOR', 'HOD', 'QUESTION_SETTER', 'PAPER_REVIEWER', 'REPORT_VIEWER']) {
-    await admin('role_grants').insert({
-      id: randomUUID(),
-      tenant_id: tenantId,
-      user_id: adminUser.id,
-      role_code: role,
-      scope_type: 'TENANT',
-      scope_id: null,
-      effective_from: new Date(),
-      created_at: new Date(),
-    });
-  }
-
-  // Grant controller@demo.local complete examination operations privileges
-  const controllerUser = await admin('users').where({ tenant_id: tenantId, email: 'controller@demo.local' }).first();
-  for (const role of ['EXAM_CELL_OPERATOR', 'CHIEF_PROCTOR', 'EVALUATOR', 'MODERATOR', 'HOD', 'QUESTION_SETTER', 'PAPER_REVIEWER', 'REPORT_VIEWER']) {
-    await admin('role_grants').insert({
-      id: randomUUID(),
-      tenant_id: tenantId,
-      user_id: controllerUser.id,
-      role_code: role,
-      scope_type: 'TENANT',
-      scope_id: null,
-      effective_from: new Date(),
-      created_at: new Date(),
-    });
-  }
+  // The admin is also the Controller of Examinations and the security auditor. Only the platform may change an
+  // admin's own roles, so this goes through the platform route (bootstrap key in development).
+  const adminUser = await admin('users').where({ tenant_id: tenantId, email: 'admin@demo.local' }).first('id');
+  must(await req().put(`/api/v1/platform/tenants/${tenantId}/staff/${adminUser.id}/roles`).set('x-platform-key', PLATFORM_KEY).send({ bundle: 'ADMIN_CONTROLLER', roles: ['SYSTEM_ADMIN', 'HOD', 'REPORT_VIEWER'] }), 'admin roles');
 
   const key = must(await req().post('/api/v1/tenant/api-keys').set(A).send({ label: 'demo-erp', scopes: ['roster:write', 'roster:read', 'events:read', 'results:read', 'webhooks:manage'] }), 'api key');
 
@@ -168,8 +125,8 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
   for (const s of students) await activate(tenantId, s.email, 'Demo-Student!2026');
 
   const E = { Host: HOST, Authorization: `Bearer ${staff['examcell@demo.local']}` };
-  const S = { Host: HOST, Authorization: `Bearer ${staff['setter@demo.local']}` };
-  const R = { Host: HOST, Authorization: `Bearer ${staff['reviewer@demo.local']}` };
+  const S = E; // question setting is part of the EXAM_OFFICE bundle
+  const R = { Host: HOST, Authorization: `Bearer ${staff['chief@demo.local']}` }; // paper review is part of CHIEF_REVIEWER
   const now = Date.now();
   const basic = must(await req().post('/api/v1/exams').set(E).send({ code: 'CS301-MID1', title: 'Operating Systems — Mid 1', courseCode: 'CS301', examType: 'MID_1', academicYear: '2026-27', semester: 5, maxMarks: 20, securityProfile: 'BASIC_BROWSER', durationMinutes: 60, windowStartAt: new Date(now - 5 * 60_000).toISOString(), windowEndAt: new Date(now + 6 * 3600_000).toISOString(), policy: { ipPolicy: 'REVIEW' } }), 'exam basic');
   const secure = must(await req().post('/api/v1/exams').set(E).send({ code: 'CS302-SEM', title: 'Database Systems — Semester External', courseCode: 'CS302', examType: 'SEM_EXTERNAL', academicYear: '2026-27', semester: 5, maxMarks: 70, securityProfile: 'SECURE_BYOD', durationMinutes: 180, windowStartAt: new Date(now + 2 * 86400_000).toISOString(), windowEndAt: new Date(now + 2 * 86400_000 + 5 * 3600_000).toISOString(), policy: { allowedClientBuilds: ['SEB_Win_3.8.0', 'SEB_macOS_3.4.0'], ipPolicy: 'LOCK' } }), 'exam secure');
@@ -314,18 +271,14 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
   console.log(`
 Demo tenant ready on http://${HOST}:${config.PORT} (web app proxies here)
 
-  admin@demo.local / Demo-Admin!2026           tenant admin
-  examcell@demo.local / Demo-Staff!2026        Exam Section (open/start/close exams, readiness board, candidates)
-  setter@demo.local / Demo-Staff!2026          Question Setter (paper authoring)
-  reviewer@demo.local / Demo-Staff!2026        Paper Reviewer (paper approval & crypto seal)
-  chief@demo.local / Demo-Staff!2026           Chief Proctor (incidents, holds, resume)
-  evaluator@demo.local / Demo-Staff!2026       Examiner (marks)
-  moderator@demo.local / Demo-Staff!2026       Moderator (double-eval moderation)
-  controller@demo.local / Demo-Staff!2026      Controller (publication, security waivers)
+  admin@demo.local / Demo-Admin!2026           tenant admin + Controller (publication, security waivers) + auditor + analytics
+  examcell@demo.local / Demo-Staff!2026        Exam Section + Question Setter (open/start/close exams, readiness board, candidates, papers)
+  chief@demo.local / Demo-Staff!2026           Chief Proctor + Paper Reviewer (incidents, holds, resume, paper approval & seal)
+  evaluator@demo.local / Demo-Staff!2026       Examiner + Moderator (marks, double-evaluation moderation)
   student01..student12@demo.local / Demo-Student!2026
 
-  Exam CS301-MID1 (BASIC_BROWSER): readiness check is open; start it as examcell when students are READY.
-  Exam CS302-SEM (SECURE_BYOD): scheduled in 2 days; requires an approved client build.
+  Exam CS301-MID1 (BASIC_BROWSER, ipPolicy REVIEW): readiness check is open; start it as examcell when students are READY.
+  Exam CS302-SEM (SECURE_BYOD, ipPolicy LOCK): scheduled in 2 days; requires an approved client build.
   ERP API key (store it): ${key.apiKey}
 `);
   } finally {

@@ -16,7 +16,7 @@ As of 30 October 2026. Source of truth for status: `docs/DEVELOPMENT_CHECKLIST.m
 
 1. Open the repository root (`smru-examos/`). Antigravity reads `AGENTS.md` and `.agents/rules/*.md` automatically; the workflows in `.agents/workflows/` appear as `/implement-feature`, `/verify`, `/exam-day-rehearsal`.
 2. Start PostgreSQL 16 and Redis 7 (`infrastructure/docker/docker-compose.yml`), copy `.env.example` → `.env`, run `npm install` (`.npmrc` sets `legacy-peer-deps=true`).
-3. Run `npm run migrate && npm run seed`, then `npm test` (API, 48 tests) and `npm test -w @examos/web` (48 tests). Both must be green before any change. `npm run security:probes` (18 black-box probes) needs a running demo server (`npm run demo` seeds a tenant with the credentials in §2.8).
+3. Run `npm run migrate && npm run seed`, then `npm test` (API, 78 tests) and `npm test -w @examos/web` (71 tests). Both must be green before any change. `npm run security:probes` (26 black-box probes) needs a running demo server (`npm run demo` seeds a tenant with the credentials in §2.8).
 4. Pick the next item from §8 in order. Do not skip phases: later phases depend on earlier tables and contracts.
 5. For every feature: contracts → migration → service → routes → tests → web → docs/checklist, in that order (§0.2). Update `docs/DEVELOPMENT_CHECKLIST.md` in the same change.
 
@@ -370,7 +370,7 @@ Transitions exist (`PUBLISHED→REVALUATION_PENDING→ACADEMIC_MARKING_READY`, `
 | Proctoring | ingest/dedupe/grouping; decisions; fifth-warning atomic suspension; resume/epochs; technical hold; IP tracking with ipPolicy LOG/REVIEW/LOCK; in-exam device scans → review incidents; addresses and scans in the timeline and the evidence PDF | — | media buffer/clips/evidence viewer; AI signal producers |
 | Post-exam | forensics; marks with one explanation; checklist/approval; holds; Controller publish; ledger; booklet JSON + verify | — | server PDF; AI rubric proposals; similarity |
 | Web | login/SSO/activation/verify; student exams/hall ticket/lobby/ledger; readiness screen; exam workspace; booklet print; Exam Section (list/new/detail/conduct/allocations/hall tickets/readiness board/candidates) | evaluator screen; proctor console; tenant admin (smoke-tested, no render tests) | question paper rendering |
-| Operations | capacity model; dependency audit (0 vulns); 18 black-box probes | worker loops (not load-tested) | load test; scale script (template); ACS transport; archival job; backups/PITR/observability; pen test/DAST/SAST/DPIA |
+| Operations | capacity model; dependency audit (0 vulns); 26 black-box probes | worker loops (not load-tested) | load test; scale script (template); ACS transport; archival job; backups/PITR/observability; pen test/DAST/SAST/DPIA |
 
 Counts across the checklist's 113 rows: 96 Tested, 5 In Progress, 12 Not Started (as of this document).
 

@@ -32,7 +32,7 @@ npm run test       # 48 integration tests against the real database (creates exa
 npm run typecheck
 npm run package    # source zip without node_modules
 npm run security:audit   # npm audit, production tree (0 known vulnerabilities at hand-over)
-npm run security:probes  # 18 black-box probes against a demo-seeded server
+npm run security:probes  # 26 black-box probes against a demo-seeded server
 ```
 
 Security status and what an independent assessment still has to cover: `docs/security-review.md`.

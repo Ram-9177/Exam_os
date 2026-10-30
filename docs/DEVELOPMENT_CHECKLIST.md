@@ -156,5 +156,5 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Revision archival job (hot → Blob Archive after appeal window) | Not Started | docs/capacity-and-budget.md §1 |
 | Backups, PITR drills, observability dashboards | Not Started | Gate G |
 | Dependency audit (`npm audit`, prod + dev) | Tested | 0 vulnerabilities after upgrades (docs/security-review.md) |
-| Black-box security probes (18 checks) | Tested | `npm run security:probes` |
+| Black-box security probes (26 checks: auth, IDOR, injection, mass assignment, headers, tokens, rate limit, device scans, network policy, platform surface) | Tested | `npm run security:probes` |
 | Independent penetration test, DAST/SAST in CI, privacy impact assessment | Not Started | docs/security-review.md lists the required scope |
