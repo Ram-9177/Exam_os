@@ -163,7 +163,7 @@ Outbox fan-out (`outbox_events` → `webhook_deliveries` / `mail_dispatches`), w
 
 ### 2.8 Demo tenant (`npm run demo`)
 
-`admin@demo.local / Demo-Admin!2026` (TENANT_ADMIN) · `examcell@`, `chief@`, `evaluator@`, `controller@demo.local / Demo-Staff!2026` · `student01..12@demo.local / Demo-Student!2026` (UOS-1001…1012, CSE, BTECH-CSE, semester 5, register numbers 22CSE001…). Platform bootstrap key in the demo: `demo-platform-bootstrap-key-0123456789`.
+Four staff logins (the per-tenant cap): `admin@demo.local / Demo-Admin!2026` (tenant admin + Controller + security auditor: ADMIN_CONTROLLER bundle with SYSTEM_ADMIN, HOD, REPORT_VIEWER) · `examcell@demo.local` (EXAM_OFFICE: Exam Section + Question Setter), `chief@demo.local` (CHIEF_REVIEWER: Chief Proctor + Paper Reviewer), `evaluator@demo.local` (EXAMINER: Evaluator + Moderator), all `/ Demo-Staff!2026` · `student01..12@demo.local / Demo-Student!2026` (UOS-1001…1012, CSE, BTECH-CSE, semester 5, register numbers 22CSE001…). Platform bootstrap key in the demo: `demo-platform-bootstrap-key-0123456789`.
 
 ---
 
