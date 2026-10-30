@@ -68,7 +68,7 @@ describe('authentication and authorization', () => {
   });
 
   it('activation links are single-use and expire', async () => {
-    const res = await ctx.request().post('/api/v1/tenant/users').set('Host', t.host).set('Authorization', `Bearer ${t.admin.token}`).send({ email: `once@${t.slug}.test`, fullName: 'Once', kind: 'STAFF', roles: [] });
+    const res = await ctx.request().post('/api/v1/tenant/users').set('Host', t.host).set('Authorization', `Bearer ${t.admin.token}`).send({ email: `once@${t.slug}.test`, fullName: 'Once', kind: 'STAFF', roles: [{ role: 'REPORT_VIEWER' }] });
     expect(res.status).toBe(201);
     const mail = await ctx.admin('mail_dispatches').where({ tenant_id: t.tenantId, to_address: `once@${t.slug}.test` }).first('body_text');
     const token = decodeURIComponent(/token=([^\s]+)/.exec(mail.body_text)![1]!);
