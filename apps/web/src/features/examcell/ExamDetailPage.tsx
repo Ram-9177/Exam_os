@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { formatDateTime } from '@/lib/time';
 import { EXAM_TYPE_LABEL } from '@/features/student/api';
 import { Badge, Button, ConfirmDialog, EmptyState, Field, humanize, KeyValue, PageTitle, Skeleton, StatusChip, Table, Tabs, TextArea, TextInput, toneForExam, useToast, type TabDef } from '@/ui';
-import { EXAM_STATUS_LABEL, generateSebConfig, getSebDownloadUrl, transitionExam, useExam, type ExamAction, type ExamRow } from './api';
+import { EXAM_STATUS_LABEL, generateSebConfig, transitionExam, updateClientPolicy, useExam, type ExamAction, type ExamRow } from './api';
 import { ReadinessBoard } from './ReadinessBoard';
 import { CandidatesTab } from './CandidatesTab';
 import { PaperTab } from './PaperTab';
@@ -124,69 +124,113 @@ export function ExamDetailPage() {
   );
 }
 
+const SEB_FROZEN = ['LIVE', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
+const lines = (v: string) => v.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+
+/**
+ * Safe Exam Browser for a SECURE_BYOD exam: SEB force-quits chat, remote-access, recording and AI apps when it starts,
+ * keeps them closed, blocks switching, second screens and capture, and only opens this exam site. The server refuses
+ * entry, admission and reconnect without a valid SEB key, and flags a live session that loses it.
+ */
 function ClientSecurityPolicyCard({ exam, onUpdated }: { exam: ExamRow; onUpdated: () => void }) {
   const { toast } = useToast();
-  const [generating, setGenerating] = useState(false);
-  const sebKey = typeof exam.policy?.sebConfigKey === 'string' ? exam.policy.sebConfigKey : null;
+  const [busy, setBusy] = useState(false);
+  const policy = (exam.policy ?? {}) as Record<string, unknown>;
+  const sebKey = typeof policy['sebConfigKey'] === 'string' ? policy['sebConfigKey'] : null;
+  const generated = typeof policy['sebConfigXml'] === 'string';
+  const frozen = SEB_FROZEN.includes(exam.status);
+  const [quitPassword, setQuitPassword] = useState('');
+  const [extra, setExtra] = useState(Array.isArray(policy['sebExtraProhibited']) ? (policy['sebExtraProhibited'] as string[]).join('\n') : '');
+  const [beks, setBeks] = useState(Array.isArray(policy['sebBrowserExamKeys']) ? (policy['sebBrowserExamKeys'] as string[]).join('\n') : '');
 
-  const handleGenerate = async () => {
-    setGenerating(true);
+  if (exam.security_profile !== 'SECURE_BYOD') {
+    return (
+      <section className="sheet p-6 space-y-2">
+        <h2 className="text-h3">Safe Exam Browser</h2>
+        <p className="text-sm text-ink-2">
+          This exam runs in the browser ({humanize(exam.security_profile)}): the workspace requires full screen, hides the paper whenever the student leaves it, and reports every tab, window and display change to the proctors. A browser cannot close other apps; to force-close them, use the Secure BYOD profile with Safe Exam Browser.
+        </p>
+      </section>
+    );
+  }
+
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
+    setBusy(true);
     try {
-      const res = await generateSebConfig(exam.id, {
-        allowQuit: true,
-        kioskMode: true,
-        blockVirtualMachines: true,
-        blockScreenCapture: true,
-        blockClipboard: true,
-      });
-      toast({ tone: 'success', title: 'SEB Configuration generated', description: `Config Key: ${res.sebConfigKey.slice(0, 16)}...` });
+      await fn();
+      toast({ tone: 'success', title: ok });
       onUpdated();
     } catch (err) {
-      toast({ tone: 'warning', title: 'Generation failed', description: err instanceof Error ? err.message : 'Error generating config' });
+      toast({ tone: 'warning', title: 'Not saved', description: isApiError(err) ? err.problem.title : err instanceof Error ? err.message : 'Error' });
     } finally {
-      setGenerating(false);
+      setBusy(false);
     }
   };
+  const generate = () =>
+    run(
+      () => generateSebConfig(exam.id, { allowQuit: true, kioskMode: true, blockVirtualMachines: true, blockScreenCapture: true, blockClipboard: true, ...(quitPassword ? { quitPassword } : {}), prohibitedProcesses: lines(extra) }),
+      'Safe Exam Browser configuration generated',
+    );
+  const saveBeks = () => run(() => updateClientPolicy(exam.id, { sebBrowserExamKeys: lines(beks) }), 'Browser Exam Keys saved');
 
   return (
-    <section className="sheet p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-h3">Safe Exam Browser & Client Policy</h2>
-        <Badge tone={sebKey ? 'ready' : 'fix'}>{sebKey ? 'SEB Config Active' : 'Not Configured'}</Badge>
+    <section className="sheet p-6 space-y-4" aria-labelledby="seb-h">
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="seb-h" className="text-h3">Safe Exam Browser</h2>
+        <Badge tone={sebKey ? 'ready' : 'fix'}>{sebKey ? 'Required for this exam' : 'Not configured'}</Badge>
       </div>
-
       <p className="text-sm text-ink-2">
-        Safe Exam Browser (SEB) locks down candidate workstations into kiosk mode, disabling secondary screens, virtual machines, print screen, and prohibited communication processes.
+        When a student opens the configuration, Safe Exam Browser closes Teams, Zoom, WhatsApp, Discord, TeamViewer, AnyDesk, OBS, ChatGPT and similar apps without asking, keeps them closed, blocks app switching, a second screen, mirroring, screenshots and virtual machines, and opens only this exam site. Entry, admission and reconnect are refused without a valid SEB key; the refusal is recorded for the proctors.
       </p>
 
       {sebKey ? (
         <div className="p-3 bg-sheet-2 border border-rule rounded-md space-y-1">
-          <span className="text-xs text-ink-3 uppercase block font-medium">Safe Exam Browser Config Key</span>
+          <span className="text-xs text-ink-3 uppercase block font-medium">Config Key</span>
           <span className="font-mono text-xs text-ink block break-all font-semibold select-all" data-testid="seb-config-key">
             {sebKey}
           </span>
-          <span className="text-[11px] text-ink-3 block">Cryptographically verified on candidate precheck.</span>
+          <span className="text-[11px] text-ink-3 block">
+            {generated ? `${typeof policy['sebGeneratedAt'] === 'string' ? `Generated ${formatDateTime(policy['sebGeneratedAt'], 'Asia/Kolkata')}. ` : ''}At the rehearsal, open the file in the SEB Config Tool and check it shows this key.` : 'Set by hand from the institution’s own .seb file; distribute that file.'}
+          </span>
         </div>
       ) : (
-        <div className="p-3 bg-sheet-2 border border-dashed border-rule rounded-md text-sm text-ink-2">
-          No Safe Exam Browser configuration generated for this exam yet.
+        <div className="p-3 bg-sheet-2 border border-dashed border-rule rounded-md text-sm text-ink-2">No configuration yet. Generate it before opening the readiness check.</div>
+      )}
+
+      {frozen ? (
+        <p className="text-sm text-ink-2">The configuration is frozen while the exam is {humanize(exam.status)}: changing it now would lock every student out.</p>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Quit password (optional)" hint="Lets the invigilator close SEB on a student’s machine. Stored only as a hash in the file.">
+            {(ids) => <TextInput type="password" value={quitPassword} onChange={(e) => setQuitPassword(e.target.value)} autoComplete="new-password" {...ids} />}
+          </Field>
+          <Field label="Also force-close these apps" hint="One per line: Name.exe for Windows, a bundle id (com.vendor.app) for macOS. Added to the built-in list.">
+            {(ids) => <TextArea rows={3} value={extra} onChange={(e) => setExtra(e.target.value)} {...ids} />}
+          </Field>
         </div>
       )}
 
-      <div className="flex flex-wrap gap-3 pt-2">
-        <Button variant="primary" disabled={generating} onClick={handleGenerate}>
-          {generating ? 'Generating...' : sebKey ? 'Rebuild SEB Config' : 'Generate SEB Config'}
-        </Button>
-        {sebKey ? (
-          <a
-            href={getSebDownloadUrl(exam.id)}
-            download={`smru-exam-${exam.code}.seb`}
-            className="inline-flex items-center justify-center rounded-md border font-medium whitespace-nowrap transition-colors bg-sheet text-ink border-rule-2 hover:bg-sheet-2 h-10 px-4 text-[15px]"
-          >
-            Download .seb file
-          </a>
+      <div className="flex flex-wrap gap-3">
+        {!frozen ? (
+          <Button variant="primary" loading={busy} onClick={() => void generate()}>
+            {generated ? 'Rebuild configuration' : 'Generate configuration'}
+          </Button>
+        ) : null}
+        {generated ? (
+          <Button onClick={() => void api.download(`/exams/${exam.id}/seb-config`, `smru-exam-${exam.code}.seb`)}>Download .seb file</Button>
         ) : null}
       </div>
+
+      {sebKey && !frozen ? (
+        <div className="border-t border-rule pt-4 space-y-2">
+          <Field label="Browser Exam Keys (optional, stricter)" hint="From the SEB Config Tool, one per approved SEB version. When set, every gated request must also match one of them.">
+            {(ids) => <TextArea rows={2} value={beks} onChange={(e) => setBeks(e.target.value)} className="font-mono text-xs" {...ids} />}
+          </Field>
+          <Button size="sm" loading={busy} onClick={() => void saveBeks()}>
+            Save Browser Exam Keys
+          </Button>
+        </div>
+      ) : null}
     </section>
   );
 }

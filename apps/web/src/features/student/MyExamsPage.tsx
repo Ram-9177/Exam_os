@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { isApiError, setDeviceSession } from '@/lib/api';
+import { api, isApiError, setDeviceSession } from '@/lib/api';
+import { inSafeExamBrowser } from '@/lib/seb';
 import { useAuth } from '@/lib/auth';
 import { formatDateTime, formatTime } from '@/lib/time';
 import { Badge, Button, EmptyState, PageTitle, Skeleton, StatusChip, useToast } from '@/ui';
@@ -154,16 +155,24 @@ function ExamRow({ exam, tz, primary, onTicket }: { exam: StudentExam; tz: strin
             View hall ticket
           </button>
         </div>
-        {exam.securityProfile === 'SECURE_BYOD' || exam.securityProfile === 'MANAGED_ENDPOINT' ? (
+        {exam.securityProfile === 'SECURE_BYOD' ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge tone="accent">Safe Exam Browser</Badge>
-            <a
-              href={`/api/v1/student/me/exams/${exam.examId}/seb-config`}
-              download={`smru-exam-${exam.code}.seb`}
-              className="text-xs text-accent underline underline-offset-2 hover:text-ink font-medium"
-            >
-              Download .seb configuration
-            </a>
+            {inSafeExamBrowser() ? (
+              <span className="text-xs text-ink-2">You are in Safe Exam Browser.</span>
+            ) : (
+              <>
+                {/* A plain link would carry no credentials (tokens never live in cookies): download through the API client. */}
+                <button
+                  type="button"
+                  onClick={() => void api.download(`/student/me/exams/${exam.examId}/seb-config`, `smru-exam-${exam.code}.seb`).catch(() => undefined)}
+                  className="text-xs text-accent underline underline-offset-2 hover:text-ink font-medium"
+                >
+                  Download .seb configuration
+                </button>
+                <span className="text-xs text-ink-2 w-full">Open the file to start Safe Exam Browser; it closes chat, remote-access, recording and AI apps and keeps them closed until you finish.</span>
+              </>
+            )}
           </div>
         ) : null}
       </div>
@@ -200,6 +209,7 @@ function PrimaryAction({ exam, primary, tz }: { exam: StudentExam; primary: Prim
         if (isApiError(e, 'EXAM_NOT_STARTED')) setLobbyNote(null);
         else if (isApiError(e, 'PRECHECK_STALE') || isApiError(e, 'POLICY_CHANGED')) setLobbyNote('Your readiness check has expired. Run it again before the exam starts.');
         else if (isApiError(e, 'NOT_READY')) setLobbyNote(null);
+        else if (isApiError(e, 'SECURE_CLIENT_REQUIRED')) setLobbyNote('This exam opens only in Safe Exam Browser. Download the .seb file below, open it, and sign in there.');
       }
     };
     void tick();
@@ -221,6 +231,7 @@ function PrimaryAction({ exam, primary, tz }: { exam: StudentExam; primary: Prim
       navigate(`/student/attempts/${attemptId}/exam`);
     } catch (e) {
       if (isApiError(e, 'PRECHECK_STALE') || isApiError(e, 'POLICY_CHANGED')) toast({ tone: 'warning', title: 'Run the readiness check again', description: 'It expired before the exam started. This is not counted against you.' });
+      else if (isApiError(e, 'SECURE_CLIENT_REQUIRED')) toast({ tone: 'warning', title: 'Open the exam in Safe Exam Browser', description: 'This exam cannot be opened in this browser. Download the .seb file from your exam card, open it, and sign in there. This attempt was recorded for the invigilator.' });
       else if (isApiError(e, 'ALREADY_ACTIVE')) navigate(`/student/attempts/${attemptId}/exam`);
       else if (isApiError(e, 'EXAM_NOT_STARTED')) toast({ tone: 'info', title: 'Not started yet', description: 'The Examination Section has not started the exam. Keep this page open.' });
       else toast({ tone: 'warning', title: 'Could not enter the exam', description: 'Ask the invigilator for help; your readiness is recorded.' });

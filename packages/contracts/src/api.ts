@@ -480,17 +480,20 @@ export interface DepartmentAnalyticsData {
 // ---------- Phase 4: Secure Client & SEB ----------
 export const SebConfigGenerateSchema = z.object({
   allowQuit: z.boolean().default(true),
-  quitPassword: z.string().max(64).optional(),
+  quitPassword: z.string().min(6).max(64).optional(),
   kioskMode: z.boolean().default(true),
   blockVirtualMachines: z.boolean().default(true),
   blockScreenCapture: z.boolean().default(true),
   blockClipboard: z.boolean().default(true),
-  prohibitedProcesses: z.array(z.string().trim().min(1).max(64)).optional(),
+  /** Added to the built-in force-quit list: `Name.exe` (Windows) or a macOS bundle identifier (com.vendor.app). */
+  prohibitedProcesses: z.array(z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9 ._()+-]+$/)).max(100).optional(),
 });
 export type SebConfigGenerateInput = z.infer<typeof SebConfigGenerateSchema>;
 
 export const ExamClientPolicyUpdateSchema = z.object({
   sebConfigKey: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  /** Browser Exam Keys from the SEB Config Tool, one per approved SEB build; when set, every gated request must match one. */
+  sebBrowserExamKeys: z.array(z.string().regex(/^[a-f0-9]{64}$/i)).max(20).optional(),
   allowedClientBuilds: z.array(z.string().min(1).max(64)).optional(),
   requireManagedEndpoint: z.boolean().optional(),
   allowedSubnets: z.array(z.string().min(1).max(64)).optional(),

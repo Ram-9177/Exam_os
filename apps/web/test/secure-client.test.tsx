@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { waitFor, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MyExamsPage } from '@/features/student/MyExamsPage';
 import { ExamDetailPage } from '@/features/examcell/ExamDetailPage';
@@ -62,8 +62,12 @@ const mockExamDetail = {
 describe('Secure Client and Safe Exam Browser UI', () => {
   it('displays Safe Exam Browser badge and download link on student exams list', async () => {
     signInAs(['STUDENT']);
-
+    const downloads: Array<{ path: string; auth: boolean }> = [];
     mockFetch((call) => {
+      if (call.path.endsWith('/seb-config') && call.method === 'GET') {
+        downloads.push({ path: call.path, auth: !!call.headers?.['authorization'] });
+        return { status: 200, json: {} };
+      }
       if (call.path === '/tenants/me') return { json: TENANT };
       if (call.path === '/auth/me') return { json: { userId: 'u1', email: 'student@demo.local', kind: 'STUDENT', grants: [{ role: 'STUDENT', scopeType: 'TENANT', scopeId: null }], tenant: TENANT } };
       if (call.path === '/student/me/exams') return { json: mockStudentExams };
@@ -76,22 +80,24 @@ describe('Secure Client and Safe Exam Browser UI', () => {
     expect(await screen.findByText('Computer Networks & Security Mid-term')).toBeInTheDocument();
     expect(screen.getByText('Safe Exam Browser')).toBeInTheDocument();
 
-    const sebLink = screen.getByRole('link', { name: 'Download .seb configuration' });
-    expect(sebLink).toBeInTheDocument();
-    expect(sebLink).toHaveAttribute('href', '/api/v1/student/me/exams/e-seb-1/seb-config');
-    expect(sebLink).toHaveAttribute('download', 'smru-exam-CS401-MID.seb');
+    // Downloaded through the API client with the access token — a plain link would carry no credentials and get a 401
+    expect(screen.queryByRole('link', { name: 'Download .seb configuration' })).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Download .seb configuration' }));
+    await waitFor(() => expect(downloads).toEqual([{ path: '/student/me/exams/e-seb-1/seb-config', auth: true }]));
+    expect(screen.getByText(/closes chat, remote-access, recording and AI apps/)).toBeInTheDocument();
   });
 
   it('renders SEB Config Key and allows Exam Section to rebuild config', async () => {
     signInAs(['EXAM_CELL_OPERATOR']);
 
-    let generateCalled = false;
+    let generated: Record<string, unknown> | null = null;
     mockFetch((call) => {
       if (call.path === '/tenants/me') return { json: TENANT };
       if (call.path === '/auth/me') return { json: { userId: 'u-ec', email: 'examcell@demo.local', kind: 'STAFF', grants: [{ role: 'EXAM_CELL_OPERATOR', scopeType: 'TENANT', scopeId: null }], tenant: TENANT } };
       if (call.path === '/exams/e-seb-1') return { json: mockExamDetail };
       if (call.method === 'POST' && call.path === '/exams/e-seb-1/seb-config') {
-        generateCalled = true;
+        generated = call.body as Record<string, unknown>;
         return {
           status: 201,
           json: {
@@ -108,18 +114,20 @@ describe('Secure Client and Safe Exam Browser UI', () => {
     renderApp([{ path: '/examcell/exams/:id', element: <ExamDetailPage /> }], '/examcell/exams/e-seb-1');
 
     // Safe Exam Browser card rendered
-    expect(await screen.findByText('Safe Exam Browser & Client Policy')).toBeInTheDocument();
-    expect(screen.getByText('SEB Config Active')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Safe Exam Browser' })).toBeInTheDocument();
+    expect(screen.getByText('Required for this exam')).toBeInTheDocument();
+    expect(screen.getByText(/closes Teams, Zoom, WhatsApp/)).toBeInTheDocument();
 
     // Key rendered
     const keyEl = screen.getByTestId('seb-config-key');
     expect(keyEl).toHaveTextContent(mockExamDetail.exam.policy.sebConfigKey);
 
     // Rebuild SEB config button
-    const rebuildBtn = screen.getByRole('button', { name: 'Rebuild SEB Config' });
-    await user.click(rebuildBtn);
-
-    expect(generateCalled).toBe(true);
+    await user.type(screen.getByLabelText(/Quit password/), 'invigilator-2026');
+    await user.type(screen.getByLabelText(/Also force-close these apps/), 'LockDownHelper.exe{Enter}com.example.notes');
+    await user.click(screen.getByRole('button', { name: /configuration$/ }));
+    await waitFor(() => expect(generated).not.toBeNull());
+    expect(generated).toMatchObject({ kioskMode: true, blockVirtualMachines: true, quitPassword: 'invigilator-2026', prohibitedProcesses: ['LockDownHelper.exe', 'com.example.notes'] });
   });
 });
 

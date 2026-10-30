@@ -30,10 +30,11 @@ export function sebRoutes(deps: AppDeps, jwt: JwtService): Router {
       const principal = userPrincipal(req);
       const examId = uuidParam(req, 'id');
       const input = body<typeof SebConfigGenerateSchema>(req);
-      const host = req.get('host') || 'localhost:4000';
+      // The exam site the SEB browser is locked to: the tenant host the request arrived on (https behind the proxy).
+      const origin = `${req.protocol}://${req.get('host') ?? 'localhost'}`;
 
       const result = await tenantTx(deps, req, async (trx) => {
-        return generateSebConfig(deps, trx, tenant.id, examId, host, principal.userId, input);
+        return generateSebConfig(deps, trx, tenant.id, examId, origin, principal.userId, input);
       });
 
       res.status(201).json(result);

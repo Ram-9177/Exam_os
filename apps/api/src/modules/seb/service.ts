@@ -2,150 +2,42 @@ import type { Knex } from '@examos/db';
 import type { AppDeps } from '../../types.js';
 import { AppError } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
-import { sha256Hex } from '../../lib/crypto.js';
+import { buildSebSettings, sebConfigKey as sebConfigKey_, sebSettingsToPlist } from './settings.js';
 import type { SebConfigGenerateInput, ExamClientPolicyUpdate } from '@examos/contracts';
 
-export const DEFAULT_PROHIBITED_PROCESSES = [
-  'discord',
-  'teams',
-  'skype',
-  'zoom',
-  'slack',
-  'anydesk',
-  'teamviewer',
-  'chrome-remote-desktop',
-  'vncviewer',
-  'obs',
-  'obs64',
-  'camtasia',
-  'snagit',
-  'telegram',
-  'whatsapp',
-  'vmware',
-  'virtualbox',
-  'parallels',
-  'qemu',
-];
-
-function escapeXml(unsafe: string): string {
-  return unsafe.replace(/[<>&'"]/g, (c) => {
-    switch (c) {
-      case '<':
-        return '&lt;';
-      case '>':
-        return '&gt;';
-      case '&':
-        return '&amp;';
-      case "'":
-        return '&apos;';
-      case '"':
-        return '&quot;';
-      default:
-        return c;
-    }
-  });
-}
-
-export function buildSebConfigPlist(options: {
-  startUrl: string;
-  quitUrl: string;
-  allowQuit?: boolean;
-  quitPassword?: string;
-  kioskMode?: boolean;
-  blockVirtualMachines?: boolean;
-  blockScreenCapture?: boolean;
-  blockClipboard?: boolean;
-  prohibitedProcesses?: string[];
-}): string {
-  const allowQuit = options.allowQuit ?? true;
-  const kioskMode = options.kioskMode ?? true;
-  const blockVm = options.blockVirtualMachines ?? true;
-  const blockScreen = options.blockScreenCapture ?? true;
-  const blockClipboard = options.blockClipboard ?? true;
-  const processes = options.prohibitedProcesses ?? DEFAULT_PROHIBITED_PROCESSES;
-
-  const procsXml = processes
-    .map(
-      (p) =>
-        `    <dict>\n      <key>active</key>\n      <true/>\n      <key>currentUser</key>\n      <true/>\n      <key>description</key>\n      <string>${escapeXml(
-          p
-        )}</string>\n      <key>executable</key>\n      <string>${escapeXml(
-          p
-        )}</string>\n      <key>os</key>\n      <integer>1</integer>\n      <key>strongKill</key>\n      <true/>\n    </dict>`
-    )
-    .join('\n');
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>originatorVersion</key>
-  <string>SMRU ExamOS Safe Exam Browser Generator 1.0</string>
-  <key>startURL</key>
-  <string>${escapeXml(options.startUrl)}</string>
-  <key>sendBrowserExamKey</key>
-  <true/>
-  <key>browserWindowAllowReload</key>
-  <true/>
-  <key>allowPreferencesWindow</key>
-  <false/>
-  <key>allowQuit</key>
-  <${allowQuit ? 'true' : 'false'}/>
-  <key>quitURL</key>
-  <string>${escapeXml(options.quitUrl)}</string>
-  <key>kioskMode</key>
-  <${kioskMode ? 'true' : 'false'}/>
-  <key>enablePrivateClipboard</key>
-  <${blockClipboard ? 'true' : 'false'}/>
-  <key>enablePrintScreen</key>
-  <${blockScreen ? 'false' : 'true'}/>
-  <key>allowPrint</key>
-  <false/>
-  <key>allowScreenSharing</key>
-  <false/>
-  <key>allowVirtualMachine</key>
-  <${blockVm ? 'false' : 'true'}/>
-  <key>allowRemoteSession</key>
-  <false/>
-  <key>prohibitedProcesses</key>
-  <array>
-${procsXml}
-  </array>
-</dict>
-</plist>`;
-}
+/** Changing the SEB configuration or keys once students can be inside the exam would lock every one of them out. */
+const SEB_FROZEN_STATUSES = ['LIVE', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
 
 export async function generateSebConfig(
   deps: AppDeps,
   trx: Knex.Transaction,
   tenantId: string,
   examId: string,
-  host: string,
+  origin: string,
   actorId: string,
   input: SebConfigGenerateInput
-): Promise<{ sebConfigKey: string; generatedAt: string; downloadUrl: string; xml: string }> {
+): Promise<{ sebConfigKey: string; generatedAt: string; downloadUrl: string; xml: string; prohibitedApps: number }> {
   const exam = await trx('exams')
     .where({ tenant_id: tenantId, id: examId })
     .forNoKeyUpdate()
     .first();
   if (!exam) throw AppError.notFound('EXAM_NOT_FOUND', 'Exam not found');
+  if (SEB_FROZEN_STATUSES.includes(exam.status)) throw AppError.conflict('SEB_CONFIG_FROZEN', `The Safe Exam Browser configuration cannot change while the exam is ${exam.status}`);
+  if (exam.security_profile !== 'SECURE_BYOD') throw AppError.conflict('SEB_NOT_APPLICABLE', 'Safe Exam Browser applies to SECURE_BYOD exams; change the security profile first');
 
-  const startUrl = `https://${host}/student`;
-  const quitUrl = `https://${host}/student`;
-
-  const xml = buildSebConfigPlist({
-    startUrl,
-    quitUrl,
+  const settings = buildSebSettings({
+    origin,
     allowQuit: input.allowQuit,
     quitPassword: input.quitPassword,
     kioskMode: input.kioskMode,
     blockVirtualMachines: input.blockVirtualMachines,
     blockScreenCapture: input.blockScreenCapture,
     blockClipboard: input.blockClipboard,
-    prohibitedProcesses: input.prohibitedProcesses ?? DEFAULT_PROHIBITED_PROCESSES,
+    extraProhibited: input.prohibitedProcesses,
   });
-
-  const sebConfigKey = sha256Hex(xml);
+  const xml = sebSettingsToPlist(settings);
+  const sebConfigKey = sebConfigKey_(settings);
+  const prohibitedApps = Array.isArray(settings['prohibitedProcesses']) ? settings['prohibitedProcesses'].length : 0;
   const now = deps.clock.now().toISOString();
 
   const existingPolicy = (exam.policy ?? {}) as Record<string, unknown>;
@@ -154,15 +46,16 @@ export async function generateSebConfig(
     sebConfigKey,
     sebConfigXml: xml,
     sebGeneratedAt: now,
+    sebOrigin: origin,
     sebKioskMode: input.kioskMode,
     sebBlockVm: input.blockVirtualMachines,
+    sebQuitPasswordSet: !!input.quitPassword,
+    sebExtraProhibited: input.prohibitedProcesses ?? [],
   };
 
   await trx('exams')
     .where({ tenant_id: tenantId, id: examId })
-    .update({
-      policy: updatedPolicy,
-    });
+    .update({ policy: updatedPolicy, updated_at: trx.fn.now() });
 
   await audit(trx, {
     tenantId,
@@ -171,20 +64,10 @@ export async function generateSebConfig(
     action: 'seb_config.generated',
     entityType: 'exam',
     entityId: examId,
-    metadata: {
-      sebConfigKey,
-      kioskMode: input.kioskMode,
-      blockVm: input.blockVirtualMachines,
-      processCount: (input.prohibitedProcesses ?? DEFAULT_PROHIBITED_PROCESSES).length,
-    },
+    metadata: { sebConfigKey, origin, kioskMode: input.kioskMode, blockVm: input.blockVirtualMachines, prohibitedApps, quitPasswordSet: !!input.quitPassword },
   });
 
-  return {
-    sebConfigKey,
-    generatedAt: now,
-    downloadUrl: `/api/v1/exams/${examId}/seb-config`,
-    xml,
-  };
+  return { sebConfigKey, generatedAt: now, downloadUrl: `/api/v1/exams/${examId}/seb-config`, xml, prohibitedApps };
 }
 
 export async function getSebConfigFile(
@@ -239,11 +122,15 @@ export async function updateExamClientPolicy(
     .forNoKeyUpdate()
     .first();
   if (!exam) throw AppError.notFound('EXAM_NOT_FOUND', 'Exam not found');
+  const touchesSeb = input.sebConfigKey !== undefined || input.sebBrowserExamKeys !== undefined || input.requireManagedEndpoint !== undefined;
+  if (touchesSeb && SEB_FROZEN_STATUSES.includes(exam.status)) throw AppError.conflict('SEB_CONFIG_FROZEN', `Secure-client keys cannot change while the exam is ${exam.status}`);
 
   const existingPolicy = (exam.policy ?? {}) as Record<string, unknown>;
   const updatedPolicy = {
     ...existingPolicy,
-    ...(input.sebConfigKey !== undefined ? { sebConfigKey: input.sebConfigKey } : {}),
+    // A key pasted by hand (from the SEB Config Tool) replaces the generated one; the generated file no longer matches it.
+    ...(input.sebConfigKey !== undefined ? { sebConfigKey: input.sebConfigKey.toLowerCase(), ...(input.sebConfigKey.toLowerCase() !== existingPolicy['sebConfigKey'] ? { sebConfigXml: null } : {}) } : {}),
+    ...(input.sebBrowserExamKeys !== undefined ? { sebBrowserExamKeys: input.sebBrowserExamKeys.map((k) => k.toLowerCase()) } : {}),
     ...(input.allowedClientBuilds !== undefined ? { allowedClientBuilds: input.allowedClientBuilds } : {}),
     ...(input.requireManagedEndpoint !== undefined ? { requireManagedEndpoint: input.requireManagedEndpoint } : {}),
     ...(input.allowedSubnets !== undefined ? { allowedSubnets: input.allowedSubnets } : {}),
@@ -252,7 +139,7 @@ export async function updateExamClientPolicy(
 
   await trx('exams')
     .where({ tenant_id: tenantId, id: examId })
-    .update({ policy: updatedPolicy });
+    .update({ policy: updatedPolicy, updated_at: trx.fn.now() });
 
   await audit(trx, {
     tenantId,
@@ -266,6 +153,8 @@ export async function updateExamClientPolicy(
       requireManagedEndpoint: input.requireManagedEndpoint,
       subnetsCount: input.allowedSubnets?.length,
       ipPolicy: input.ipPolicy,
+      sebConfigKeySet: input.sebConfigKey !== undefined,
+      sebBrowserExamKeysCount: input.sebBrowserExamKeys?.length,
     },
   });
 

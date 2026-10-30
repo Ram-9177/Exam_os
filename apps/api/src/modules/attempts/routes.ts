@@ -2,6 +2,7 @@ import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { AnswerSaveSchema, SubmitSchema, PrecheckItemVerifySchema, DeviceScanReportSchema } from '@examos/contracts';
 import { clientNet } from '../../lib/client-net.js';
+import { sebEvidence } from '../seb/verify.js';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
@@ -121,6 +122,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
           userAgent: req.get('user-agent') ?? undefined,
           sebConfigKeyHash: req.header('x-safeexambrowser-configkeyhash') ?? undefined,
           sebBrowserExamKeyHash: req.header('x-safeexambrowser-requesthash') ?? undefined,
+          seb: sebEvidence(req),
         }),
       );
       res.json({ checks });
@@ -154,7 +156,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.status(201).json(await tenantTx(deps, req, (trx) => issueEntryGrant(deps, trx, t.id, p.userId, uuidParam(req, 'id'))));
+      res.status(201).json(await tenantTx(deps, req, (trx) => issueEntryGrant(deps, trx, t.id, p.userId, uuidParam(req, 'id'), sebEvidence(req))));
     }),
   );
   r.post(
@@ -165,7 +167,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => admit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof AdmitBody>(req).grantToken, clientNet(req))));
+      res.json(await tenantTx(deps, req, (trx) => admit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof AdmitBody>(req).grantToken, clientNet(req), sebEvidence(req))));
     }),
   );
   r.put(
@@ -200,7 +202,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => heartbeat(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), clientNet(req))));
+      res.json(await tenantTx(deps, req, (trx) => heartbeat(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), clientNet(req), sebEvidence(req))));
     }),
   );
   r.post(
@@ -211,7 +213,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => reconnect(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), clientNet(req))));
+      res.json(await tenantTx(deps, req, (trx) => reconnect(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), clientNet(req), sebEvidence(req))));
     }),
   );
   r.post(

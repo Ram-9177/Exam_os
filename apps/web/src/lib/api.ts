@@ -1,4 +1,5 @@
 import type { Problem } from '@examos/contracts';
+import { sebHeaders } from './seb';
 import { Emitter } from './events';
 
 export const API_BASE = '/api/v1';
@@ -175,7 +176,7 @@ async function toProblem(res: Response): Promise<Problem> {
 }
 
 export async function request<T>(method: string, path: string, opts: RequestOptions = {}, _retried = false): Promise<T> {
-  const headers: Record<string, string> = { accept: 'application/json', ...(opts.headers ?? {}) };
+  const headers: Record<string, string> = { accept: 'application/json', ...sebHeaders(), ...(opts.headers ?? {}) };
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
   const auth = opts.auth ?? true;
   const t = getTokens();
@@ -221,7 +222,7 @@ export async function request<T>(method: string, path: string, opts: RequestOpti
 }
 
 export async function downloadBlob(path: string, fallbackFilename: string, opts: RequestOptions = {}): Promise<void> {
-  const headers: Record<string, string> = { ...(opts.headers ?? {}) };
+  const headers: Record<string, string> = { ...sebHeaders(), ...(opts.headers ?? {}) };
   const auth = opts.auth ?? true;
   const t = getTokens();
   if (auth && t) headers['authorization'] = `Bearer ${t.accessToken}`;

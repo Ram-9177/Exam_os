@@ -223,6 +223,4 @@ export async function updateClientPolicy(examId: string, policy: ExamClientPolic
   return api.put<{ policy: Record<string, unknown> }>(`/exams/${examId}/client-policy`, policy);
 }
 
-export function getSebDownloadUrl(examId: string): string {
-  return `/api/v1/exams/${examId}/seb-config`;
-}
+

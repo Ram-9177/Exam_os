@@ -1,4 +1,6 @@
 import { withTenantTx, type Knex } from '@examos/db';
+import { observeSeb, requireSeb } from '../seb/enforce.js';
+import { sebPolicyOf, verifySeb, type SebEvidence } from '../seb/verify.js';
 import { randomUUID } from 'node:crypto';
 import { DEVICE_SCAN_FINDINGS, DEVICE_SCAN_SIGNAL, type DeviceScanFinding } from '@examos/contracts';
 import type { ClientNet } from '../../lib/client-net.js';
@@ -176,6 +178,7 @@ export interface VerifyEvidence {
   /** Safe Exam Browser request headers, when present */
   sebConfigKeyHash?: string;
   sebBrowserExamKeyHash?: string;
+  seb?: SebEvidence;
   requestUrl?: string;
   clientIp?: string;
   userAgent?: string;
@@ -221,13 +224,13 @@ export async function verifyItem(deps: AppDeps, trx: Knex.Transaction, tenantId:
         );
         break;
       }
-      const sebConfigKey = typeof policy['sebConfigKey'] === 'string' ? (policy['sebConfigKey'] as string) : null;
       const allowedBuilds = Array.isArray(policy['allowedClientBuilds']) ? (policy['allowedClientBuilds'] as string[]) : [];
-      if (sebConfigKey) {
-        // Safe Exam Browser: X-SafeExamBrowser-ConfigKeyHash = SHA256(absolute request URL + Config Key)
-        const expected = ev.requestUrl ? sha256Hex(`${ev.requestUrl}${sebConfigKey}`) : null;
-        const ok = !!expected && !!ev.sebConfigKeyHash && expected.toLowerCase() === ev.sebConfigKeyHash.toLowerCase();
-        await recordItem(trx, tenantId, runId, ev.code, ok ? 'PASS' : 'REMEDIATE', ok ? 'SECURE_CLIENT' : 'SERVER', ok ? null : 'SEB_CONFIG_KEY_MISMATCH', ok ? null : 'OPEN_IN_SECURE_CLIENT', { hasHeader: !!ev.sebConfigKeyHash });
+      const seb = sebPolicyOf(exam);
+      if (seb) {
+        // The same verification admission uses: header path (SEB Windows) or JavaScript-API path (SEB macOS/iOS),
+        // plus registered Browser Exam Keys when the Examination Section set them.
+        const out = verifySeb(seb, ev.seb ?? { requestUrl: ev.requestUrl ?? '', host: '', configKeyHash: ev.sebConfigKeyHash, requestHash: ev.sebBrowserExamKeyHash });
+        await recordItem(trx, tenantId, runId, ev.code, out.ok ? 'PASS' : 'REMEDIATE', out.ok ? 'SECURE_CLIENT' : 'SERVER', out.ok ? null : out.reason === 'NO_SEB_KEY' ? 'SEB_REQUIRED' : 'SEB_CONFIG_KEY_MISMATCH', out.ok ? null : 'OPEN_IN_SECURE_CLIENT', out.ok ? { method: out.method } : { reason: out.reason });
         break;
       }
       if (allowedBuilds.length) {
@@ -352,8 +355,9 @@ export async function finalizePrecheck(deps: AppDeps, trx: Knex.Transaction, ten
 // ---------------------------------------------------------------------------
 // Entry grant + admission (one-time, atomic)
 // ---------------------------------------------------------------------------
-export async function issueEntryGrant(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string): Promise<{ grantToken: string; expiresAt: string }> {
+export async function issueEntryGrant(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, seb?: SebEvidence): Promise<{ grantToken: string; expiresAt: string }> {
   const { attempt, exam } = await lockAttemptForUser(trx, tenantId, attemptId, userId);
+  await requireSeb(deps, tenantId, attemptId, exam, seb, 'entry-grant');
   if (exam.status === 'PRECHECK') throw AppError.conflict('EXAM_NOT_STARTED', 'Waiting for the Examination Section to start the exam');
   if (exam.status !== 'LIVE') throw AppError.conflict('EXAM_NOT_LIVE', `The exam is ${exam.status}`);
   if (attempt.status !== 'READY') throw AppError.conflict('NOT_READY', `Readiness check must be READY (attempt is ${attempt.status})`);
@@ -374,8 +378,10 @@ export async function issueEntryGrant(deps: AppDeps, trx: Knex.Transaction, tena
  * the UPDATE ... WHERE consumed_at IS NULL RETURNING is the arbiter, and the
  * attempt row is locked first so the state check and the update are serialized.
  */
-export async function admit(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, grantToken: string, net?: ClientNet) {
+export async function admit(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, grantToken: string, net?: ClientNet, seb?: SebEvidence) {
   const { attempt, exam } = await lockAttemptForUser(trx, tenantId, attemptId, userId);
+  // Readiness may have run in SEB; admission is where the exam opens, so the exam opens only in SEB (grant not burned).
+  const sebOk = await requireSeb(deps, tenantId, attemptId, exam, seb, 'admit');
   if (exam.status !== 'LIVE') throw AppError.conflict('EXAM_NOT_LIVE', `The exam is ${exam.status}`);
   if (attempt.status === 'ACTIVE') {
     // idempotent re-entry with the same (already consumed) grant is not allowed; the client must use reconnect
@@ -413,7 +419,7 @@ export async function admit(deps: AppDeps, trx: Knex.Transaction, tenantId: stri
   });
   if (net) await observeNetwork(deps, trx, tenantId, { ...attempt, status: 'ACTIVE', admitted_ip: net.ip }, net, 'ADMISSION');
   await deps.redis.set(heartbeatKey(attemptId), String(now.getTime()), 'EX', HEARTBEAT_GRACE_SECONDS * 4);
-  await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'attempt.admitted', actor: `USER:${userId}`, metadata: { deadline: deadline.toISOString(), grantId: consumed[0].id } });
+  await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'attempt.admitted', actor: `USER:${userId}`, metadata: { deadline: deadline.toISOString(), grantId: consumed[0].id, ...(sebOk?.ok ? { secureClient: `SEB:${sebOk.method}` } : {}) } });
   await audit(trx, { tenantId, actorType: 'USER', actorId: userId, action: 'attempt.admitted', entityType: 'exam_attempt', entityId: attemptId });
   const user = await trx('users').where('id', userId).first('email', 'full_name');
   const tenant = await trx('tenants').where('id', tenantId).first('timezone');
@@ -531,10 +537,14 @@ export async function getAnswer(trx: Knex.Transaction, tenantId: string, userId:
   return doc ? { questionId, serverRevision: doc.current_revision, content: doc.content, contentSha256: doc.content_sha256 } : { questionId, serverRevision: 0, content: { blocks: [] }, contentSha256: contentHash({ blocks: [] }) };
 }
 
-export async function heartbeat(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, deviceSession: string | null, net: ClientNet | null) {
+export async function heartbeat(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, deviceSession: string | null, net: ClientNet | null, seb?: SebEvidence) {
   const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: attemptId }).first();
   if (!attempt || attempt.user_id !== userId) throw AppError.notFound('ATTEMPT_NOT_FOUND');
-  if (attempt.status === 'ACTIVE') await assertDeviceSession(deps, trx, tenantId, attempt, deviceSession);
+  if (attempt.status === 'ACTIVE') {
+    await assertDeviceSession(deps, trx, tenantId, attempt, deviceSession);
+    const exam = await trx('exams').where({ tenant_id: tenantId, id: attempt.exam_id }).first('security_profile', 'policy');
+    if (exam) await observeSeb(deps, trx, tenantId, attemptId, exam, seb, 'heartbeat');
+  }
   // Network changes (Wi-Fi switch, hotspot, IPv6 flip) are durable transport context; the exam's ipPolicy decides
   // whether a human is asked to look (REVIEW) or the write is held to the admitted address (LOCK). Never a warning (spec §28).
   if (net) await observeNetwork(deps, trx, tenantId, attempt, net, 'HEARTBEAT');
@@ -550,8 +560,9 @@ export async function heartbeat(deps: AppDeps, trx: Knex.Transaction, tenantId: 
 }
 
 /** A reconnect after RECOVERY_PENDING returns to ACTIVE; it never creates a new attempt or extra time (spec §6). */
-export async function reconnect(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, deviceSession: string | null, net?: ClientNet) {
+export async function reconnect(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, deviceSession: string | null, net?: ClientNet, seb?: SebEvidence) {
   const { attempt, exam } = await lockAttemptForUser(trx, tenantId, attemptId, userId);
+  await requireSeb(deps, tenantId, attemptId, exam, seb, 'reconnect');
   if (exam.status !== 'LIVE') throw AppError.conflict('EXAM_NOT_LIVE', 'The exam is not live');
   if (!['ACTIVE', 'RECOVERY_PENDING'].includes(attempt.status)) throw AppError.conflict('ATTEMPT_STATE', `attempt is ${attempt.status}`);
   if (deps.clock.now() > new Date(attempt.deadline_at)) throw AppError.conflict('DEADLINE_PASSED', 'The server deadline has passed');

@@ -126,7 +126,8 @@ describe('Phase 4 — Secure Client, SEB Configuration, and Cheating Mitigation'
         blockVirtualMachines: true,
         blockScreenCapture: true,
         blockClipboard: true,
-        prohibitedProcesses: ['discord', 'anydesk', 'teamviewer', 'obs64'],
+        quitPassword: 'invigilator-2026',
+        prohibitedProcesses: ['LockDownHelper.exe', 'com.example.cheatsheet', 'Discord.exe'],
       });
     expect(genRes.status).toBe(201);
     expect(genRes.body.sebConfigKey).toMatch(/^[a-f0-9]{64}$/);
@@ -141,10 +142,24 @@ describe('Phase 4 — Secure Client, SEB Configuration, and Cheating Mitigation'
     expect(staffDownload.headers['x-seb-configkey']).toBe(sebConfigKey);
     const xml = staffDownload.text;
     expect(xml).toContain('<!DOCTYPE plist');
-    expect(xml).toContain('<key>kioskMode</key>');
-    expect(xml).toContain('<key>prohibitedProcesses</key>');
-    expect(xml).toContain('anydesk');
-    expect(sha256Hex(xml)).toBe(sebConfigKey);
+    const settings = parsePlist(xml) as Record<string, unknown>;
+    // SEB's Config Key, recomputed independently from the file the student opens, is the key the server verifies
+    expect(sebKeyOf(settings)).toBe(sebConfigKey);
+    expect(settings['startURL']).toBe(`http://${t.host}/student`);
+    expect(settings['URLFilterEnable']).toBe(true);
+    expect(settings['URLFilterRules']).toEqual([{ action: 1, active: true, expression: t.host, regex: false }, { action: 1, active: true, expression: `${t.host}/*`, regex: false }]);
+    expect(settings).toMatchObject({ createNewDesktop: true, killExplorerShell: true, enableAltTab: false, allowedDisplaysMaxNumber: 1, allowDisplayMirroring: false, allowScreenSharing: false, allowVirtualMachine: false, enablePrintScreen: false, enablePrivateClipboard: true, sendBrowserExamKey: true });
+    expect(settings['hashedQuitPassword']).toBe(sha256Hex('invigilator-2026'));
+    expect(xml).not.toContain('invigilator-2026');
+    // every listed app is force-quit (strongKill) on both platforms; the Examination Section's entries are added once
+    const procs = settings['prohibitedProcesses'] as Array<Record<string, unknown>>;
+    expect(procs.every((p) => p['strongKill'] === true && p['active'] === true)).toBe(true);
+    const has = (os: number, exe: string) => procs.some((p) => p['os'] === os && String(p['executable']).toLowerCase() === exe.toLowerCase());
+    for (const exe of ['Teams.exe', 'Zoom.exe', 'AnyDesk.exe', 'TeamViewer.exe', 'obs64.exe', 'ChatGPT.exe', 'LockDownHelper.exe']) expect(has(1, exe)).toBe(true);
+    expect(procs.some((p) => p['os'] === 0 && p['identifier'] === 'us.zoom.xos')).toBe(true);
+    expect(procs.some((p) => p['os'] === 0 && p['identifier'] === 'com.example.cheatsheet')).toBe(true);
+    expect(procs.filter((p) => p['os'] === 1 && String(p['executable']).toLowerCase() === 'discord.exe')).toHaveLength(1);
+    expect(genRes.body.prohibitedApps).toBe(procs.length);
 
     // 3. Student1 (allocated) downloads .seb file
     const studentDownload = await req()
@@ -168,6 +183,17 @@ describe('Phase 4 — Secure Client, SEB Configuration, and Cheating Mitigation'
     const actions = audits.map((a) => a.action);
     expect(actions).toContain('seb_config.generated');
     expect(actions).toContain('seb_config.downloaded');
+
+    // once the exam is live the configuration and keys are frozen: changing them would lock every student out
+    await ctx.admin('exams').where({ id: examId }).update({ status: 'LIVE' });
+    const frozen = await req().post(`/api/v1/exams/${examId}/seb-config`).set(H(examCell.token)).send({});
+    expect(frozen.status).toBe(409);
+    expect(frozen.body.code).toBe('SEB_CONFIG_FROZEN');
+    const frozenKey = await req().put(`/api/v1/exams/${examId}/client-policy`).set(H(examCell.token)).send({ sebConfigKey: 'a'.repeat(64) });
+    expect(frozenKey.status).toBe(409);
+    // SEB only applies to SECURE_BYOD exams
+    const basic = await req().post('/api/v1/exams').set(H(examCell.token)).send({ code: 'CS401-QUIZ', title: 'Quiz', courseCode: 'CS401', examType: 'MID_1', securityProfile: 'BASIC_BROWSER', durationMinutes: 30, windowStartAt: new Date(now - 60_000).toISOString(), windowEndAt: new Date(now + 3600_000).toISOString() });
+    expect((await req().post(`/api/v1/exams/${basic.body.examId}/seb-config`).set(H(examCell.token)).send({})).body.code).toBe('SEB_NOT_APPLICABLE');
   });
 
   it('validates SEB Config Key cryptographic handshake in precheck and rejects tampering', async () => {
@@ -208,7 +234,7 @@ describe('Phase 4 — Secure Client, SEB Configuration, and Cheating Mitigation'
     const verifyPath = `/api/v1/student/prechecks/${runId}/items/verify`;
     const fullUrl = `http://${t.host}${verifyPath}`;
 
-    // 1. Plain request with NO header -> REMEDIATE / SEB_CONFIG_KEY_MISMATCH
+    // 1. Plain request with NO header -> REMEDIATE / SEB_REQUIRED
     const plainRes = await req()
       .post(verifyPath)
       .set(H(student1.token))
@@ -216,7 +242,7 @@ describe('Phase 4 — Secure Client, SEB Configuration, and Cheating Mitigation'
     const plainCheck = plainRes.body.checks.find((c: { code: string }) => c.code === 'CLIENT_VERSION');
     expect(plainCheck).toMatchObject({
       status: 'REMEDIATE',
-      diagnosticCode: 'SEB_CONFIG_KEY_MISMATCH',
+      diagnosticCode: 'SEB_REQUIRED',
       source: 'SERVER',
     });
 
@@ -245,6 +271,21 @@ describe('Phase 4 — Secure Client, SEB Configuration, and Cheating Mitigation'
       source: 'SECURE_CLIENT',
       diagnosticCode: null,
     });
+
+    // 4. SEB for macOS/iOS: the JavaScript API gives hashes for the PAGE url; the page url must be this exam site
+    const pageUrl = `http://${t.host}/student/attempts/${attemptId}/readiness`;
+    const js = (headers: Record<string, string>) => req().post(verifyPath).set(H(student1.token)).set(headers).send({ code: 'CLIENT_VERSION', clientBuild: 'SEB_Mac_3.3.2' });
+    const jsCheck = async (headers: Record<string, string>) => (await js(headers)).body.checks.find((c: { code: string }) => c.code === 'CLIENT_VERSION');
+    expect(await jsCheck({ 'X-SEB-Page-Url': pageUrl, 'X-SEB-Config-Key-Hash': sha256Hex(`${pageUrl}${SEB_KEY}`) })).toMatchObject({ status: 'PASS', source: 'SECURE_CLIENT' });
+    const foreign = 'https://evil.example/student';
+    expect(await jsCheck({ 'X-SEB-Page-Url': foreign, 'X-SEB-Config-Key-Hash': sha256Hex(`${foreign}${SEB_KEY}`) })).toMatchObject({ status: 'REMEDIATE' });
+
+    // 5. Registered Browser Exam Keys (per approved SEB build): the config key alone is no longer enough
+    const BEK = 'b'.repeat(64);
+    expect((await req().put(`/api/v1/exams/${examId}/client-policy`).set(H(examCell.token)).send({ sebBrowserExamKeys: [BEK.toUpperCase()] })).status).toBe(200);
+    expect((await req().post(verifyPath).set(H(student1.token)).set('X-SafeExamBrowser-ConfigKeyHash', genuineHash).send({ code: 'CLIENT_VERSION' })).body.checks.find((c: { code: string }) => c.code === 'CLIENT_VERSION')).toMatchObject({ status: 'REMEDIATE', diagnosticCode: 'SEB_CONFIG_KEY_MISMATCH' });
+    const withBek = await req().post(verifyPath).set(H(student1.token)).set('X-SafeExamBrowser-ConfigKeyHash', genuineHash).set('X-SafeExamBrowser-RequestHash', sha256Hex(`${fullUrl}${BEK}`)).send({ code: 'CLIENT_VERSION' });
+    expect(withBek.body.checks.find((c: { code: string }) => c.code === 'CLIENT_VERSION')).toMatchObject({ status: 'PASS', source: 'SECURE_CLIENT' });
   });
 
   it('enforces MANAGED_ENDPOINT subnet attestation and client policy updates', async () => {
@@ -426,3 +467,48 @@ describe('Phase 4 — Secure Client, SEB Configuration, and Cheating Mitigation'
     expect(auditRow.metadata.isPrePublication).toBe(true);
   });
 });
+
+/** Minimal XML property-list reader (dict, array, string, integer, true, false) — independent of the generator. */
+function parsePlist(xml: string): unknown {
+  const tokens = [...xml.replace(/<\?xml[^>]*>|<!DOCTYPE[^>]*>/g, '').matchAll(/<(\/?)(\w+)(\/?)>([^<]*)/g)].map((m) => ({ close: m[1] === '/', tag: m[2]!, selfClose: m[3] === '/', text: m[4]! }));
+  let i = 0;
+  const unescape = (s: string) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+  const value = (): unknown => {
+    const tok = tokens[i++]!;
+    if (tok.tag === 'plist') return value();
+    if (tok.tag === 'true' || tok.tag === 'false') return tok.tag === 'true';
+    if (tok.tag === 'string') return i++, unescape(tok.text);
+    if (tok.tag === 'integer') return i++, Number(tok.text);
+    if (tok.tag === 'array') {
+      const out: unknown[] = [];
+      if (tok.selfClose) return out;
+      while (!(tokens[i]!.close && tokens[i]!.tag === 'array')) out.push(value());
+      i++;
+      return out;
+    }
+    if (tok.tag === 'dict') {
+      const out: Record<string, unknown> = {};
+      while (!(tokens[i]!.close && tokens[i]!.tag === 'dict')) {
+        const key = unescape(tokens[i]!.text);
+        i += 2;
+        out[key] = value();
+      }
+      i++;
+      return out;
+    }
+    throw new Error(`unexpected ${tok.tag}`);
+  };
+  return value();
+}
+
+/** SEB Config Key: JSON without originatorVersion, keys sorted case-insensitively at every level, SHA-256 hex. */
+function sebKeyOf(settings: Record<string, unknown>): string {
+  const sort = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sort);
+    if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase(), 'en', { sensitivity: 'base' }) || 0).map((k) => [k, sort((v as Record<string, unknown>)[k])]));
+    return v;
+  };
+  const { originatorVersion: _o, ...rest } = settings;
+  void _o;
+  return sha256Hex(JSON.stringify(sort(rest)));
+}

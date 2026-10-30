@@ -20,6 +20,8 @@ describe('interruptions, recovery and the secure client', () => {
   const student = { email: '', token: '', attemptId: '', device: '' };
   const SEB_CONFIG_KEY = 'd41d8cd98f00b204e9800998ecf8427e00000000000000000000000000000000';
   const H = (token: string) => ({ Host: t.host, Authorization: `Bearer ${token}` });
+  /** What SEB for Windows adds to every request: SHA-256(absolute request URL + Config Key). */
+  const S = (path: string) => ({ 'X-SafeExamBrowser-ConfigKeyHash': sha256Hex(`http://${t.host}${path}${SEB_CONFIG_KEY}`) });
   const req = () => ctx.request();
 
   beforeAll(async () => {
@@ -69,7 +71,7 @@ describe('interruptions, recovery and the secure client', () => {
     const start = await req().post(`/api/v1/student/attempts/${student.attemptId}/prechecks`).set(H(student.token)).send({ clientBuild: 'SEB_Win_3.8.0' });
     const runId = start.body.runId;
     const plain = await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'CLIENT_VERSION', clientBuild: 'SEB_Win_3.8.0' });
-    expect(plain.body.checks.find((c: { code: string }) => c.code === 'CLIENT_VERSION')).toMatchObject({ status: 'REMEDIATE', diagnosticCode: 'SEB_CONFIG_KEY_MISMATCH' });
+    expect(plain.body.checks.find((c: { code: string }) => c.code === 'CLIENT_VERSION')).toMatchObject({ status: 'REMEDIATE', diagnosticCode: 'SEB_REQUIRED' });
     // SEB computes SHA-256(absolute request URL + Config Key) and sends it as X-SafeExamBrowser-ConfigKeyHash
     const url = `http://${t.host}/api/v1/student/prechecks/${runId}/items/verify`;
     const seb = await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).set('X-SafeExamBrowser-ConfigKeyHash', sha256Hex(`${url}${SEB_CONFIG_KEY}`)).send({ code: 'CLIENT_VERSION', clientBuild: 'SEB_Win_3.8.0' });
@@ -89,14 +91,30 @@ describe('interruptions, recovery and the secure client', () => {
     const fin = await req().post(`/api/v1/student/prechecks/${runId}/finalize`).set(H(student.token));
     expect(fin.body.status).toBe('READY');
     await req().post(`/api/v1/exams/${examId}/start`).set(H(examCell.token));
-    const g = await req().post(`/api/v1/student/attempts/${student.attemptId}/entry-grants`).set(H(student.token));
-    const a = await req().post(`/api/v1/student/attempts/${student.attemptId}/admit`).set(H(student.token)).send({ grantToken: g.body.grantToken });
+    // Readiness passed in SEB — but the exam itself only opens in SEB: a plain browser is recorded, then refused
+    const entryPath = `/api/v1/student/attempts/${student.attemptId}/entry-grants`;
+    const admitPath = `/api/v1/student/attempts/${student.attemptId}/admit`;
+    const plainGrant = await req().post(entryPath).set(H(student.token));
+    expect(plainGrant.status).toBe(403);
+    expect(plainGrant.body.code).toBe('SECURE_CLIENT_REQUIRED');
+    const g = await req().post(entryPath).set(H(student.token)).set(S(entryPath));
+    expect(g.status).toBe(201);
+    const plainAdmit = await req().post(admitPath).set(H(student.token)).send({ grantToken: g.body.grantToken });
+    expect(plainAdmit.status).toBe(403);
+    const missing = await ctx.admin('proctor_events').where({ attempt_id: student.attemptId, signal_class: 'SECURE_CLIENT_MISSING' }).orderBy('server_received_at');
+    expect(missing.map((m) => m.metadata.route)).toEqual(['entry-grant', 'admit']);
+    expect(missing.every((m) => m.source_id === 'SERVER' && m.metadata.reason === 'NO_SEB_KEY')).toBe(true);
+    // the refused admission did not burn the one-time grant; SEB enters with it
+    const a = await req().post(admitPath).set(H(student.token)).set(S(admitPath)).send({ grantToken: g.body.grantToken });
     expect(a.status).toBe(200);
+    // close the evidence incident so later assertions about this attempt start clean
+    await ctx.admin('proctor_incidents').where({ attempt_id: student.attemptId, signal_class: 'SECURE_CLIENT_MISSING' }).update({ status: 'DISMISSED' });
     student.device = a.body.deviceSessionId;
   });
 
   it('a network drop moves the attempt to RECOVERY_PENDING without penalty; a Wi-Fi switch is logged, not flagged; reconnect restores it', async () => {
-    const hb = await req().post(`/api/v1/student/attempts/${student.attemptId}/heartbeat`).set(H(student.token)).set('x-device-session', student.device).set('X-Forwarded-For', '10.0.0.5');
+    const hbPath = `/api/v1/student/attempts/${student.attemptId}/heartbeat`;
+    const hb = await req().post(hbPath).set(H(student.token)).set(S(hbPath)).set('x-device-session', student.device).set('X-Forwarded-For', '10.0.0.5');
     expect(hb.status).toBe(200);
     // simulate 2 minutes of silence: age the heartbeat key
     await ctx.deps.redis.set(`attempt:heartbeat:${student.attemptId}`, String(Date.now() - 180_000));
@@ -104,13 +122,13 @@ describe('interruptions, recovery and the secure client', () => {
     expect(moved).toBe(1);
     const row = await ctx.admin('exam_attempts').where('id', student.attemptId).first();
     expect(row.status).toBe('RECOVERY_PENDING');
-    const incidents = await ctx.admin('proctor_incidents').where({ attempt_id: student.attemptId });
+    const incidents = await ctx.admin('proctor_incidents').where({ attempt_id: student.attemptId }).whereNot('status', 'DISMISSED');
     expect(incidents.length).toBe(0); // technical: never an incident, never a warning
     // writes are refused while recovery is pending; nothing is lost
     const blocked = await req().put(`/api/v1/student/attempts/${student.attemptId}/answers/Q1`).set(H(student.token)).set('x-device-session', student.device).send({ clientOperationId: randomUUID(), baseRevision: 0, answerFormat: 'hybrid-v1', ops: [{ op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: 'x' }], contentSha256: answerHash([{ id: 'b1', kind: 'paragraph', content: 'x' }]) });
     expect(blocked.status).toBe(409);
     // the student comes back on a different network address (hotspot) with the same device
-    const back = await req().post(`/api/v1/student/attempts/${student.attemptId}/reconnect`).set(H(student.token)).set('x-device-session', student.device);
+    const back = await req().post(`/api/v1/student/attempts/${student.attemptId}/reconnect`).set(H(student.token)).set(S(`/api/v1/student/attempts/${student.attemptId}/reconnect`)).set('x-device-session', student.device);
     expect(back.status).toBe(200);
     expect(back.body.status).toBe('ACTIVE');
     expect(back.body.deviceSessionId).toBe(student.device);
@@ -134,7 +152,7 @@ describe('interruptions, recovery and the secure client', () => {
     expect(resume.body.epoch.no).toBe(1); // a technical hold does not open a new warning epoch
     // first reconnect from the loaner binds it
     const loaner = randomUUID();
-    const rc = await req().post(`/api/v1/student/attempts/${student.attemptId}/reconnect`).set(H(student.token)).set('x-device-session', loaner);
+    const rc = await req().post(`/api/v1/student/attempts/${student.attemptId}/reconnect`).set(H(student.token)).set(S(`/api/v1/student/attempts/${student.attemptId}/reconnect`)).set('x-device-session', loaner);
     expect(rc.status).toBe(200);
     expect(rc.body.deviceSessionId).toBe(loaner);
     expect(rc.body.answers).toEqual([{ questionId: 'Q1', serverRevision: 1, contentSha256: expect.any(String) }]);
