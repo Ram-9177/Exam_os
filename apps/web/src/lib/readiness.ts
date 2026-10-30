@@ -81,6 +81,7 @@ export const CHECK_LABELS: Record<PrecheckCheckCode, string> = {
   CAMERA: 'Camera',
   MICROPHONE: 'Microphone',
   CONSENT: 'Monitoring notice',
+  SYSTEM_SCAN: 'System scan',
 };
 
 export const STATUS_LABELS: Record<CheckUiStatus, string> = {
