@@ -1,6 +1,6 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
-import { ProctorEventIngestSchema, ProctorDecisionSchema, ResumeSchema, TechnicalHoldSchema } from '@examos/contracts';
+import { ProctorEventIngestSchema, ProctorDecisionSchema, ResumeSchema, TechnicalHoldSchema, SERVER_ONLY_SIGNAL_CLASSES } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam, validateQuery, query } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
@@ -36,6 +36,10 @@ export function proctorRoutes(deps: AppDeps, jwt: JwtService): Router {
       const t = requireTenant(req);
       const p = userPrincipal(req);
       const input = body<typeof ProctorEventIngestSchema>(req);
+      // Classes the server observes itself (second device session, address change, missing SEB key) are never accepted
+      // from a client: a forged report would sit in the queue with the authority of a server observation.
+      const forged = input.events.find((e) => SERVER_ONLY_SIGNAL_CLASSES.includes(e.signalClass));
+      if (forged) throw AppError.forbidden('SERVER_ONLY_SIGNAL', `${forged.signalClass} is observed by the server and cannot be reported by a client`);
       const out = await tenantTx(deps, req, async (trx) => {
         const attemptIds = [...new Set(input.events.map((e) => e.attemptId))];
         const owned = await trx('exam_attempts').whereIn('id', attemptIds).where({ tenant_id: t.id, user_id: p.userId }).select('id', 'exam_id', 'status', 'admitted_ip');

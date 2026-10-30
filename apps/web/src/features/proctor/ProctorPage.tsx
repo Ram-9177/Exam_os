@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth';
 import { uuid } from '@/lib/ids';
 import { formatDateTime, formatRelative, formatTime } from '@/lib/time';
 import { useExams, type ExamListItem } from '@/features/examcell/api';
+import { describeSignal, type SignalRow } from './signal-text';
 import { Badge, Button, Checkbox, Dialog, EmptyState, Field, humanize, KeyValue, PageTitle, Select, Skeleton, StatusChip, Table, TextArea, TextInput, toneForAttempt, useToast, type Column, type Tone } from '@/ui';
 
 interface Incident {
@@ -41,10 +42,11 @@ interface Timeline {
   epochs: Array<Record<string, unknown> & { epoch_no: number; confirmed_count: number; closed_at: string | null; reason: string | null }>;
   network: Array<{ ip: string; user_agent: string | null; first_seen_at: string; last_seen_at: string; observations: number; first_source: string; in_allowed_subnet: boolean | null }>;
   deviceScans: Array<{ id: string; phase: string; verdict: string; findings: string[]; ip: string | null; created_at: string }>;
+  signals?: SignalRow[];
 }
 
 const SIGNAL_LABEL: Record<ProctorSignalClass, string> = {
-  FOCUS_LOST: 'Window focus lost',
+  FOCUS_LOST: 'Left the exam window or tab',
   FULLSCREEN_EXIT: 'Left full screen',
   CONCURRENT_SESSION: 'Second device session',
   DISALLOWED_APP_DETECTED: 'Disallowed app detected',
@@ -57,6 +59,9 @@ const SIGNAL_LABEL: Record<ProctorSignalClass, string> = {
   MULTIPLE_TABS: 'Multiple tabs',
   WINDOW_RESIZED: 'Window resized',
   AUTOMATION_DETECTED: 'Automation detected',
+  DISPLAY_CHANGED: 'Display changed',
+  FACE_NOT_VISIBLE: 'Face not visible',
+  SECURE_CLIENT_MISSING: 'Safe Exam Browser missing',
   NETWORK_ADDRESS_CHANGED: 'Network address changed',
   NETWORK_ANOMALY: 'Network anomaly',
   CAMERA_UNAVAILABLE: 'Camera unavailable',
@@ -281,6 +286,7 @@ function IncidentDrawer({ incident, exam, threshold, tz, chief, onClose }: { inc
             ]}
           />
           {technical ? <p className="text-sm text-ink-2">Technical signals (network, camera, recording) can never become a countable warning.</p> : null}
+          <SignalList title="What was reported" rows={(timeline.data?.signals ?? []).filter((s) => s.incident_id === incident.id)} tz={tz} loading={timeline.isLoading} />
 
           <section className="flex flex-col gap-3" aria-labelledby="decide-h">
             <h3 id="decide-h" className="text-h3">
@@ -430,6 +436,7 @@ function TimelineView({ timeline, loading, tz, threshold }: { timeline: Timeline
           <p className="text-ink-2 text-sm">No scans recorded.</p>
         )}
       </section>
+      <SignalList title="Signals" rows={timeline.signals ?? []} tz={tz} loading={false} withClass />
       <section>
         <h3 className="text-h3 mb-2">Events</h3>
         <ol className="divide-y divide-rule border-y border-rule text-sm">
@@ -447,5 +454,31 @@ function TimelineView({ timeline, loading, tz, threshold }: { timeline: Timeline
         </ol>
       </section>
     </div>
+  );
+}
+
+/** The raw signals in plain language, with the server's receipt time (the client's own time is shown only as context). */
+function SignalList({ title, rows, tz, loading, withClass = false }: { title: string; rows: SignalRow[]; tz: string; loading: boolean; withClass?: boolean }) {
+  return (
+    <section aria-label={title}>
+      <h3 className="text-h3 mb-2">{title}</h3>
+      {loading ? (
+        <Skeleton lines={2} />
+      ) : rows.length ? (
+        <ol className="divide-y divide-rule border-y border-rule text-sm">
+          {rows.map((r) => (
+            <li key={r.id} className="py-2 grid grid-cols-[6rem_1fr] gap-3">
+              <span className="text-ink-2 tabular">{formatTime(r.server_received_at, tz)}</span>
+              <span>
+                {withClass ? <span className="font-medium">{SIGNAL_LABEL[r.signal_class] ?? humanize(r.signal_class)}. </span> : null}
+                {describeSignal(r)}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="text-ink-2 text-sm">No signals recorded.</p>
+      )}
+    </section>
   );
 }

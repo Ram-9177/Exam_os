@@ -228,5 +228,14 @@ export async function attemptTimeline(trx: Knex.Transaction, tenantId: string, a
   // Transport and device context for the human reading the timeline: every address seen and every system scan.
   const network = await listNetworkObservations(trx, tenantId, attemptId);
   const deviceScans = await trx('device_scans').where({ tenant_id: tenantId, attempt_id: attemptId }).orderBy('created_at').select('id', 'phase', 'verdict', 'findings', 'ip', 'user_agent', 'scan_sha256', 'created_at');
-  return { attempt, events, warnings, epochs, network, deviceScans };
+  // The raw signals behind every incident, with the client's context (reason, time away, display before/after) next to
+  // the server's own receipt time — a human compares the two; neither is a verdict. Newest 500 are plenty for one sitting.
+  const signals = (
+    await trx('proctor_events')
+      .where({ tenant_id: tenantId, attempt_id: attemptId })
+      .orderBy('server_received_at', 'desc')
+      .limit(500)
+      .select('id', 'incident_id', 'signal_class', 'source_id', 'metadata', 'client_recorded_at', 'server_received_at')
+  ).reverse();
+  return { attempt, events, warnings, epochs, network, deviceScans, signals };
 }

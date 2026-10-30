@@ -203,4 +203,42 @@ describe('network observations, ipPolicy and in-exam device scans', () => {
     expect(tl.body.deviceScans.some((d: { verdict: string; findings: string[] }) => d.verdict === 'BLOCKED' && d.findings.includes('MULTIPLE_DISPLAYS'))).toBe(true);
     expect(JSON.stringify(tl.body)).not.toContain('"scan":'); // raw scans stay in the evidence table; the console gets findings
   });
+
+  it('browser lockdown signals reach the proctor with their context; server-only classes and oversized metadata are refused', async () => {
+    const ev = (signalClass: string, metadata: Record<string, unknown>) => ({ sourceEventId: randomUUID(), attemptId: A.attemptId, signalClass, clientRecordedAt: new Date().toISOString(), clientSequence: 1, metadata });
+    const post = (events: unknown[], token = A.token) => req().post('/api/v1/proctor/events').set(H(token, '10.10.88.8')).send({ events });
+    const episode = randomUUID();
+    const ok = await post([
+      ev('FOCUS_LOST', { phase: 'left', reason: 'tab-hidden', episode }),
+      ev('FOCUS_LOST', { phase: 'returned', reason: 'tab-hidden', awayMs: 42_000, episode }),
+      ev('DISPLAY_CHANGED', { from: { width: 1920, height: 1080 }, to: { width: 1024, height: 768 } }),
+      ev('MULTIPLE_TABS', { tabs: 2 }),
+      ev('CLIPBOARD_ATTEMPT', { kind: 'external-paste' }),
+    ]);
+    expect(ok.status).toBe(202);
+    expect(ok.body.results.every((r: { accepted: boolean }) => r.accepted)).toBe(true);
+    const inc = await incidents();
+    const focus = inc.filter((i) => i.signal_class === 'FOCUS_LOST');
+    expect(focus).toHaveLength(1); // leave + return of one episode are one incident
+    expect(focus[0]).toMatchObject({ status: 'PROCTOR_REVIEW', event_count: 2 });
+    for (const c of ['DISPLAY_CHANGED', 'MULTIPLE_TABS', 'CLIPBOARD_ATTEMPT']) expect(inc.find((i) => i.signal_class === c)?.status).toBe('PROCTOR_REVIEW');
+
+    // a client may never report what only the server observes
+    for (const c of ['CONCURRENT_SESSION', 'NETWORK_ADDRESS_CHANGED', 'SECURE_CLIENT_MISSING']) {
+      const forged = await post([ev(c, {})]);
+      expect(forged.status).toBe(403);
+      expect(forged.body.code).toBe('SERVER_ONLY_SIGNAL');
+    }
+    expect((await incidents()).filter((i) => i.signal_class === 'CONCURRENT_SESSION')).toHaveLength(0);
+    // metadata is bounded context, not a payload carrier; and a student reports only for their own attempt
+    expect((await post([ev('FOCUS_LOST', { blob: 'x'.repeat(3000) })])).status).toBe(400);
+    expect((await post([ev('FOCUS_LOST', {})], B.token)).status).toBe(403);
+
+    // the proctor sees each raw signal with its context and the server's receipt time
+    const tl = await req().get(`/api/v1/proctor/attempts/${A.attemptId}/timeline`).set(H(chief.token));
+    const returned = tl.body.signals.find((s: { metadata: { phase?: string } }) => s.metadata.phase === 'returned');
+    expect(returned).toMatchObject({ signal_class: 'FOCUS_LOST', incident_id: focus[0].id, source_id: expect.stringMatching(/^CLIENT:/), metadata: { awayMs: 42_000, reason: 'tab-hidden' } });
+    expect(typeof returned.server_received_at).toBe('string');
+    expect(await ctx.admin('proctor_warnings').where({ attempt_id: A.attemptId })).toHaveLength(0);
+  });
 });

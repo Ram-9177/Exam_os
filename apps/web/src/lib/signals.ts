@@ -38,11 +38,15 @@ export class SignalReporter {
     };
   }
 
-  /** Returns the event if it was sent, null if suppressed by the rate limit. */
-  report(signalClass: ProctorSignalClass, metadata: Record<string, unknown> = {}): SignalEvent | null {
+  /**
+   * Returns the event if it was sent, null if suppressed by the rate limit. `force` is for the closing half of an
+   * episode the reporter already opened (returned after N seconds away): it carries the duration a human needs and
+   * must not be swallowed by the limit that keeps the opening reports from flooding.
+   */
+  report(signalClass: ProctorSignalClass, metadata: Record<string, unknown> = {}, { force = false }: { force?: boolean } = {}): SignalEvent | null {
     const now = this.opts.now();
     const last = this.lastSent.get(signalClass);
-    if (last !== undefined && now - last < this.opts.minIntervalMs) return null;
+    if (!force && last !== undefined && now - last < this.opts.minIntervalMs) return null;
     this.lastSent.set(signalClass, now);
     const ev: SignalEvent = { sourceEventId: uuid(), attemptId: this.opts.attemptId, signalClass, clientRecordedAt: new Date(now).toISOString(), clientSequence: ++this.seq, metadata };
     void this.opts.send([ev]).catch(() => undefined);

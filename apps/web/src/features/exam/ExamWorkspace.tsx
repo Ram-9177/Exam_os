@@ -12,6 +12,7 @@ import { AnswerSync, type QuestionSyncState, type SyncTransport } from '@/lib/sy
 import { formatDateTime, remainingMs } from '@/lib/time';
 import { Button, cn, Dialog, KeyValue, LinkButton, Stamp, StatusChip, useToast, type Tone } from '@/ui';
 import { AnswerEditor } from './AnswerEditor';
+import { useLockdown } from './lockdown';
 import { useAttemptSession } from './session';
 import { Timer } from './Timer';
 
@@ -123,6 +124,7 @@ export function ExamWorkspace() {
 
   // ---------- periodic system scan (evidence for a human; the student is told what to fix) ----------
   const [scanNotice, setScanNotice] = useState<string | null>(null);
+  const scanNowRef = useRef<() => void>(() => undefined);
   useEffect(() => {
     if (session.kind !== 'active') return;
     let cancelled = false;
@@ -136,62 +138,19 @@ export function ExamWorkspace() {
       }
     };
     void run();
+    scanNowRef.current = () => void run();
     const timer = setInterval(() => void run(), SCAN_INTERVAL_MS);
     return () => {
       cancelled = true;
+      scanNowRef.current = () => undefined;
       clearInterval(timer);
     };
   }, [attemptId, session.kind]);
 
-  // ---------- proctor signals (context, never a verdict) ----------
+  // ---------- lockdown and proctor signals (context for a human, never a verdict) ----------
   const reporter = useMemo(() => new SignalReporter({ attemptId }), [attemptId]);
-  useEffect(() => {
-    if (session.kind !== 'active') return;
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') reporter.report('FOCUS_LOST', { reason: 'hidden' });
-    };
-    const onBlur = () => reporter.report('FOCUS_LOST', { reason: 'blur' });
-    const onFullscreen = () => {
-      if (!document.fullscreenElement) reporter.report('FULLSCREEN_EXIT', {});
-    };
-    // Anti-inspection and DevTools restriction
-    // Blocked, not reported: a right-click or a long-press is not a proctoring signal.
-    const onContextMenu = (e: MouseEvent) => e.preventDefault();
-    const onKeyDown = (e: KeyboardEvent) => {
-      const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-      const mod = isMac ? e.metaKey : e.ctrlKey;
-      const key = e.key.toLowerCase();
-
-      // F12 or DevTools chords: Ctrl+Shift+I/J/C, Cmd+Option+I/J/C
-      const isDevTools =
-        e.key === 'F12' ||
-        (mod && e.shiftKey && (key === 'i' || key === 'j' || key === 'c')) ||
-        (isMac && e.altKey && e.metaKey && (key === 'i' || key === 'j' || key === 'c'));
-
-      // View Source / Print / Save: Ctrl+U, Ctrl+P, Ctrl+S
-      const isSourceOrPrint = mod && (key === 'u' || key === 'p' || key === 's');
-
-      if (isDevTools || isSourceOrPrint) {
-        e.preventDefault();
-        e.stopPropagation();
-        toast({ tone: 'warning', title: 'Action restricted', description: 'Developer tools, printing, and source inspection are restricted.' });
-        if (isDevTools) reporter.report('DEVTOOLS_ATTEMPT', { key: e.key });
-      }
-    };
-
-    document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('blur', onBlur);
-    document.addEventListener('fullscreenchange', onFullscreen);
-    document.addEventListener('contextmenu', onContextMenu);
-    window.addEventListener('keydown', onKeyDown, { capture: true });
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('blur', onBlur);
-      document.removeEventListener('fullscreenchange', onFullscreen);
-      document.removeEventListener('contextmenu', onContextMenu);
-      window.removeEventListener('keydown', onKeyDown, { capture: true });
-    };
-  }, [reporter, session.kind, toast]);
+  const onRestricted = useCallback(() => toast({ tone: 'warning', title: 'Action restricted', description: 'Developer tools, printing, saving and source inspection are blocked during the exam.' }), [toast]);
+  const lockdown = useLockdown({ attemptId, active: session.kind === 'active', reporter, onDisplayChange: () => scanNowRef.current(), onRestricted });
 
   // ---------- navigation state ----------
   const [index, setIndex] = useState(0);
@@ -316,9 +275,14 @@ export function ExamWorkspace() {
   if (session.kind === 'error') return <FullScreenNotice tone="fix" stamp="Paused" title="The exam could not be opened" body={session.detail ?? 'Try again in a moment, or ask the invigilator.'} action={<Button variant="primary" onClick={() => window.location.reload()}>Try again</Button>} />;
   if (!questions.length) return <FullScreenNotice tone="fix" stamp={paper.isError ? 'Unavailable' : 'Opening'} title="Opening your question paper" body={paper.isError ? 'The approved paper could not be loaded. Retry or ask the invigilator. Your saved answers are safe.' : 'Waiting for the server to release your approved question paper.'} action={paper.isError ? <Button onClick={() => void paper.refetch()}>Retry paper</Button> : undefined} />;
 
+  const lockable = editing && !timeOver && session.kind !== 'connecting';
   return (
-    <div className="min-h-dvh flex flex-col bg-paper">
+    <div className="min-h-dvh flex flex-col bg-paper exam-protected">
+      {/* The paper is never printed from the workspace (Ctrl+P is blocked; this covers the browser menu). */}
+      <style>{'@media print { .exam-protected { display: none !important; } }'}</style>
       {session.kind === 'paused' ? <PausedOverlay /> : null}
+      {session.kind !== 'paused' && lockable && lockdown.needsFullscreen ? <FullscreenGate onEnter={() => void lockdown.enterFullscreen()} /> : null}
+      {session.kind !== 'paused' && lockable && !lockdown.needsFullscreen && lockdown.state.away ? <AwayShield /> : null}
       <header className="border-b border-rule bg-sheet">
         <div className="mx-auto max-w-350 px-4 sm:px-6 h-16 flex items-center gap-6">
           <div className="min-w-0 flex-1">
@@ -347,6 +311,16 @@ export function ExamWorkspace() {
           <Button size="sm" onClick={() => void heartbeatRef.current()}>
             Try again
           </Button>
+        </p>
+      ) : null}
+      {lockdown.state.otherTabs > 0 && session.kind === 'active' ? (
+        <p className="bg-stop-soft text-stop text-sm px-6 py-2 text-center" role="alert">
+          This exam is also open in another tab or window of this browser. Close the other one; the invigilator has been informed.
+        </p>
+      ) : null}
+      {lockdown.state.fullscreenWaived && session.kind === 'active' ? (
+        <p className="bg-fix-soft text-fix text-sm px-6 py-2 text-center" role="status">
+          Full screen is not available on this device. Keep writing; the invigilator has been informed.
         </p>
       ) : null}
       {scanNotice ? (
@@ -450,7 +424,8 @@ export function ExamWorkspace() {
           {session.kind === 'connecting' && !sync.isLoaded(current.id) ? <p className="text-ink-2 mb-4">Opening your saved answers…</p> : null}
           <AnswerEditor questionId={current.id} doc={doc} placeholderId={placeholderId} onChange={onChange} disabled={disabled} onExternalPaste={() => {
               // Logged locally, never reported as a signal: pasting is refused, not punished.
-              console.info('[examos] paste from outside the workspace was refused');
+              // Refused, and reported as context for a human: text from outside the exam had to come from somewhere.
+              reporter.report('CLIPBOARD_ATTEMPT', { kind: 'external-paste' });
               toast({ tone: 'info', title: 'Pasting from outside the exam is not allowed', description: 'Text copied inside this workspace can still be pasted.' });
             }} />
         </section>
@@ -510,6 +485,49 @@ export function ExamWorkspace() {
           )}
         </ul>
       </Dialog>
+    </div>
+  );
+}
+
+/** Shown until the workspace is in full screen: the paper stays hidden behind it. */
+function FullscreenGate({ onEnter }: { onEnter: () => void }) {
+  return (
+    <div className="fixed inset-0 z-40 bg-paper grid place-items-center p-6" role="alertdialog" aria-modal="true" aria-labelledby="fs-title" aria-describedby="fs-body">
+      <div className="max-w-md text-center">
+        <Stamp tone="fix" className="text-3xl">
+          Full screen
+        </Stamp>
+        <h2 id="fs-title" className="text-h2 mt-6">
+          The exam runs in full screen
+        </h2>
+        <p id="fs-body" className="mt-3 text-ink-2">
+          The question paper is hidden until the exam is in full screen. Leaving full screen, switching tabs or opening another app is recorded for the invigilator. Your answers and the timer are not affected.
+        </p>
+        <div className="mt-6 flex justify-center">
+          <Button variant="primary" onClick={onEnter} data-autofocus>
+            Enter full screen
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Covers the paper while another window, tab or app is active. */
+function AwayShield() {
+  return (
+    <div className="fixed inset-0 z-40 bg-paper grid place-items-center p-6" role="alertdialog" aria-modal="true" aria-labelledby="away-title" aria-describedby="away-body" onClick={() => window.focus()}>
+      <div className="max-w-md text-center">
+        <Stamp tone="fix" className="text-3xl">
+          Hidden
+        </Stamp>
+        <h2 id="away-title" className="text-h2 mt-6">
+          The exam is hidden while this window is not active
+        </h2>
+        <p id="away-body" className="mt-3 text-ink-2">
+          Click here to continue. Leaving the exam window is recorded with how long you were away; the timer keeps running.
+        </p>
+      </div>
     </div>
   );
 }

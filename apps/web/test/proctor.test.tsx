@@ -19,6 +19,12 @@ const timeline = {
     { id: 's1', phase: 'PRECHECK', verdict: 'CLEAN', findings: [], ip: '10.10.1.20', created_at: '2026-10-30T04:41:00.000Z' },
     { id: 's2', phase: 'IN_EXAM', verdict: 'BLOCKED', findings: ['MULTIPLE_DISPLAYS'], ip: '10.10.9.9', created_at: '2026-10-30T05:03:00.000Z' },
   ],
+  signals: [
+    { id: 'g1', incident_id: 'i1', signal_class: 'NETWORK_ADDRESS_CHANGED', source_id: 'SERVER', metadata: { ip: '10.10.9.9' }, client_recorded_at: null, server_received_at: '2026-10-30T05:02:00.000Z' },
+    { id: 'g2', incident_id: 'i2', signal_class: 'FOCUS_LOST', source_id: 'CLIENT:u9', metadata: { phase: 'left', reason: 'window-blur', episode: 'e1' }, client_recorded_at: '2026-10-30T05:04:00.000Z', server_received_at: '2026-10-30T05:04:00.000Z' },
+    { id: 'g3', incident_id: 'i2', signal_class: 'FOCUS_LOST', source_id: 'CLIENT:u9', metadata: { phase: 'returned', reason: 'window-blur', awayMs: 72_000, episode: 'e1' }, client_recorded_at: '2026-10-30T05:05:12.000Z', server_received_at: '2026-10-30T05:05:12.000Z' },
+    { id: 'g4', incident_id: 'i3', signal_class: 'DISPLAY_CHANGED', source_id: 'CLIENT:u9', metadata: { from: { width: 1920, height: 1080, pixelRatio: 1 }, to: { width: 1024, height: 768, pixelRatio: 1 } }, client_recorded_at: null, server_received_at: '2026-10-30T05:06:00.000Z' },
+  ],
 };
 
 function setup() {
@@ -50,7 +56,14 @@ describe('Proctor console', () => {
     await user.click(screen.getByRole('button', { name: 'Open' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveAccessibleName('Network address changed');
+    // the incident view says what was reported for THIS incident, in words, with who observed it
+    const reported = await within(dialog).findByRole('region', { name: 'What was reported' });
+    expect(within(reported).getByText('Observed by the server: the attempt was reached from a new network address (10.10.9.9).')).toBeInTheDocument();
+    expect(within(reported).queryByText(/returned to the exam/)).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Timeline' }));
+    const signals = await within(dialog).findByRole('region', { name: 'Signals' });
+    expect(within(signals).getByText(/returned to the exam after 1 min 12 s away\. Another window or app took focus\./)).toBeInTheDocument();
+    expect(within(signals).getByText(/the display changed from 1920×1080 to 1024×768/)).toBeInTheDocument();
 
     expect(await within(dialog).findByRole('heading', { name: 'Network addresses' })).toBeInTheDocument();
     const addresses = within(dialog).getByRole('list', { name: 'Network addresses seen' });

@@ -295,7 +295,12 @@ export const ProctorEventIngestSchema = z.object({
         signalClass: z.enum(PROCTOR_SIGNAL_CLASSES),
         clientRecordedAt: z.string().datetime().optional(),
         clientSequence: z.number().int().optional(),
-        metadata: z.record(z.string(), z.unknown()).default({}),
+        // Client context for the human reading the incident (reason, time away, display before/after). Bounded:
+        // it is evidence shown to a person, never a carrier for anything else.
+        metadata: z
+          .record(z.string(), z.unknown())
+          .default({})
+          .refine((m) => JSON.stringify(m).length <= 2048, { message: 'metadata must be at most 2 KB of JSON' }),
       }),
     )
     .min(1)

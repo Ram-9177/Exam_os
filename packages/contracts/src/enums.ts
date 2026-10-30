@@ -387,6 +387,12 @@ export const PROCTOR_SIGNAL_CLASSES = [
   'MULTIPLE_TABS',
   'WINDOW_RESIZED',
   'AUTOMATION_DETECTED',
+  /** The display configuration changed mid-exam: a monitor or projector added/removed, mirroring, resolution or scaling. */
+  'DISPLAY_CHANGED',
+  /** On-device camera presence check: no face in view for a sustained period, or the camera view is covered. */
+  'FACE_NOT_VISIBLE',
+  /** Server-observed: an exam that requires Safe Exam Browser was reached without a valid SEB key hash. */
+  'SECURE_CLIENT_MISSING',
   /** Server-observed: the attempt was reached from a new network address (context for a human). */
   'NETWORK_ADDRESS_CHANGED',
   'NETWORK_ANOMALY',
@@ -419,10 +425,13 @@ export const HUMAN_REVIEW_ONLY_SIGNAL_CLASSES: readonly ProctorSignalClass[] = [
   'MULTIPLE_TABS',
   'WINDOW_RESIZED',
   'AUTOMATION_DETECTED',
+  'DISPLAY_CHANGED',
+  'FACE_NOT_VISIBLE',
+  'SECURE_CLIENT_MISSING',
   'NETWORK_ADDRESS_CHANGED',
 ];
 /** Classes only the server may raise; a client report of these is refused at ingest. */
-export const SERVER_ONLY_SIGNAL_CLASSES: readonly ProctorSignalClass[] = ['CONCURRENT_SESSION', 'NETWORK_ADDRESS_CHANGED'];
+export const SERVER_ONLY_SIGNAL_CLASSES: readonly ProctorSignalClass[] = ['CONCURRENT_SESSION', 'NETWORK_ADDRESS_CHANGED', 'SECURE_CLIENT_MISSING'];
 /** The only class the server may count deterministically: it is server-observed, not client-reported. */
 export const SERVER_VERIFIED_COUNTABLE_CLASSES: readonly ProctorSignalClass[] = ['CONCURRENT_SESSION'];
 
