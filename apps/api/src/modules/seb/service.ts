@@ -135,11 +135,18 @@ export async function updateExamClientPolicy(
     ...(input.requireManagedEndpoint !== undefined ? { requireManagedEndpoint: input.requireManagedEndpoint } : {}),
     ...(input.allowedSubnets !== undefined ? { allowedSubnets: input.allowedSubnets } : {}),
     ...(input.ipPolicy !== undefined ? { ipPolicy: input.ipPolicy } : {}),
+    ...(input.cameraPresence !== undefined ? { proctoring: { ...((existingPolicy['proctoring'] ?? {}) as Record<string, unknown>), cameraPresence: input.cameraPresence } } : {}),
   };
+  const prevCamera = ((existingPolicy['proctoring'] ?? {}) as Record<string, unknown>)['cameraPresence'] === true;
+  if (input.cameraPresence !== undefined && input.cameraPresence !== prevCamera && SEB_FROZEN_STATUSES.includes(exam.status)) {
+    throw AppError.conflict('POLICY_FROZEN', `Camera presence cannot change while the exam is ${exam.status}`);
+  }
+  // What students consent to changed: a new policy version, so readiness (and its consent) is taken again.
+  const newVersion = input.cameraPresence !== undefined && input.cameraPresence !== prevCamera ? `${exam.policy_version.split('+')[0]}+cam${input.cameraPresence ? 1 : 0}-${Date.now().toString(36)}` : null;
 
   await trx('exams')
     .where({ tenant_id: tenantId, id: examId })
-    .update({ policy: updatedPolicy, updated_at: trx.fn.now() });
+    .update({ policy: updatedPolicy, ...(newVersion ? { policy_version: newVersion } : {}), updated_at: trx.fn.now() });
 
   await audit(trx, {
     tenantId,
@@ -155,6 +162,8 @@ export async function updateExamClientPolicy(
       ipPolicy: input.ipPolicy,
       sebConfigKeySet: input.sebConfigKey !== undefined,
       sebBrowserExamKeysCount: input.sebBrowserExamKeys?.length,
+      cameraPresence: input.cameraPresence,
+      policyVersion: newVersion ?? undefined,
     },
   });
 

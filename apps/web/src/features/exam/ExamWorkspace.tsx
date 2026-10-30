@@ -13,6 +13,7 @@ import { formatDateTime, remainingMs } from '@/lib/time';
 import { Button, cn, Dialog, KeyValue, LinkButton, Stamp, StatusChip, useToast, type Tone } from '@/ui';
 import { AnswerEditor } from './AnswerEditor';
 import { useLockdown } from './lockdown';
+import { SelfView, useCameraPresence } from './presence';
 import { useAttemptSession } from './session';
 import { Timer } from './Timer';
 
@@ -87,7 +88,7 @@ export function ExamWorkspace() {
     id: q.questionId, label: `Question ${q.number}`, prompt: q.prompt,
     maxMarks: q.maxMarks, kind: q.kind, options: q.options, sectionId: q.sectionCode,
   })), [paper.data]);
-  const policy = useQuery({ queryKey: ['student', 'policy', attemptId], queryFn: () => api.get<{ examTitle: string; durationMinutes: number }>(`/student/attempts/${attemptId}/policy`, { quiet: true }), enabled: !!attemptId, staleTime: Infinity });
+  const policy = useQuery({ queryKey: ['student', 'policy', attemptId], queryFn: () => api.get<{ examTitle: string; durationMinutes: number; cameraPresence?: boolean }>(`/student/attempts/${attemptId}/policy`, { quiet: true }), enabled: !!attemptId, staleTime: Infinity });
 
   // ---------- answer sync ----------
   const transport = useMemo<SyncTransport>(
@@ -151,6 +152,7 @@ export function ExamWorkspace() {
   const reporter = useMemo(() => new SignalReporter({ attemptId }), [attemptId]);
   const onRestricted = useCallback(() => toast({ tone: 'warning', title: 'Action restricted', description: 'Developer tools, printing, saving and source inspection are blocked during the exam.' }), [toast]);
   const lockdown = useLockdown({ attemptId, active: session.kind === 'active', reporter, onDisplayChange: () => scanNowRef.current(), onRestricted });
+  const presence = useCameraPresence({ enabled: policy.data?.cameraPresence === true, active: session.kind === 'active', reporter });
 
   // ---------- navigation state ----------
   const [index, setIndex] = useState(0);
@@ -281,6 +283,7 @@ export function ExamWorkspace() {
       {/* The paper is never printed from the workspace (Ctrl+P is blocked; this covers the browser menu). */}
       <style>{'@media print { .exam-protected { display: none !important; } }'}</style>
       {session.kind === 'paused' ? <PausedOverlay /> : null}
+      <SelfView stream={presence.stream} status={presence.status} />
       {session.kind !== 'paused' && lockable && lockdown.needsFullscreen ? <FullscreenGate onEnter={() => void lockdown.enterFullscreen()} /> : null}
       {session.kind !== 'paused' && lockable && !lockdown.needsFullscreen && lockdown.state.away ? <AwayShield /> : null}
       <header className="border-b border-rule bg-sheet">

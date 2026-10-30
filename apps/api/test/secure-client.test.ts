@@ -466,6 +466,34 @@ describe('Phase 4 — Secure Client, SEB Configuration, and Cheating Mitigation'
     expect(auditRow.actor_id).toBe(examCell.userId);
     expect(auditRow.metadata.isPrePublication).toBe(true);
   });
+
+  it('camera presence check: opt-in per exam, adds camera consent, starts a new policy version, frozen once live', async () => {
+    const now = Date.now();
+    const create = await req().post('/api/v1/exams').set(H(examCell.token)).send({ code: 'CS403-CAM', title: 'Camera presence', courseCode: 'CS401', examType: 'MID_1', securityProfile: 'BASIC_BROWSER', durationMinutes: 60, windowStartAt: new Date(now - 60_000).toISOString(), windowEndAt: new Date(now + 3600_000).toISOString() });
+    const examId = create.body.examId as string;
+    const attemptId = await allocateStudent(examId, student2.userId);
+    await ctx.admin('exams').where({ id: examId }).update({ status: 'PRECHECK' });
+    const policyOf = () => req().get(`/api/v1/student/attempts/${attemptId}/policy`).set(H(student2.token));
+    const before = await policyOf();
+    expect(before.body).toMatchObject({ cameraPresence: false, consentPurposes: [] });
+
+    const on = await req().put(`/api/v1/exams/${examId}/client-policy`).set(H(examCell.token)).send({ cameraPresence: true });
+    expect(on.status).toBe(200);
+    const after = await policyOf();
+    expect(after.body.cameraPresence).toBe(true);
+    expect(after.body.consentPurposes).toEqual(['CAMERA']);
+    expect(after.body.checks.map((c: { code: string }) => c.code)).toEqual(expect.arrayContaining(['CAMERA', 'CONSENT']));
+    // what students consent to changed, so earlier readiness runs no longer admit anyone
+    expect(after.body.policyVersion).not.toBe(before.body.policyVersion);
+    // repeating the same value is not a new version
+    await req().put(`/api/v1/exams/${examId}/client-policy`).set(H(examCell.token)).send({ cameraPresence: true });
+    expect((await policyOf()).body.policyVersion).toBe(after.body.policyVersion);
+
+    await ctx.admin('exams').where({ id: examId }).update({ status: 'LIVE' });
+    const frozen = await req().put(`/api/v1/exams/${examId}/client-policy`).set(H(examCell.token)).send({ cameraPresence: false });
+    expect(frozen.status).toBe(409);
+    expect(frozen.body.code).toBe('POLICY_FROZEN');
+  });
 });
 
 /** Minimal XML property-list reader (dict, array, string, integer, true, false) — independent of the generator. */

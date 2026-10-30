@@ -235,6 +235,44 @@ function ClientSecurityPolicyCard({ exam, onUpdated }: { exam: ExamRow; onUpdate
   );
 }
 
+/** Turns the on-device camera presence check on or off for this exam (before it goes live). */
+function CameraPresenceCard({ exam, onUpdated }: { exam: ExamRow; onUpdated: () => void }) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const on = ((exam.policy ?? {}) as { proctoring?: { cameraPresence?: boolean } }).proctoring?.cameraPresence === true;
+  const frozen = SEB_FROZEN.includes(exam.status);
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      await updateClientPolicy(exam.id, { cameraPresence: !on });
+      toast({ tone: 'success', title: on ? 'Camera presence check turned off' : 'Camera presence check turned on', description: 'Students take the readiness check again under the new policy.' });
+      onUpdated();
+    } catch (err) {
+      toast({ tone: 'warning', title: 'Not changed', description: isApiError(err) ? err.problem.title : 'Error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="sheet p-6 space-y-3" aria-labelledby="cam-h">
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="cam-h" className="text-h3">Camera presence check</h2>
+        <Badge tone={on ? 'ready' : 'note'}>{on ? 'On' : 'Off'}</Badge>
+      </div>
+      <p className="text-sm text-ink-2">
+        A face detector runs on each student’s own device during the exam and flags, for the proctors, a face missing for 8 seconds, a covered camera, or a second face for 3 seconds. No image or video leaves the device. Students see a small self-view and consent at the readiness check. A signal never counts without a proctor’s decision. Confirm your data-protection assessment covers this before turning it on.
+      </p>
+      {frozen ? (
+        <p className="text-sm text-ink-2">Fixed while the exam is {humanize(exam.status)}.</p>
+      ) : (
+        <Button loading={busy} onClick={() => void toggle()}>
+          {on ? 'Turn off' : 'Turn on'}
+        </Button>
+      )}
+    </section>
+  );
+}
+
 function Overview({ exam, counts, tz, onUpdated }: { exam: ExamRow; counts: Record<string, number>; tz: string; onUpdated: () => void }) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return (
@@ -284,6 +322,7 @@ function Overview({ exam, counts, tz, onUpdated }: { exam: ExamRow; counts: Reco
       </div>
 
       <ClientSecurityPolicyCard exam={exam} onUpdated={onUpdated} />
+      <CameraPresenceCard exam={exam} onUpdated={onUpdated} />
     </div>
   );
 }

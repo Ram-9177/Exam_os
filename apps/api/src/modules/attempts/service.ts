@@ -100,6 +100,8 @@ export async function attemptPolicy(trx: Knex.Transaction, tenantId: string, use
     consentPurposes,
     checks: all.map((code) => ({ code, mandatory: mandatory.includes(code), serverMeasured: (['IDENTITY_SESSION', 'ELIGIBILITY'] as string[]).includes(code), optional: code === 'CANVAS_INPUT', securityRelevant: SECURITY_REQUIRED_CHECKS.includes(code) })),
     allowedClientBuilds: Array.isArray(policy['allowedClientBuilds']) ? (policy['allowedClientBuilds'] as string[]) : [],
+    // The workspace runs the face-presence check on the student's device; no image leaves it, only signals.
+    cameraPresence: cameraPresenceOn(policy),
     monitoringNotice: typeof policy['monitoringNotice'] === 'string' ? (policy['monitoringNotice'] as string) : 'This examination records permitted device signals and, where your exam profile requires it, camera and microphone, only for the purposes described in the examination policy. Technical problems are never treated as misconduct.',
   };
 }
@@ -144,13 +146,19 @@ export async function startPrecheck(deps: AppDeps, trx: Knex.Transaction, tenant
   return { runId, checks: await listItems(trx, runId) };
 }
 
+/** On-device camera presence check (face in view, one person, camera not covered): opt-in per exam. */
+export function cameraPresenceOn(policy: Record<string, unknown>): boolean {
+  const p = (policy['proctoring'] ?? {}) as Record<string, unknown>;
+  return p['cameraPresence'] === true;
+}
+
 function requiredConsents(profile: SecurityProfile, policy: Record<string, unknown>): string[] {
   const out: string[] = [];
   const capture = (policy['capture'] ?? {}) as Record<string, unknown>;
   const highTier = profile === 'SECURE_BYOD' || profile === 'MANAGED_ENDPOINT';
   const needsCamera = typeof capture['webcam_required_for_this_tier'] === 'boolean' ? (capture['webcam_required_for_this_tier'] as boolean) : highTier;
   const needsMic = typeof capture['mic_required_for_this_tier'] === 'boolean' ? (capture['mic_required_for_this_tier'] as boolean) : highTier;
-  if (needsCamera) out.push('CAMERA');
+  if (needsCamera || cameraPresenceOn(policy)) out.push('CAMERA');
   if (needsMic) out.push('MICROPHONE');
   return out;
 }

@@ -497,6 +497,12 @@ export const ExamClientPolicyUpdateSchema = z.object({
   allowedClientBuilds: z.array(z.string().min(1).max(64)).optional(),
   requireManagedEndpoint: z.boolean().optional(),
   allowedSubnets: z.array(z.string().min(1).max(64)).optional(),
+  /**
+   * On-device camera presence check during the exam: a face detector on the student's own device reports "no face in
+   * view", "camera covered" and "more than one face" as signals for a human. No image or video leaves the device.
+   * Turning it on adds the CAMERA consent and starts a new policy version (earlier readiness runs must be repeated).
+   */
+  cameraPresence: z.boolean().optional(),
   /** What an in-exam network address change does: LOG (default), REVIEW (signal for a human), LOCK (writes held to the admitted address). */
   ipPolicy: z.enum(IP_POLICIES).optional(),
 });
