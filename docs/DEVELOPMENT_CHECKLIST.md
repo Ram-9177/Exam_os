@@ -21,6 +21,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Permissions re-read from role_grants per request; scoped ABAC (exam/department) | Tested | auth.test.ts, exam-flow (student vs staff routes) |
 | Single-use activation links; no passwords in mail | Tested | auth.test.ts |
 | Login/refresh/activation sessions record ip and user agent (context, never a verdict) | Tested | network-and-scans.test.ts |
+| Refresh rotation honours one retry inside a 30 s window after a lost response (one child revoked, family revoked on any further reuse); the client ends the session only on 401/403 from the refresh endpoint | Tested | scale-invariants.test.ts, auth.test.ts, apps/web/test/api-refresh.test.ts |
 | 3–4 named staff logins per tenant (service check + database trigger + platform-set limit), duty bundles grant every staff role, students unlimited and never staff roles, no self role/status change | Tested | platform-and-staff.test.ts |
 | OIDC (Microsoft Entra / Google Workspace): discovery, PKCE, nonce, JWKS verification, no JIT provisioning, domain allowlist | Tested | auth.test.ts (fake IdP) |
 | MFA for high-impact roles | Not Started | — |
@@ -91,6 +92,8 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Atomic seal: manifest, receipt, candidate packet, idempotent submit, late writes refused | Tested | exam-flow |
 | Server deadline authority at close (expire + seal) | Tested | exam-flow |
 | Canvas vector blocks stored and server-side PDF render pipeline | Tested | documents.test.ts, web renders |
+| Server-side validation of every stored answer block by kind (paragraph ≤ 50k chars, drawing per CanvasContentSchema, choice), document ≤ 200 blocks / 4 MB; refusals are 422 the client does not blindly retry | Tested | hardening.test.ts, apps/web/test/sync-backoff.test.ts |
+| Per-attempt deadline authority: writes refused from the deadline, the attempt sealed by the worker ≈30 s later, receipt returned through the heartbeat; exam close sets all deadlines in one statement and seals one attempt per transaction (inline budget + worker) | Tested | hardening.test.ts, scale-invariants.test.ts, exam-flow |
 | Whiteboard: pen, highlighter, eraser, line, arrow, rectangle, ellipse, text; colours, widths, fill, text sizes, paper (grid/ruled/dots), undo/redo, clear, grow; one scene builder (`@examos/contracts` canvas-render) for workspace, booklet, evaluator and server PDF; erasers only remove earlier items; contract limits enforced client- and server-side | Tested | apps/web/test/drawing.test.tsx, booklet.test.tsx; documents.test.ts (PDF) |
 | Offline draft recovery UI: drafts kept in sessionStorage are restored on open, the student is told which questions and that they are being sent, with Retry now / Retry saving now actions | Tested | apps/web/test/exam-workspace.test.tsx (restore after reload) |
 
@@ -102,6 +105,9 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Fifth-warning atomic suspension under concurrent saves; alert mail | Tested | exam-flow (race) |
 | Resume with new epoch, history retained, deadline extension, device re-bind | Tested | exam-flow, recovery |
 | Technical hold (no epoch change) | Tested | recovery.test.ts |
+| Hash chains (attempt timeline, tenant audit) append under per-chain advisory locks with unique tripwire indexes; incident grouping serialised per attempt; one lock order for signals, saves and decisions (no deadlocks under a 20-request burst on one attempt) | Tested | scale-invariants.test.ts (burst + 20 concurrent logins) |
+| Heartbeat sweep: one MGET per tenant, a missing key opens a fresh grace window (Redis flush never bounces writing students); admission/reconnect seed the window | Tested | scale-invariants.test.ts |
+| Every hold placed before marks releases into the marking queue; the forensics lane routes a failing packet to technical review instead of stalling | Tested (release) / In Progress (poison path has no automated test) | hardening.test.ts |
 | IP tracking: attempt_network_observations on every readiness/admission/in-exam request, admitted_ip binding, ipPolicy LOG/REVIEW/LOCK (record-then-refuse under LOCK; proctor resume + rebind releases), lab-subnet refusal for managed endpoints; addresses in the proctor timeline and the evidence PDF | Tested | network-and-scans.test.ts |
 | In-exam device scans every 60 s (append-only device_scans); blocking findings → mapped review signals grouped per incident, never a warning or a pause; student told what to fix; scans in the proctor timeline and the evidence PDF | Tested | network-and-scans.test.ts |
 | Rolling media buffer, 5-second clips, 5 snapshots, gap detection, evidence viewer | Not Started | Gate C/D |
@@ -136,6 +142,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Student Profile & ID: identity card, photo upload with consent modal, verification QR code, SVG performance progression chart | Tested | apps/web/test/profile.test.tsx |
 | Academic Analytics: department dashboard for HOD/Controller, KPI metrics, semester rollups, course distributions, strict privacy assurance | Tested | apps/web/test/analytics.test.tsx |
 | 15-minute readiness screen (one step at a time, no WPM, optional drawing, automatic system scan with rescan, consent, camera preview, verdict stamp) | Tested | apps/web/test/readiness-screen.test.tsx, readiness.test.ts; smoke-tested end to end |
+| Exam workspace resilience: saves resume on every ACTIVE heartbeat, 15 s request timeouts, exponential back-off with jitter, no blind retry of refused content, capped rebases, last-call flush 10 s before the deadline, editor unlocks on a deadline extension, Submit stays available after time is over, receipt via heartbeat, heartbeats single-flight / on wake-up / stopped once sealed, per-question draft persistence | Tested | apps/web/test/sync-backoff.test.ts, api-refresh.test.ts, drafts-persistence.test.ts, exam-workspace.test.tsx |
 | Exam workspace: server-derived timer, question map, paragraph + whiteboard editor, autosave with baseRevision/clientOperationId/contentSha256, 409 rebase, draft queue, heartbeat, periodic system scan with plain-language notice, paused overlay, device-mismatch screen, signal reporting, submit with receipt | Tested | apps/web/test/exam-workspace.test.tsx, sync.test.ts, answers.test.ts, canonical.test.ts; smoke-tested (typed + drew → 200, hash matched server) |
 | Digital answer booklet with print layout (A4, page per question) | Tested | apps/web/test/booklet.test.tsx; printed to PDF in smoke test |
 | Exam Section: hierarchical exam list, new exam, conduct controls with consequence dialogs, allocations, hall tickets, Readiness Board (10 s), exceptions, Candidates with checklist drawer (approve/hold/release/authorize), export lock message | Tested | apps/web/test/readiness-board.test.tsx; smoke-tested through the full post-exam chain |
@@ -148,7 +155,9 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 ## Operations
 | Feature | Status | Evidence |
 | --- | --- | --- |
-| Worker loops (outbox, webhooks, two mail lanes, forensics, heartbeat sweep) | In Progress | functions tested per pass; long-running loop not load-tested |
+| Worker loops (outbox, webhooks, two mail lanes, forensics, heartbeat sweep, deadline sweep, seal-closed-exams) | In Progress | functions tested per pass (scale-invariants, hardening); long-running loop not load-tested |
+| Database guard-rails: DB_POOL_MAX honoured, pool acquire timeout, role lock/statement/idle-in-transaction timeouts, busy database → 503 DB_BUSY retryable | Tested (mapping) / In Progress (saturation not reproduced in CI) | migration 0102, errors.ts; load-smoke |
+| Single-box load smoke (`apps/api/scripts/load-smoke.ts`): 300 students × 90 s of the real request mix, latency percentiles, write volume, chain-fork count | Tested (run on 2026-10-30, see docs/reviews) | not a substitute for Gate G |
 | 3,000-session load test, 1,500 preflight burst | Not Started | Gate G |
 | Capacity & budget model (`scripts/capacity-model.mjs`, `docs/capacity-and-budget.md`) | Tested (model runs; figures are estimates, not measurements) | 1,000 × 3.5 h → ~125 req/s, ~0.6 GB/sitting, ≈ $16 burst per exam day |
 | Exam-day scale runbook script (`infrastructure/azure/scale-exam-day.sh`) | Not Started (template only, never run against a subscription) | docs/capacity-and-budget.md §5 |

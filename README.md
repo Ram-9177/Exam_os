@@ -69,7 +69,8 @@ PostgreSQL is the only authority. Every business table carries `tenant_id` and i
 ## Documents
 
 - `docs/DEVELOPMENT_CHECKLIST.md` — status of every feature (Tested only when a test exists).
-- `docs/ADRs/` — tenancy, integration API, mail transport, canonical state machines, no-client-trust.
+- `docs/ADRs/` — tenancy, integration API, mail transport, canonical state machines, no-client-trust, network/device context, concurrency and deadline authority.
+- `docs/reviews/2026-10-30-exam-day-audit.md` — the 2,000 × 4 h readiness audit: what was measured, what was fixed, what is still open and in which order.
 - `docs/power-automate-exam-mail-flow.md` — how to build the exam mailbox flow.
 - `docs/case-matrix.md` — interruption and misconduct scenarios and what the system does.
 - `docs/api/route-map.md` — every route with request/response shapes.
