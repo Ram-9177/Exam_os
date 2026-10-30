@@ -20,6 +20,8 @@ import { recordIntegrationEvent } from '../integration/events.js';
 import { instructionFor } from './instructions.js';
 import { erpIdentity } from '../../lib/identity.js';
 import { isIpInSubnets } from '../seb/service.js';
+import { recordDeviceScan } from './device-scan.js';
+import type { DeviceScan } from '@examos/contracts';
 
 const PRECHECK_READY_MINUTES = 45;
 const CLOCK_TOLERANCE_MS = 120_000;
@@ -77,7 +79,7 @@ export async function attemptPolicy(trx: Knex.Transaction, tenantId: string, use
   const policy = (exam.policy ?? {}) as Record<string, unknown>;
   const mandatory = MANDATORY_CHECKS_BY_PROFILE[profile];
   const consentPurposes = requiredConsents(profile, policy);
-  const all: PrecheckCheckCode[] = ['IDENTITY_SESSION', 'ELIGIBILITY', 'CLIENT_VERSION', 'CLOCK_SYNC', 'NETWORK_SAVE_ROUNDTRIP', 'KEYBOARD_INPUT', 'CANVAS_INPUT', ...(consentPurposes.includes('CAMERA') ? (['CAMERA'] as PrecheckCheckCode[]) : []), ...(consentPurposes.includes('MICROPHONE') ? (['MICROPHONE'] as PrecheckCheckCode[]) : []), ...(consentPurposes.length ? (['CONSENT'] as PrecheckCheckCode[]) : [])];
+  const all: PrecheckCheckCode[] = ['IDENTITY_SESSION', 'ELIGIBILITY', 'CLIENT_VERSION', 'CLOCK_SYNC', 'NETWORK_SAVE_ROUNDTRIP', 'KEYBOARD_INPUT', 'CANVAS_INPUT', 'SYSTEM_SCAN', ...(consentPurposes.includes('CAMERA') ? (['CAMERA'] as PrecheckCheckCode[]) : []), ...(consentPurposes.includes('MICROPHONE') ? (['MICROPHONE'] as PrecheckCheckCode[]) : []), ...(consentPurposes.length ? (['CONSENT'] as PrecheckCheckCode[]) : [])];
   return {
     attemptId,
     attemptStatus: attempt.status,
@@ -171,6 +173,9 @@ export interface VerifyEvidence {
   sebBrowserExamKeyHash?: string;
   requestUrl?: string;
   clientIp?: string;
+  userAgent?: string;
+  /** SYSTEM_SCAN raw scan; findings are derived by the server. */
+  scan?: DeviceScan;
 }
 
 /**
@@ -275,6 +280,15 @@ export async function verifyItem(deps: AppDeps, trx: Knex.Transaction, tenantId:
         await trx('consent_records').insert({ tenant_id: tenantId, user_id: userId, exam_id: exam.id, policy_version: exam.policy_version, purpose });
       }
       await recordItem(trx, tenantId, runId, ev.code, 'PASS', 'SERVER', null, null, { policyVersion: exam.policy_version });
+      break;
+    }
+    case 'SYSTEM_SCAN': {
+      if (!ev.scan) throw AppError.badRequest('EVIDENCE_REQUIRED', 'scan is required');
+      const { scanId, findings, verdict } = await recordDeviceScan(trx, { tenantId, attemptId: run.attempt_id, precheckRunId: runId, phase: 'PRECHECK', scan: ev.scan, ip: ev.clientIp ?? null, userAgent: ev.userAgent ?? null });
+      // A blocking setting must be fixed before admission. A clean or review-only scan is client-declared
+      // context (it can be forged by hiding data), never a security PASS; review findings go to the readiness board.
+      const blocking = verdict === 'BLOCKED';
+      await recordItem(trx, tenantId, runId, ev.code, blocking ? 'REMEDIATE' : 'PASS', 'CLIENT_DECLARED', findings[0] ?? null, blocking ? 'FIX_DEVICE_SETTINGS' : null, { scanId, verdict, findings });
       break;
     }
     case 'IDENTITY_SESSION':

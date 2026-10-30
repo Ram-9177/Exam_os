@@ -111,6 +111,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
           ...ev,
           requestUrl,
           clientIp,
+          userAgent: req.get('user-agent') ?? undefined,
           sebConfigKeyHash: req.header('x-safeexambrowser-configkeyhash') ?? undefined,
           sebBrowserExamKeyHash: req.header('x-safeexambrowser-requesthash') ?? undefined,
         }),

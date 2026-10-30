@@ -25,6 +25,15 @@ function setup() {
     if (method === 'GET' && path === '/auth/me') return { json: me };
     if (method === 'GET' && path === '/tenant') return { json: TENANT };
     if (method === 'GET' && path === `/student/attempts/${ATTEMPT}/policy`) return { json: { examTitle: 'Operating Systems — Mid 1', durationMinutes: 60 } };
+    if (method === 'GET' && path === `/student/attempts/${ATTEMPT}/paper`) {
+      return {
+        json: {
+          paperId: 'p1', title: 'Operating Systems — Mid 1', instructions: 'Answer all questions.', totalMarks: 50, setCode: 'A',
+          sections: [{ code: 'A', title: 'Section A' }],
+          questions: [1, 2, 3, 4, 5].map((n) => ({ questionId: `Q${n}`, sectionCode: 'A', number: n, kind: 'DESCRIPTIVE', prompt: { blocks: [{ type: 'paragraph', text: `Prompt ${n}` }] }, maxMarks: 10, attachments: [] })),
+        },
+      };
+    }
     if (method === 'POST' && path === `/student/attempts/${ATTEMPT}/reconnect`) return { json: { status: 'ACTIVE', deadlineAt, deviceSessionId: 'dev-1', serverNow: serverNow(), answers: [] } };
     if (method === 'POST' && path === `/student/attempts/${ATTEMPT}/heartbeat`) return { json: { status: 'ACTIVE', serverNow: serverNow(), deadlineAt, authorizationGeneration: 1 } };
     const m = /^\/student\/attempts\/[^/]+\/answers\/([^/?]+)$/.exec(path);

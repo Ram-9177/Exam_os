@@ -12,6 +12,7 @@ export function instructionFor(code: string, status: string, remediation: string
     CAMERA: 'Allow camera access and keep your face in the frame. No camera? Ask for a loaner USB webcam.',
     MICROPHONE: 'Allow microphone access. Room noise is expected and is not a problem.',
     CONSENT: 'Read and accept the monitoring notice for this exam.',
+    SYSTEM_SCAN: 'Use one screen only, close screen sharing, remote-desktop and automation tools, keep the exam window maximised, then run the system scan again.',
   };
   const base = map[code] ?? 'Ask the invigilator for help.';
   if (status === 'UNVERIFIABLE') return `${base} (This check cannot be verified on your device; the Examination Section may approve an exception.)`;

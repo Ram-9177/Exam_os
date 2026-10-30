@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { withTenantTx } from '@examos/db';
-import { createTestContext, provisionTenant, createStaff, createApiKey, activationTokenFor, answerHash, type TestContext, type ProvisionedTenant } from './helpers.js';
+import { createTestContext, provisionTenant, createStaff, createApiKey, activationTokenFor, answerHash, cleanScan, type TestContext, type ProvisionedTenant } from './helpers.js';
 import { sweepStaleHeartbeats } from '../src/modules/attempts/service.js';
 import { sha256Hex } from '../src/lib/crypto.js';
 
@@ -81,6 +81,7 @@ describe('interruptions, recovery and the secure client', () => {
     await v({ code: 'CLIENT_VERSION', clientBuild: 'SEB_Win_3.8.0' });
     await v({ code: 'CLOCK_SYNC', clientClockMs: Date.now() });
     await v({ code: 'KEYBOARD_INPUT', keyboardSample: 'Signals and systems, chapter 2: 100 points!' });
+    await v({ code: 'SYSTEM_SCAN', scan: cleanScan() });
     await req().post(`/api/v1/student/prechecks/${runId}/practice-saves`).set(H(student.token)).send({ contentDigest: 'c'.repeat(64) });
     await v({ code: 'NETWORK_SAVE_ROUNDTRIP' });
     const pol = await req().get(`/api/v1/student/attempts/${student.attemptId}/policy`).set(H(student.token));

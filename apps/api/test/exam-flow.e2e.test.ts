@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { createTestContext, provisionTenant, createStaff, adminAsController, createApiKey, activationTokenFor, startFakeServer, runWorkers, answerHash, type TestContext, type ProvisionedTenant } from './helpers.js';
+import { createTestContext, provisionTenant, createStaff, adminAsController, createApiKey, activationTokenFor, startFakeServer, runWorkers, answerHash, cleanScan, type TestContext, type ProvisionedTenant } from './helpers.js';
 import { runForensicsOnce } from '../src/modules/candidates/service.js';
 
 interface Student {
@@ -178,6 +178,15 @@ describe('end-to-end exam flow', () => {
     expect((await verify({ code: 'CLOCK_SYNC', clientClockMs: Date.now() + 5000 })).status).toBe(200);
     const slowTypist = await verify({ code: 'KEYBOARD_INPUT', keyboardSample: 'The quick brown fox, 2026; jumps (over) the lazy dog!' });
     expect(slowTypist.status).toBe(200);
+    // system scan: the client sends raw settings only; the server derives the findings
+    expect((await verify({ code: 'SYSTEM_SCAN' })).status).toBe(400);
+    const dual = await verify({ code: 'SYSTEM_SCAN', scan: cleanScan({ screen: { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040, colorDepth: 24, pixelRatio: 1, isExtended: true, displayCount: 2 }, verdict: 'CLEAN' }) });
+    expect(dual.body.checks.find((c: { code: string }) => c.code === 'SYSTEM_SCAN')).toMatchObject({ status: 'REMEDIATE', diagnosticCode: 'MULTIPLE_DISPLAYS', remediationCode: 'FIX_DEVICE_SETTINGS' });
+    const clean = await verify({ code: 'SYSTEM_SCAN', scan: cleanScan() });
+    expect(clean.body.checks.find((c: { code: string }) => c.code === 'SYSTEM_SCAN')).toMatchObject({ status: 'PASS', source: 'CLIENT_DECLARED' });
+    const scans = await ctx.admin('device_scans').where({ attempt_id: A.attemptId }).orderBy('created_at');
+    expect(scans.map((r) => r.verdict)).toEqual(['BLOCKED', 'CLEAN']);
+    expect(scans[0].ip).toBeTruthy();
     const noNet = await verify({ code: 'NETWORK_SAVE_ROUNDTRIP' });
     expect(noNet.body.checks.find((c: { code: string }) => c.code === 'NETWORK_SAVE_ROUNDTRIP').status).toBe('REMEDIATE');
     const ps = await req().post(`/api/v1/student/prechecks/${runId}/practice-saves`).set(H(A.token)).send({ contentDigest: 'a'.repeat(64) });
@@ -209,6 +218,7 @@ describe('end-to-end exam flow', () => {
     await v({ code: 'CLIENT_VERSION', clientBuild: 'chrome-130' });
     await v({ code: 'CLOCK_SYNC', clientClockMs: Date.now() });
     await v({ code: 'KEYBOARD_INPUT', keyboardSample: 'Sample text with digits 123 and punctuation, done!' });
+    await v({ code: 'SYSTEM_SCAN', scan: cleanScan() });
     await req().post(`/api/v1/student/prechecks/${runId}/practice-saves`).set(H(B.token)).send({ contentDigest: 'b'.repeat(64) });
     await v({ code: 'NETWORK_SAVE_ROUNDTRIP' });
     const exam = await ctx.admin('exams').where('id', examId).first('policy_version');
@@ -238,6 +248,7 @@ describe('end-to-end exam flow', () => {
     await v2({ code: 'CLIENT_VERSION', clientBuild: 'chrome-130' });
     await v2({ code: 'CLOCK_SYNC', clientClockMs: Date.now() });
     await v2({ code: 'KEYBOARD_INPUT', keyboardSample: 'Sample text with digits 123 and punctuation, done!' });
+    await v2({ code: 'SYSTEM_SCAN', scan: cleanScan() });
     await req().post(`/api/v1/student/prechecks/${r2}/practice-saves`).set(H(B.token)).send({ contentDigest: 'b'.repeat(64) });
     await v2({ code: 'NETWORK_SAVE_ROUNDTRIP' });
     await v2({ code: 'CONSENT', consentPolicyVersion: exam.policy_version });

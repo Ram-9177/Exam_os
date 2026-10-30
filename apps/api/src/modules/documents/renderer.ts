@@ -4,8 +4,10 @@ let browserInstance: Browser | null = null;
 
 async function getBrowser(): Promise<Browser> {
   if (!browserInstance || !browserInstance.isConnected()) {
+    // CHROMIUM_EXECUTABLE_PATH pins a system/container Chromium when the bundled build is absent.
+    const executablePath = process.env['CHROMIUM_EXECUTABLE_PATH'] || undefined;
     try {
-      browserInstance = await chromium.launch({ headless: true });
+      browserInstance = await chromium.launch({ headless: true, executablePath, args: executablePath ? ['--no-sandbox'] : [] });
     } catch {
       browserInstance = await chromium.launch({ channel: 'chrome', headless: true });
     }

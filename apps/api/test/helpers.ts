@@ -143,3 +143,23 @@ export function answerHash(blocks: Array<{ id: string; kind: string; content: un
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** A realistic single-screen laptop scan with nothing to report. */
+export function cleanScan(overrides: Record<string, unknown> = {}) {
+  return {
+    takenAt: new Date().toISOString(),
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0',
+    platform: 'Win32',
+    language: 'en-IN',
+    timezone: 'Asia/Kolkata',
+    screen: { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040, colorDepth: 24, pixelRatio: 1, isExtended: false, displayCount: 1 },
+    window: { innerWidth: 1920, innerHeight: 960, outerWidth: 1920, outerHeight: 1040 },
+    hardware: { cores: 8, memoryGb: 8, touchPoints: 0, pointerFine: true },
+    gpu: { vendor: 'Intel', renderer: 'Intel(R) UHD Graphics 620' },
+    browser: { webdriver: false, cookiesEnabled: true, fullscreenSupported: true, pdfViewer: true, pluginsCount: 5, displayCaptureActive: false, devtoolsHeuristic: false },
+    network: { effectiveType: '4g', downlinkMbps: 10, rttMs: 50, online: true },
+    battery: { level: 0.9, charging: true },
+    visibility: 'visible',
+    ...overrides,
+  };
+}

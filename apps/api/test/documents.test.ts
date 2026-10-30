@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID, createHash } from 'node:crypto';
-import { createTestContext, provisionTenant, createStaff, adminAsController, answerHash, type TestContext, type ProvisionedTenant } from './helpers.js';
+import { createTestContext, provisionTenant, createStaff, adminAsController, answerHash, cleanScan, type TestContext, type ProvisionedTenant } from './helpers.js';
 import { closeBrowser } from '../src/modules/documents/renderer.js';
 
 describe('Server-side PDF and QR verification (hall ticket, booklet, evidence, export lock, hash stability)', () => {
@@ -243,6 +243,7 @@ describe('Server-side PDF and QR verification (hall ticket, booklet, evidence, e
     await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'CLIENT_VERSION', clientBuild: 'browser' });
     await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'CLOCK_SYNC', clientClockMs: Date.now() });
     await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'KEYBOARD_INPUT', keyboardSample: 'The quick brown fox, 2026; jumps (over) the lazy dog!' });
+    await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'SYSTEM_SCAN', scan: cleanScan() });
     await req().post(`/api/v1/student/prechecks/${runId}/practice-saves`).set(H(student.token)).send({ contentDigest: 'a'.repeat(64) });
     await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'NETWORK_SAVE_ROUNDTRIP' });
     await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'CONSENT', consentPolicyVersion: 'v1' });
