@@ -204,17 +204,9 @@ export async function getSebConfigFile(
   let xml = typeof policy['sebConfigXml'] === 'string' ? policy['sebConfigXml'] : null;
   let sebConfigKey = typeof policy['sebConfigKey'] === 'string' ? policy['sebConfigKey'] : null;
 
-  if (!xml || !sebConfigKey) {
-    const res = await generateSebConfig(deps, trx, tenantId, examId, host, actorId, {
-      allowQuit: true,
-      kioskMode: true,
-      blockVirtualMachines: true,
-      blockScreenCapture: true,
-      blockClipboard: true,
-    });
-    xml = res.xml;
-    sebConfigKey = res.sebConfigKey;
-  }
+  // A download is a read. Generating the configuration rewrites the exam policy (and switches the CLIENT_VERSION
+  // check to the Config Key path), which only an exams:write holder may do through POST /exams/:id/seb-config.
+  if (!xml || !sebConfigKey) throw AppError.notFound('SEB_CONFIG_NOT_GENERATED', 'The Safe Exam Browser configuration for this exam has not been generated yet; the Examination Section generates it first');
 
   await audit(trx, {
     tenantId,

@@ -17,7 +17,8 @@ const OidcCallbackSchema = z.object({ code: z.string().min(1), state: z.string()
 export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, jwt: JwtService): Router {
   const r = Router();
   const loginLimiter = rateLimit(deps, { pool: 'auth-login', limit: 20, windowSeconds: 300, keyOf: (req) => `${req.ip}:${String((req.body as { email?: string })?.email ?? '')}` });
-  const activateLimiter = rateLimit(deps, { pool: 'auth-activate', limit: 60, windowSeconds: 300, keyOf: (req) => String(req.ip) });
+  // Activation links are single-use random tokens; the limiter only blunts scanning. Whole labs activate behind one NAT address.
+  const activateLimiter = rateLimit(deps, { pool: 'auth-activate', limit: 600, windowSeconds: 300, keyOf: (req) => String(req.ip) });
 
   r.post(
     '/login',

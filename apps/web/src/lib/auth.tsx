@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { RoleCode, ScopeType } from '@examos/contracts';
-import { api, apiEvents, getTokens, setDeviceSession, setTokens, type SessionUser, type TokenPair } from './api';
+import { api, apiEvents, getTokens, setDeviceSession, setTokens, type SessionUser, type TokenPair, isApiError } from './api';
 
 export interface Grant {
   role: RoleCode;
@@ -54,7 +54,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMe(m);
       setStatus('authenticated');
       return m;
-    } catch {
+    } catch (e) {
+      if (isApiError(e, 'NETWORK') && getTokens()) {
+        // The server could not be reached; the stored session is still valid as far as we know. Stay signed in
+        // (pages fall back to the stored user) and try again shortly — a reload during a Wi-Fi blip must not
+        // send a student back to the login screen.
+        setStatus('authenticated');
+        setTimeout(() => void refreshMe(), 5000);
+        return null;
+      }
       setMe(null);
       setStatus('anonymous');
       return null;

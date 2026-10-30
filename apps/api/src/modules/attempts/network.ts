@@ -9,6 +9,9 @@ import { isIpInSubnets } from '../seb/service.js';
 /** Which request kind first showed an address (mirrors the DB check constraint). */
 export type NetworkSource = 'PRECHECK' | 'ADMISSION' | 'HEARTBEAT' | 'SAVE' | 'RECONNECT' | 'SUBMIT' | 'SIGNAL';
 
+/** Same address seen again within this window: nothing to record (keeps 2,000 students' heartbeats and saves from rewriting one row each). */
+const OBSERVATION_TOUCH_MS = 60_000;
+
 /** Requests made while the paper is open; readiness and admission traffic is only logged. */
 const IN_EXAM_SOURCES: readonly NetworkSource[] = ['HEARTBEAT', 'SAVE', 'RECONNECT', 'SUBMIT', 'SIGNAL'];
 
@@ -49,7 +52,8 @@ interface ObserveOutcome {
  */
 async function upsertObservation(trx: Knex.Transaction, tenantId: string, attemptId: string, net: ClientNet, source: NetworkSource, inAllowedSubnet: boolean | null): Promise<ObserveOutcome> {
   if (!net.ip) return { ip: null, changed: false, previousIp: null, inAllowedSubnet };
-  const previous = await trx('attempt_network_observations').where({ tenant_id: tenantId, attempt_id: attemptId }).orderBy('last_seen_at', 'desc').first('ip');
+  const previous = await trx('attempt_network_observations').where({ tenant_id: tenantId, attempt_id: attemptId }).orderBy('last_seen_at', 'desc').first('ip', 'last_seen_at');
+  if (previous && previous.ip === net.ip && Date.now() - new Date(previous.last_seen_at).getTime() < OBSERVATION_TOUCH_MS) return { ip: net.ip, changed: false, previousIp: previous.ip, inAllowedSubnet };
   const rows = await trx('attempt_network_observations')
     .insert({ tenant_id: tenantId, attempt_id: attemptId, ip: net.ip, user_agent: net.userAgent, first_source: source, in_allowed_subnet: inAllowedSubnet })
     .onConflict(['attempt_id', 'ip'])
@@ -91,16 +95,18 @@ export async function observeNetwork(deps: AppDeps, trx: Knex.Transaction, tenan
     // so the evidence survives the rollback of the refused request.
     await withTenantTx(deps.db, tenantId, async (evTrx) => {
       const seen = await upsertObservation(evTrx, tenantId, attempt.id, net, source, inAllowedSubnet);
-      await logAttemptEvent(evTrx, { tenantId, attemptId: attempt.id, eventType: refusal.eventType, actor: 'SYSTEM:network', metadata: { ip: net.ip, admittedIp: attempt.admitted_ip, source, policy: policy.ipPolicy, firstSeen: seen.changed } });
+      // lock order: incidents (signal) before the timeline chain — the same order a device scan takes
       if (seen.changed) await raiseAddressChanged(deps, evTrx, tenantId, attempt.id, seen, source, policy.ipPolicy);
+      await logAttemptEvent(evTrx, { tenantId, attemptId: attempt.id, eventType: refusal.eventType, actor: 'SYSTEM:network', metadata: { ip: net.ip, admittedIp: attempt.admitted_ip, source, policy: policy.ipPolicy, firstSeen: seen.changed } });
     });
     throw AppError.conflict(refusal.code, refusal.message);
   }
 
   const seen = await upsertObservation(trx, tenantId, attempt.id, net, source, inAllowedSubnet);
   if (seen.changed) {
-    await logAttemptEvent(trx, { tenantId, attemptId: attempt.id, eventType: 'network.address_changed', actor: 'SYSTEM:network', metadata: { from: seen.previousIp, to: seen.ip, source, policy: policy.ipPolicy, inAllowedSubnet } });
+    // lock order: incidents (signal) before the timeline chain — the same order a device scan takes (lib/locks.ts)
     if (inExam && policy.ipPolicy !== 'LOG') await raiseAddressChanged(deps, trx, tenantId, attempt.id, seen, source, policy.ipPolicy);
+    await logAttemptEvent(trx, { tenantId, attemptId: attempt.id, eventType: 'network.address_changed', actor: 'SYSTEM:network', metadata: { from: seen.previousIp, to: seen.ip, source, policy: policy.ipPolicy, inAllowedSubnet } });
   }
   return seen;
 }

@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useParams } from 'react-router';
 import type { PaperQuestionInput, PaperSection } from '@examos/contracts';
 import { useQuery } from '@tanstack/react-query';
-import { api, isApiError } from '@/lib/api';
+import { api, isApiError, timeoutSignal } from '@/lib/api';
 import { collectDeviceScan } from '@/lib/device-scan';
 import { useAuth } from '@/lib/auth';
 import type { AnswerDoc } from '@/lib/answers';
 import { uuid } from '@/lib/ids';
 import { SignalReporter } from '@/lib/signals';
 import { AnswerSync, type QuestionSyncState, type SyncTransport } from '@/lib/sync';
-import { formatDateTime } from '@/lib/time';
+import { formatDateTime, remainingMs } from '@/lib/time';
 import { Button, cn, Dialog, KeyValue, LinkButton, Stamp, StatusChip, useToast, type Tone } from '@/ui';
 import { AnswerEditor } from './AnswerEditor';
 import { useAttemptSession } from './session';
@@ -91,8 +91,9 @@ export function ExamWorkspace() {
   // ---------- answer sync ----------
   const transport = useMemo<SyncTransport>(
     () => ({
-      save: (q, body) => api.put(`/student/attempts/${attemptId}/answers/${q}`, body, { quiet: SAVE_QUIET }),
-      load: (q) => api.get(`/student/attempts/${attemptId}/answers/${q}`, { quiet: ['NETWORK'] }),
+      // A dead socket surfaces as NETWORK within 15 s and is retried with the same clientOperationId.
+      save: (q, body) => api.put(`/student/attempts/${attemptId}/answers/${q}`, body, { quiet: SAVE_QUIET, signal: timeoutSignal(15_000) }),
+      load: (q) => api.get(`/student/attempts/${attemptId}/answers/${q}`, { quiet: ['NETWORK'], signal: timeoutSignal(15_000) }),
     }),
     [attemptId],
   );
@@ -119,11 +120,6 @@ export function ExamWorkspace() {
     }
   }, [session.kind, questions, sync]);
 
-  // Pause/resume follows the invigilator's decisions as reported by the heartbeat.
-  useEffect(() => {
-    if (session.kind === 'paused' || session.kind === 'device-mismatch' || session.kind === 'sealed' || session.kind === 'expired') sync.pause(session.kind);
-    else if (session.kind === 'active' && sync.isPaused()) sync.resume();
-  }, [session.kind, sync]);
 
   // ---------- periodic system scan (evidence for a human; the student is told what to fix) ----------
   const [scanNotice, setScanNotice] = useState<string | null>(null);
@@ -159,11 +155,8 @@ export function ExamWorkspace() {
       if (!document.fullscreenElement) reporter.report('FULLSCREEN_EXIT', {});
     };
     // Anti-inspection and DevTools restriction
-    const onContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
-      toast({ tone: 'warning', title: 'Context menu disabled', description: 'Right-click inspection is disabled during the examination.' });
-      reporter.report('VISUAL_ANOMALY', { reason: 'context_menu_attempt' });
-    };
+    // Blocked, not reported: a right-click or a long-press is not a proctoring signal.
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
     const onKeyDown = (e: KeyboardEvent) => {
       const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
       const mod = isMac ? e.metaKey : e.ctrlKey;
@@ -182,7 +175,7 @@ export function ExamWorkspace() {
         e.preventDefault();
         e.stopPropagation();
         toast({ tone: 'warning', title: 'Action restricted', description: 'Developer tools, printing, and source inspection are restricted.' });
-        reporter.report('VISUAL_ANOMALY', { reason: isDevTools ? 'devtools_shortcut_attempt' : 'source_print_shortcut_attempt', key: e.key });
+        if (isDevTools) reporter.report('DEVTOOLS_ATTEMPT', { key: e.key });
       }
     };
 
@@ -232,6 +225,28 @@ export function ExamWorkspace() {
     void sync.flushAll();
     void heartbeatRef.current();
   }, [sync]);
+  // A deadline moved later (proctor extension, corrected clock) re-opens the editor; nothing stays locked on a stale local verdict.
+  useEffect(() => {
+    if (timeOver && remainingMs(session.deadlineAt, session.sync) > 5_000) setTimeOver(false);
+  }, [timeOver, session.deadlineAt, session.sync]);
+  // Last call: push whatever is unsaved ten seconds before the deadline so the final words are acknowledged in time.
+  const lastCallFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!session.deadlineAt || session.kind !== 'active') return;
+    const left = remainingMs(session.deadlineAt, session.sync);
+    if (left <= 0 || lastCallFor.current === session.deadlineAt) return;
+    const t = setTimeout(() => {
+      lastCallFor.current = session.deadlineAt;
+      void sync.flushAll();
+    }, Math.max(0, left - 10_000));
+    return () => clearTimeout(t);
+  }, [session.deadlineAt, session.sync, session.kind, sync]);
+  // Pause/resume follows the server: every heartbeat that reports ACTIVE lifts a pause (a refused save during a
+  // recovery, a reconnect that restored the attempt), not only a change of session kind.
+  useEffect(() => {
+    if (session.kind === 'paused' || session.kind === 'device-mismatch' || session.kind === 'sealed' || session.kind === 'expired' || session.kind === 'voided') sync.pause(session.kind);
+    else if (session.kind === 'active' && sync.isPaused() && !timeOver) sync.resume();
+  }, [session.kind, session.sync, sync, timeOver]);
 
   // ---------- submit ----------
   const [submitOpen, setSubmitOpen] = useState(false);
@@ -244,11 +259,21 @@ export function ExamWorkspace() {
       return null;
     }
   });
+  // The server reports the seal receipt through the heartbeat once an attempt is sealed (submitted or expired).
+  useEffect(() => {
+    if (!session.receipt || receipt) return;
+    try {
+      sessionStorage.setItem(`examos.receipt.${attemptId}`, JSON.stringify(session.receipt));
+    } catch {
+      /* memory copy is enough */
+    }
+    setReceipt(session.receipt);
+  }, [session.receipt, receipt, attemptId]);
   const submit = async () => {
     setSubmitting(true);
     try {
       await Promise.race([sync.flushAll(), new Promise((r) => setTimeout(r, 8000))]);
-      if (sync.unsyncedQuestionIds().length) {
+      if (sync.unsyncedQuestionIds().length && !timeOver) {
         toast({ tone: 'warning', title: 'Answers are still saving', description: 'Submission is paused until every answer reaches the server. Keep this page open and try again.' });
         return;
       }
@@ -283,7 +308,11 @@ export function ExamWorkspace() {
 
   if (receipt || session.kind === 'sealed') return <SealedScreen receipt={receipt} tz={tz} examTitle={examTitle} />;
   if (session.kind === 'device-mismatch') return <FullScreenNotice tone="stop" stamp="Hold" title="This exam is open on another device" body="Ask the invigilator. If you changed devices, the invigilator can re-admit you on this one. Your saved answers are safe." />;
-  if (session.kind === 'expired') return <FullScreenNotice tone="note" stamp="Closed" title="Time is over" body="The server has closed this attempt and sealed the answers it had received. You do not need to do anything else." />;
+  if (session.kind === 'voided') return <FullScreenNotice tone="stop" stamp="Closed" title="This attempt was closed by the Examination Section" body="Contact the Examination Section desk. Your saved answers are kept." />;
+  if (session.kind === 'expired') {
+    const sealed = receipt ?? session.receipt;
+    return <FullScreenNotice tone="note" stamp="Closed" title="Time is over" body={sealed ? `The server sealed the answers it had received before the deadline at ${formatDateTime(sealed.sealedAt, tz)}. Receipt ${sealed.receiptId}. You do not need to do anything else.` : 'The server is sealing the answers it received before the deadline; your receipt appears here within a minute. You do not need to do anything else.'} />;
+  }
   if (session.kind === 'error') return <FullScreenNotice tone="fix" stamp="Paused" title="The exam could not be opened" body={session.detail ?? 'Try again in a moment, or ask the invigilator.'} action={<Button variant="primary" onClick={() => window.location.reload()}>Try again</Button>} />;
   if (!questions.length) return <FullScreenNotice tone="fix" stamp={paper.isError ? 'Unavailable' : 'Opening'} title="Opening your question paper" body={paper.isError ? 'The approved paper could not be loaded. Retry or ask the invigilator. Your saved answers are safe.' : 'Waiting for the server to release your approved question paper.'} action={paper.isError ? <Button onClick={() => void paper.refetch()}>Retry paper</Button> : undefined} />;
 
@@ -310,6 +339,14 @@ export function ExamWorkspace() {
       {session.kind === 'offline' ? (
         <p className="bg-fix-soft text-fix text-sm px-6 py-2 text-center" role="status">
           Connection lost. Keep writing — your answers stay on this device and sync as soon as the connection returns.
+        </p>
+      ) : null}
+      {snap.paused && session.kind === 'active' && !timeOver ? (
+        <p className="bg-fix-soft text-fix text-sm px-6 py-2 text-center flex flex-wrap items-center justify-center gap-x-3 gap-y-1" role="alert">
+          <span>Saving is paused while the server re-admits this session. Your answers stay on this device.</span>
+          <Button size="sm" onClick={() => void heartbeatRef.current()}>
+            Try again
+          </Button>
         </p>
       ) : null}
       {scanNotice ? (
@@ -455,7 +492,7 @@ export function ExamWorkspace() {
             <Button variant="ghost" onClick={() => setSubmitOpen(false)} disabled={submitting}>
               Keep writing
             </Button>
-            <Button variant="primary" onClick={() => void submit()} loading={submitting} disabled={!editing || timeOver} data-autofocus>
+            <Button variant="primary" onClick={() => void submit()} loading={submitting} disabled={!(editing || timeOver) || submitting} data-autofocus>
               Submit exam
             </Button>
           </>
@@ -467,7 +504,7 @@ export function ExamWorkspace() {
           </li>
           {flags.size ? <li>Flagged for review: {[...flags].map((id) => questions.find((q) => q.id === id)?.label ?? id).join(', ')}.</li> : null}
           {unsyncedLabels.length ? (
-            <li className="text-fix">Still syncing: {unsyncedLabels.join(', ')}. Submission waits until all answers are saved to the server.</li>
+            <li className="text-fix">{timeOver ? `Changes made after the deadline to ${unsyncedLabels.join(', ')} could not be saved; everything the server acknowledged before the deadline is sealed.` : `Still syncing: ${unsyncedLabels.join(', ')}. Submission waits until all answers are saved to the server.`}</li>
           ) : (
             <li className="text-ready">Everything is saved to the server.</li>
           )}

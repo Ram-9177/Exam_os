@@ -16,7 +16,7 @@ import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
 import { requireUser, requirePermission, userPrincipal, grantsAllow } from '../../middleware/auth.js';
 import type { JwtService } from '../auth/jwt.js';
-import { createExam, transitionExam, allocateStudents, issueHallTickets, readinessBoard, grantAdmissionException, assertExportAllowed } from './service.js';
+import { createExam, transitionExam, allocateStudents, issueHallTickets, readinessBoard, grantAdmissionException, assertExportAllowed, sealClosedExamAttempts } from './service.js';
 import { listCandidates } from '../candidates/service.js';
 import { getExamPaper, upsertExamPaper, submitPaperForReview, reviewPaper, createPaperSets } from '../papers/service.js';
 import { getOrRenderHallTicketPdf } from '../documents/service.js';
@@ -194,7 +194,11 @@ export function examRoutes(deps: AppDeps, jwt: JwtService): Router {
       asyncHandler(async (req, res) => {
         const t = requireTenant(req);
         const p = userPrincipal(req);
-        res.json(await tenantTx(deps, req, (trx) => transitionExam(trx, t.id, p.userId, uuidParam(req, 'id'), to as ExamStatus, req.ctx.requestId)));
+        const out = await tenantTx(deps, req, (trx) => transitionExam(trx, t.id, p.userId, uuidParam(req, 'id'), to as ExamStatus, req.ctx.requestId));
+        // Closing set every open attempt's deadline; sealing runs one transaction per attempt — inline within a
+        // budget so small exams are sealed when this returns, the rest by the worker within seconds.
+        const sealing = out.to === 'CLOSED' ? await sealClosedExamAttempts(deps, t.id, uuidParam(req, 'id'), { limit: 200, budgetMs: 8000 }) : undefined;
+        res.json(sealing ? { ...out, sealing } : out);
       }),
     );
   }

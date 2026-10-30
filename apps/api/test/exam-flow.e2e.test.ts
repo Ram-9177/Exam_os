@@ -294,7 +294,7 @@ describe('end-to-end exam flow', () => {
     expect(stale.status).toBe(409);
     expect(stale.body.code).toBe('REVISION_CONFLICT');
     // client/server document divergence is detected
-    const blocks2 = [...blocks1, { id: 'b2', kind: 'canvas', content: { strokes: [[0, 0, 10, 10]] } }];
+    const blocks2 = [...blocks1, { id: 'b2', kind: 'canvas', content: { width: 100, height: 100, strokes: [{ tool: 'pen', width: 2, points: [[0, 0], [10, 10]] }] } }];
     const badHash = await req().put(q1).set(H(A.token)).set('x-device-session', deviceA).send({ clientOperationId: randomUUID(), baseRevision: 1, answerFormat: 'hybrid-v1', ops: [{ op: 'upsert-block', blockId: 'b2', kind: 'canvas', content: blocks2[1]!.content }], contentSha256: 'e'.repeat(64) });
     expect(badHash.status).toBe(422);
     const s2 = await req().put(q1).set(H(A.token)).set('x-device-session', deviceA).send({ clientOperationId: randomUUID(), baseRevision: 1, answerFormat: 'hybrid-v1', ops: [{ op: 'upsert-block', blockId: 'b2', kind: 'canvas', content: blocks2[1]!.content }], contentSha256: answerHash(blocks2) });
@@ -478,7 +478,7 @@ describe('end-to-end exam flow', () => {
 
   it('forensic checks run after sealing and route candidates to marking without inventing guilt', async () => {
     const n = await runForensicsOnce(ctx.deps);
-    expect(n).toBe(2);
+    expect(n).toBeGreaterThanOrEqual(2); // the pass is deployment-wide; other tenants' sealed packets ride along
     const pA = await ctx.admin('candidate_review_packets').where('attempt_id', A.attemptId).first();
     expect(pA.status).toBe('ACADEMIC_MARKING_READY');
     expect(pA.integrity_state).toBe('PENDING'); // CONCURRENT_SESSION + technical incident still await a human decision

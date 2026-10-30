@@ -3,6 +3,16 @@ import { Emitter } from './events';
 
 export const API_BASE = '/api/v1';
 
+/** A dead socket must surface as a NETWORK failure (and be retried), never as a request that hangs for the rest of the exam. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+export function timeoutSignal(ms: number): AbortSignal | undefined {
+  try {
+    return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** An RFC 7807 problem returned by the API, as a throwable. */
 export class ApiError extends Error {
   readonly problem: Problem;
@@ -114,28 +124,37 @@ export interface RequestOptions {
   quiet?: true | readonly string[];
 }
 
-let refreshInFlight: Promise<boolean> | null = null;
+/**
+ * One refresh at a time for the whole tab (many requests can 401 together when
+ * the access token expires). Only the server saying "this refresh token is not
+ * valid" (401/403) ends the session; a dropped connection, a proxy error or a
+ * rate limit during a four-hour exam is transient — tokens are kept and the
+ * caller retries, so a Wi-Fi blip at the wrong second never logs a student out.
+ */
+type RefreshOutcome = 'ok' | 'denied' | 'transient';
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
 
-async function refreshOnce(): Promise<boolean> {
+async function refreshOnce(): Promise<RefreshOutcome> {
   if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
+  refreshInFlight = (async (): Promise<RefreshOutcome> => {
     const current = getTokens();
-    if (!current) return false;
+    if (!current) return 'denied';
     try {
       const res = await fetch(`${API_BASE}/auth/refresh`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ refreshToken: current.refreshToken }),
       });
-      if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
         setTokens(null);
         apiEvents.emit('signed-out', { reason: 'refresh-failed' });
-        return false;
+        return 'denied';
       }
+      if (!res.ok) return 'transient';
       setTokens((await res.json()) as TokenPair);
-      return true;
+      return 'ok';
     } catch {
-      return false;
+      return 'transient';
     } finally {
       refreshInFlight = null;
     }
@@ -166,7 +185,7 @@ export async function request<T>(method: string, path: string, opts: RequestOpti
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body), signal: opts.signal });
+    res = await fetch(`${API_BASE}${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body), signal: opts.signal ?? timeoutSignal(DEFAULT_REQUEST_TIMEOUT_MS) });
   } catch (e) {
     const problem: Problem = { type: 'urn:examos:error:NETWORK', title: 'Could not reach the server', status: 0, code: 'NETWORK', requestId: '', retryable: true };
     if (opts.quiet !== true && !(Array.isArray(opts.quiet) && opts.quiet.includes('NETWORK'))) apiEvents.emit('problem', problem);
@@ -182,8 +201,14 @@ export async function request<T>(method: string, path: string, opts: RequestOpti
   const problem = await toProblem(res);
   if (res.status === 401 && auth) {
     if (problem.code === 'TOKEN_INVALID' && !_retried && t) {
-      const ok = await refreshOnce();
-      if (ok) return request<T>(method, path, opts, true);
+      const outcome = await refreshOnce();
+      if (outcome === 'ok') return request<T>(method, path, opts, true);
+      if (outcome === 'transient') {
+        // Session still valid as far as we know; report it like a network failure so drafts are kept and retried.
+        const transient: Problem = { type: 'urn:examos:error:NETWORK', title: 'Could not renew the session; will retry', status: 0, code: 'NETWORK', requestId: problem.requestId, retryable: true };
+        if (opts.quiet !== true && !(Array.isArray(opts.quiet) && opts.quiet.includes('NETWORK'))) apiEvents.emit('problem', transient);
+        throw new ApiError(transient);
+      }
     }
     if (problem.code === 'SESSION_REVOKED' || problem.code === 'TOKEN_INVALID' || problem.code === 'TENANT_MISMATCH') {
       setTokens(null);

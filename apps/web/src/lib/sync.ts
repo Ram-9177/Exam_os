@@ -66,6 +66,9 @@ interface QuestionRecord {
   lastReceiptId: string | null;
   failingSince: number | null;
   lastErrorCode: string | null;
+  /** Consecutive transport failures / rebases, for exponential back-off. */
+  transportFailures: number;
+  rebaseFailures: number;
 }
 
 export interface QuestionSnapshot {
@@ -91,14 +94,20 @@ export interface SyncOptions {
   maxWaitMs?: number;
   retryMs?: number;
   recoveryAfterMs?: number;
+  /** Source of back-off jitter in [0, 1); tests pin it. */
+  jitter?: () => number;
   now?: () => number;
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
   /** Called with codes that stop syncing: ATTEMPT_NOT_ACTIVE, DEVICE_SESSION_MISMATCH, DEADLINE_PASSED. */
   onBlocked?: (code: string) => void;
 }
 
-const BLOCKING_CODES = new Set(['ATTEMPT_NOT_ACTIVE', 'DEVICE_SESSION_MISMATCH', 'DEADLINE_PASSED', 'ALREADY_SUBMITTED', 'ATTEMPT_STATE']);
+const BLOCKING_CODES = new Set(['ATTEMPT_NOT_ACTIVE', 'DEVICE_SESSION_MISMATCH', 'DEADLINE_PASSED', 'ALREADY_SUBMITTED', 'ATTEMPT_STATE', 'NETWORK_ADDRESS_LOCKED', 'NETWORK_NOT_ALLOWED']);
 const REBASE_CODES = new Set(['REVISION_CONFLICT', 'CONTENT_HASH_MISMATCH']);
+/** The server refused the content itself; resending it verbatim cannot help. The draft is kept and shown as needing attention until the student edits it. */
+const ATTENTION_CODES = new Set(['PAYLOAD_TOO_LARGE', 'ANSWER_TOO_LARGE', 'ANSWER_INVALID', 'VALIDATION', 'INVALID_QUESTION_ID']);
+const MAX_REBASE_RETRIES = 3;
+const MAX_RETRY_MS = 60_000;
 const MAX_PERSIST_BYTES = 1_500_000;
 
 export class AnswerSync {
@@ -175,7 +184,7 @@ export class AnswerSync {
   private record(questionId: string): QuestionRecord {
     let r = this.records.get(questionId);
     if (!r) {
-      r = { questionId, loaded: false, serverRevision: 0, serverDoc: EMPTY_DOC, localDoc: EMPTY_DOC, dirty: false, dirtySince: null, inflight: null, retry: null, lastSavedAt: null, lastReceiptId: null, failingSince: null, lastErrorCode: null };
+      r = { questionId, loaded: false, serverRevision: 0, serverDoc: EMPTY_DOC, localDoc: EMPTY_DOC, dirty: false, dirtySince: null, inflight: null, retry: null, lastSavedAt: null, lastReceiptId: null, failingSince: null, lastErrorCode: null, transportFailures: 0, rebaseFailures: 0 };
       this.records.set(questionId, r);
     }
     return r;
@@ -228,7 +237,12 @@ export class AnswerSync {
       r.dirty = true;
       r.dirtySince = this.opts.now();
     }
-    this.persist();
+    if (ATTENTION_CODES.has(r.lastErrorCode ?? '')) {
+      // the student changed the refused content: try again from scratch
+      r.lastErrorCode = null;
+      r.failingSince = null;
+    }
+    this.persist(questionId);
     this.changed();
     this.scheduleFlush(questionId);
   }
@@ -312,6 +326,8 @@ export class AnswerSync {
       r.lastReceiptId = res.receiptId;
       r.failingSince = null;
       r.lastErrorCode = null;
+      r.transportFailures = 0;
+      r.rebaseFailures = 0;
       if (!r.dirty && !docsEqual(r.localDoc, r.serverDoc)) {
         // edits landed while the save was in flight
         r.dirty = true;
@@ -321,6 +337,7 @@ export class AnswerSync {
       const code = e instanceof ApiError ? e.code : 'NETWORK';
       r.lastErrorCode = code;
       if (REBASE_CODES.has(code)) {
+        r.rebaseFailures++;
         try {
           const fresh = await this.opts.transport.load(questionId);
           r.serverRevision = fresh.serverRevision;
@@ -332,24 +349,41 @@ export class AnswerSync {
         // The local draft is still the intended document: rebase by rebuilding ops against the fresh base.
         r.dirty = true;
         r.dirtySince ??= this.opts.now();
+        // A conflict that never resolves (two tabs editing) is shown as needing attention and slows down.
+        if (r.rebaseFailures > MAX_REBASE_RETRIES) r.failingSince ??= this.opts.now() - this.opts.recoveryAfterMs;
       } else if (BLOCKING_CODES.has(code)) {
         r.retry = req;
         this.pause(code);
         this.opts.onBlocked?.(code);
+      } else if (ATTENTION_CODES.has(code)) {
+        r.dirty = true;
+        r.dirtySince ??= this.opts.now();
+        r.failingSince ??= this.opts.now() - this.opts.recoveryAfterMs;
       } else {
-        // transport failure: retry the identical request later (idempotent by clientOperationId)
+        // transport failure: retry the identical request later (idempotent by clientOperationId), backing off
         r.retry = req;
+        r.transportFailures++;
         r.failingSince ??= this.opts.now();
       }
     } finally {
       r.inflight = null;
-      this.persist();
+      this.persist(r.questionId);
       this.changed();
     }
     if (!this.paused && !this.disposed) {
-      if (r.retry) this.scheduleFlush(questionId, this.opts.retryMs);
-      else if (r.dirty) this.scheduleFlush(questionId, REBASE_CODES.has(r.lastErrorCode ?? '') ? 0 : this.opts.debounceMs);
+      const code = r.lastErrorCode ?? '';
+      if (r.retry) this.scheduleFlush(questionId, this.backoff(r.transportFailures));
+      else if (r.dirty && ATTENTION_CODES.has(code)) return; // waits for the student's next edit
+      else if (r.dirty && REBASE_CODES.has(code)) this.scheduleFlush(questionId, r.rebaseFailures > MAX_REBASE_RETRIES ? this.backoff(r.rebaseFailures - MAX_REBASE_RETRIES) : 0);
+      else if (r.dirty) this.scheduleFlush(questionId, this.opts.debounceMs);
     }
+  }
+
+  /** retryMs, then doubling with jitter up to a minute: 2,000 clients never retry in lock-step after an outage. */
+  private backoff(attempt: number): number {
+    if (attempt <= 1) return this.opts.retryMs;
+    const base = Math.min(MAX_RETRY_MS, this.opts.retryMs * 2 ** Math.min(attempt - 1, 4));
+    return Math.round(base * (0.8 + (this.opts.jitter ?? Math.random)() * 0.4));
   }
 
   async flushAll(): Promise<void> {
@@ -382,35 +416,57 @@ export class AnswerSync {
   }
 
   // ---------- local persistence ----------
-  private persist(): void {
+  // One storage entry per question (`<key>.<questionId>`): a drawing that outgrows the per-entry cap only loses its
+  // own persistence, never the other answers'. The single-blob `<key>` format of earlier builds is still restored.
+  private persist(questionId: string): void {
     const s = this.opts.storage === undefined ? safeSessionStorage() : this.opts.storage;
     if (!s) return;
-    const payload: Record<string, { localDoc: AnswerDoc; serverRevision: number; serverDoc: AnswerDoc; dirty: boolean }> = {};
-    for (const r of this.records.values()) payload[r.questionId] = { localDoc: wireDoc(r.localDoc), serverRevision: r.serverRevision, serverDoc: wireDoc(r.serverDoc), dirty: r.dirty || !!r.retry || !!r.inflight };
+    const r = this.records.get(questionId);
+    if (!r) return;
+    const key = `${this.storageKey}.${questionId}`;
     try {
-      const json = JSON.stringify(payload);
-      if (json.length > MAX_PERSIST_BYTES) return; // bounded: keep memory copy only
-      s.setItem(this.storageKey, json);
+      const json = JSON.stringify({ localDoc: wireDoc(r.localDoc), serverRevision: r.serverRevision, serverDoc: wireDoc(r.serverDoc), dirty: r.dirty || !!r.retry || !!r.inflight });
+      if (json.length > MAX_PERSIST_BYTES) s.removeItem(key); // bounded: memory copy only for this question
+      else s.setItem(key, json);
+      const index = this.readIndex(s);
+      if (!index.includes(questionId)) s.setItem(`${this.storageKey}.index`, JSON.stringify([...index, questionId]));
     } catch {
       /* quota or private mode: memory copy is still authoritative */
     }
+  }
+
+  private readIndex(s: Pick<Storage, 'getItem'>): string[] {
+    try {
+      const raw = s.getItem(`${this.storageKey}.index`);
+      const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+      return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private restoreRecord(questionId: string, v: { localDoc?: AnswerDoc; serverRevision?: number; serverDoc?: AnswerDoc; dirty?: boolean }): void {
+    const r = this.record(questionId);
+    r.localDoc = v.localDoc ?? EMPTY_DOC;
+    r.serverDoc = v.serverDoc ?? EMPTY_DOC;
+    r.serverRevision = v.serverRevision ?? 0;
+    r.dirty = !!v.dirty;
+    r.dirtySince = r.dirty ? this.opts.now() : null;
+    if (r.dirty) this.restoredIds.push(questionId);
   }
 
   private restore(): void {
     const s = this.opts.storage === undefined ? safeSessionStorage() : this.opts.storage;
     if (!s) return;
     try {
-      const raw = s.getItem(this.storageKey);
-      if (!raw) return;
-      const payload = JSON.parse(raw) as Record<string, { localDoc: AnswerDoc; serverRevision: number; serverDoc: AnswerDoc; dirty: boolean }>;
-      for (const [questionId, v] of Object.entries(payload)) {
-        const r = this.record(questionId);
-        r.localDoc = v.localDoc ?? EMPTY_DOC;
-        r.serverDoc = v.serverDoc ?? EMPTY_DOC;
-        r.serverRevision = v.serverRevision ?? 0;
-        r.dirty = !!v.dirty;
-        r.dirtySince = r.dirty ? this.opts.now() : null;
-        if (r.dirty) this.restoredIds.push(questionId);
+      for (const questionId of this.readIndex(s)) {
+        const raw = s.getItem(`${this.storageKey}.${questionId}`);
+        if (raw) this.restoreRecord(questionId, JSON.parse(raw));
+      }
+      const legacy = s.getItem(this.storageKey);
+      if (legacy) {
+        const payload = JSON.parse(legacy) as Record<string, { localDoc: AnswerDoc; serverRevision: number; serverDoc: AnswerDoc; dirty: boolean }>;
+        for (const [questionId, v] of Object.entries(payload)) if (!this.records.has(questionId)) this.restoreRecord(questionId, v);
       }
     } catch {
       /* ignore corrupt drafts */
@@ -424,8 +480,11 @@ export class AnswerSync {
 
   clearPersisted(): void {
     const s = this.opts.storage === undefined ? safeSessionStorage() : this.opts.storage;
+    if (!s) return;
     try {
-      s?.removeItem(this.storageKey);
+      for (const questionId of this.readIndex(s)) s.removeItem(`${this.storageKey}.${questionId}`);
+      s.removeItem(`${this.storageKey}.index`);
+      s.removeItem(this.storageKey);
     } catch {
       /* ignore */
     }

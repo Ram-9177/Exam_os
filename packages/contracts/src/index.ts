@@ -4,3 +4,4 @@ export * from './integration.js';
 export * from './api.js';
 export * from './platform.js';
 export * from './canvas-render.js';
+export * from './paper.js';

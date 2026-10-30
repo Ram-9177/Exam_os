@@ -1,5 +1,5 @@
 import { chromium, type Browser } from 'playwright';
-import { canvasToSvg, type CanvasContentWire } from '@examos/contracts';
+import { canvasToSvg, promptText, type CanvasContentWire } from '@examos/contracts';
 
 let browserInstance: Browser | null = null;
 
@@ -166,7 +166,7 @@ export function renderBookletHtml(booklet: any, qrDataUrl: string): string {
           </div>
         </div>
 
-        ${q.prompt ? `<div class="q-prompt"><strong style="font-size: 11px; text-transform: uppercase; color: #4b5563;">Prompt:</strong><br />${escapeHtml(q.prompt)}</div>` : ''}
+        ${promptText(q.prompt) ? `<div class="q-prompt"><strong style="font-size: 11px; text-transform: uppercase; color: #4b5563;">Prompt:</strong><br />${escapeHtml(promptText(q.prompt)).replace(/\n/g, '<br />')}</div>` : ''}
 
         <div style="margin-top: 10px;">
           <strong style="font-size: 12px; color: #374151; text-transform: uppercase;">Candidate's Answer:</strong>

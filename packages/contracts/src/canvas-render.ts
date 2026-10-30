@@ -72,9 +72,9 @@ export function buildCanvasScene(content: CanvasContentWire): CanvasScene {
 export function strokePathData(points: CanvasItem['points']): string {
   if (points.length === 0) return '';
   const [x0, y0] = points[0]!;
-  if (points.length === 1) return `M${x0} ${y0} L${x0 + 0.01} ${y0}`;
-  let d = `M${x0} ${y0}`;
-  for (let i = 1; i < points.length; i++) d += ` L${points[i]![0]} ${points[i]![1]}`;
+  if (points.length === 1) return `M${num(x0)} ${num(y0)} L${num(x0 + 0.01)} ${num(y0)}`;
+  let d = `M${num(x0)} ${num(y0)}`;
+  for (let i = 1; i < points.length; i++) d += ` L${num(points[i]![0])} ${num(points[i]![1])}`;
   return d;
 }
 
@@ -87,15 +87,17 @@ export function arrowHeadPathData(p0: readonly number[], p1: readonly number[], 
   const ay = p1[1]! - len * Math.sin(angle - spread);
   const bx = p1[0]! - len * Math.cos(angle + spread);
   const by = p1[1]! - len * Math.sin(angle + spread);
-  return `M${p1[0]} ${p1[1]} L${ax} ${ay} L${bx} ${by} Z`;
+  return `M${num(p1[0]!)} ${num(p1[1]!)} L${num(ax)} ${num(ay)} L${num(bx)} ${num(by)} Z`;
 }
 
 function escapeXml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** Numbers only ever reach the markup through here: a non-finite or non-numeric value renders as 0, never as text. */
 function num(n: number): string {
-  return String(Math.round(n * 100) / 100);
+  const v = typeof n === 'number' && Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+  return String(v);
 }
 
 /** SVG markup for one visible item. */

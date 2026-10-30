@@ -1,4 +1,4 @@
-import { withTenantTx, type Knex } from '@examos/db';
+import { withTenantTx, withWorkerTx, type Knex } from '@examos/db';
 import type { z } from 'zod';
 import { EXAM_TRANSITIONS, assertTransition, type ExamCreateSchema, type ExamStatus, type AdmissionExceptionSchema, SECURITY_REQUIRED_CHECKS, type PrecheckCheckCode } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
@@ -86,9 +86,11 @@ export async function transitionExam(trx: Knex.Transaction, tenantId: string, ac
     await trx('exam_attempts').where({ tenant_id: tenantId, exam_id: examId, status: 'ALLOCATED' }).update({ status: 'PRECHECK_AVAILABLE', updated_at: trx.fn.now() });
   }
   if (to === 'CLOSED') {
-    // Server-side deadline authority: any attempt still open is expired and sealed with its acknowledged answers.
-    const open = await trx('exam_attempts').where({ tenant_id: tenantId, exam_id: examId }).whereIn('status', ['ACTIVE', 'RECOVERY_PENDING', 'SUSPENDED', 'ADMITTED']).select('id');
-    for (const a of open) await sealAttempt(trx, tenantId, a.id, 'EXPIRED', 'SYSTEM:exam_closed', null);
+    // Server-side deadline authority in one statement: every open attempt's deadline becomes now, so late writes
+    // are refused immediately (DEADLINE_PASSED). Sealing is done one attempt per transaction by
+    // sealClosedExamAttempts — inline up to a budget, then by the worker — so one slow student can never hold the
+    // close of a 2,000-seat exam inside a single transaction.
+    await trx('exam_attempts').where({ tenant_id: tenantId, exam_id: examId }).whereIn('status', OPEN_AT_CLOSE).update({ deadline_at: trx.raw('LEAST(deadline_at, ?::timestamptz)', [now]), updated_at: trx.fn.now() });
     await trx('exam_attempts').where({ tenant_id: tenantId, exam_id: examId }).whereIn('status', ['ALLOCATED', 'PRECHECK_AVAILABLE', 'PRECHECK_RUNNING', 'READY']).update({ status: 'EXPIRED', updated_at: trx.fn.now() });
   }
   await audit(trx, { tenantId, actorType: 'USER', actorId, action: `exam.${to.toLowerCase()}`, entityType: 'exam', entityId: examId, requestId, metadata: { from, to } });
@@ -96,6 +98,88 @@ export async function transitionExam(trx: Knex.Transaction, tenantId: string, ac
     await recordIntegrationEvent(trx, { tenantId, type: 'exam.scheduled', aggregateType: 'exam', aggregateId: examId, data: { examId, examCode: exam.code, windowStartAt: new Date(exam.window_start_at).toISOString(), windowEndAt: new Date(exam.window_end_at).toISOString() } });
   }
   return { from, to };
+}
+
+/** Attempt statuses that still hold an open paper when the Examination Section closes the exam. */
+export const OPEN_AT_CLOSE = ['ACTIVE', 'RECOVERY_PENDING', 'SUSPENDED', 'ADMITTED'] as const;
+
+/**
+ * Seals the open attempts of a CLOSED exam, one transaction each, in admission
+ * order, until `limit` attempts or `budgetMs` have been spent. Idempotent: an
+ * attempt sealed meanwhile (student submit, another worker) is skipped under
+ * its row lock. Safe to call from the close route and from the worker.
+ */
+export async function sealClosedExamAttempts(deps: AppDeps, tenantId: string, examId: string, opts: { limit?: number; budgetMs?: number } = {}): Promise<{ sealed: number; pending: number }> {
+  const limit = opts.limit ?? 200;
+  const budgetMs = opts.budgetMs ?? 10_000;
+  const started = Date.now();
+  const ids = await withTenantTx(deps.db, tenantId, (trx) => trx('exam_attempts').where({ tenant_id: tenantId, exam_id: examId }).whereIn('status', OPEN_AT_CLOSE).orderBy('admitted_at').limit(limit).pluck<string[]>('id'));
+  let sealed = 0;
+  for (const id of ids) {
+    if (Date.now() - started > budgetMs) break;
+    await withTenantTx(deps.db, tenantId, async (trx) => {
+      const exam = await trx('exams').where({ tenant_id: tenantId, id: examId }).first('status');
+      if (exam?.status !== 'CLOSED') return;
+      const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id }).forNoKeyUpdate().first('status');
+      if (!attempt || !(OPEN_AT_CLOSE as readonly string[]).includes(attempt.status)) return;
+      await sealAttempt(trx, tenantId, id, 'EXPIRED', 'SYSTEM:exam_closed', null);
+      sealed++;
+    });
+  }
+  const pendingRow = await withTenantTx(deps.db, tenantId, (trx) => trx('exam_attempts').where({ tenant_id: tenantId, exam_id: examId }).whereIn('status', OPEN_AT_CLOSE).count<{ n: string }[]>('* as n').first());
+  return { sealed, pending: Number(pendingRow?.n ?? 0) };
+}
+
+/** Worker pass: finish sealing for every CLOSED exam that still has open attempts (crash safety for the close route). */
+export async function sweepClosedExams(deps: AppDeps): Promise<{ sealed: number; pending: number }> {
+  const targets = await withWorkerTx(deps.db, (trx) =>
+    trx('exams as e')
+      .join('exam_attempts as a', 'a.exam_id', 'e.id')
+      .where('e.status', 'CLOSED')
+      .whereIn('a.status', OPEN_AT_CLOSE)
+      .distinct<Array<{ tenant_id: string; id: string }>>('e.tenant_id', 'e.id'),
+  );
+  let sealed = 0;
+  let pending = 0;
+  for (const t of targets) {
+    const out = await sealClosedExamAttempts(deps, t.tenant_id, t.id, { limit: 500, budgetMs: 20_000 });
+    sealed += out.sealed;
+    pending += out.pending;
+  }
+  return { sealed, pending };
+}
+
+/** How long after an attempt's own deadline the server seals it (leaves the client's last-call flush room; writes are refused from the deadline itself). */
+const DEADLINE_SEAL_GRACE_MS = 30_000;
+
+/**
+ * Worker pass: attempts whose own deadline passed are sealed as EXPIRED, one
+ * transaction each, while the exam may still be LIVE for students with extra
+ * time. A deadline a proctor extended meanwhile is honoured (re-checked under
+ * the row lock). SUSPENDED attempts wait for the human who paused them.
+ */
+export async function sweepExpiredAttempts(deps: AppDeps): Promise<{ sealed: number }> {
+  const cutoff = new Date(deps.clock.now().getTime() - DEADLINE_SEAL_GRACE_MS);
+  const due = await withWorkerTx(deps.db, (trx) =>
+    trx('exam_attempts as a')
+      .join('exams as e', 'e.id', 'a.exam_id')
+      .whereIn('a.status', ['ACTIVE', 'RECOVERY_PENDING'])
+      .where('a.deadline_at', '<', cutoff)
+      .whereIn('e.status', ['LIVE', 'CLOSED'])
+      .orderBy('a.deadline_at')
+      .limit(500)
+      .select<Array<{ tenant_id: string; id: string }>>('a.tenant_id', 'a.id'),
+  );
+  let sealed = 0;
+  for (const row of due) {
+    await withTenantTx(deps.db, row.tenant_id, async (trx) => {
+      const attempt = await trx('exam_attempts').where({ tenant_id: row.tenant_id, id: row.id }).forNoKeyUpdate().first('status', 'deadline_at');
+      if (!attempt || !['ACTIVE', 'RECOVERY_PENDING'].includes(attempt.status) || !attempt.deadline_at || new Date(attempt.deadline_at).getTime() >= cutoff.getTime()) return;
+      await sealAttempt(trx, row.tenant_id, row.id, 'EXPIRED', 'SYSTEM:deadline', null);
+      sealed++;
+    });
+  }
+  return { sealed };
 }
 
 /**

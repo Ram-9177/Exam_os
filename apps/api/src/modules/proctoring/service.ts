@@ -12,6 +12,7 @@ import type { AppDeps } from '../../types.js';
 import { AppError } from '../../lib/errors.js';
 import { audit, logAttemptEvent } from '../../lib/audit.js';
 import { enqueueMail } from '../notifications/service.js';
+import { advisoryXactLock, LOCK_NS } from '../../lib/locks.js';
 import { listNetworkObservations } from '../attempts/network.js';
 
 /** Rapid repeats of the same signal within this window are one incident (spec §8, §30). */
@@ -37,6 +38,8 @@ export interface IngestedEvent {
 export async function ingestEvents(deps: AppDeps, trx: Knex.Transaction, tenantId: string, sourceId: string, events: IngestedEvent[]) {
   const results: Array<{ sourceEventId: string; accepted: boolean; incidentId: string | null; duplicate: boolean }> = [];
   for (const ev of events) {
+    // No attempt-row lock here: ingest also runs inside record-then-refuse transactions while the refused request
+    // holds that row. Grouping is serialised by the per-attempt advisory lock below instead.
     const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: ev.attemptId }).first('id', 'exam_id', 'status');
     if (!attempt) {
       results.push({ sourceEventId: ev.sourceEventId, accepted: false, incidentId: null, duplicate: false });
@@ -52,6 +55,9 @@ export async function ingestEvents(deps: AppDeps, trx: Knex.Transaction, tenantI
       results.push({ sourceEventId: ev.sourceEventId, accepted: true, incidentId: existing?.incident_id ?? null, duplicate: true });
       continue;
     }
+    // Grouping is select-then-insert: serialise per attempt so two signals arriving together never open two incidents
+    // that a proctor could confirm twice.
+    await advisoryXactLock(trx, LOCK_NS.ATTEMPT_INCIDENTS, ev.attemptId);
     const now = deps.clock.now();
     const windowStart = new Date(now.getTime() - GROUPING_WINDOW_SECONDS * 1000);
     let incident = await trx('proctor_incidents').where({ attempt_id: ev.attemptId, signal_class: ev.signalClass }).whereIn('status', ['PROCTOR_REVIEW', 'TECHNICAL']).where('last_event_at', '>=', windowStart).orderBy('last_event_at', 'desc').forUpdate().first();
@@ -101,9 +107,12 @@ export async function decideIncident(deps: AppDeps, trx: Knex.Transaction, tenan
   const prior = await trx('proctor_decisions').where({ tenant_id: tenantId, idempotency_key: input.idempotencyKey }).first();
   if (prior) return decisionResult(trx, prior.attempt_id, prior.id);
 
+  const found = await trx('proctor_incidents').where({ tenant_id: tenantId, id: incidentId }).first('attempt_id');
+  if (!found) throw AppError.notFound('INCIDENT_NOT_FOUND');
+  // attempt row before incident row: the same order the ingest path takes
+  const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: found.attempt_id }).forNoKeyUpdate().first();
   const incident = await trx('proctor_incidents').where({ tenant_id: tenantId, id: incidentId }).forUpdate().first();
   if (!incident) throw AppError.notFound('INCIDENT_NOT_FOUND');
-  const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: incident.attempt_id }).forNoKeyUpdate().first();
   const exam = await trx('exams').where('id', attempt.exam_id).first('warning_threshold', 'title', 'id');
   const now = deps.clock.now();
 

@@ -24,6 +24,7 @@ import { instructionFor } from './instructions.js';
 import { erpIdentity } from '../../lib/identity.js';
 import { isIpInSubnets } from '../seb/service.js';
 import { recordDeviceScan } from './device-scan.js';
+import { validateAnswerOps, assertAnswerDocumentSize } from './answer-validation.js';
 import type { DeviceScan } from '@examos/contracts';
 
 const PRECHECK_READY_MINUTES = 45;
@@ -411,6 +412,7 @@ export async function admit(deps: AppDeps, trx: Knex.Transaction, tenantId: stri
     updated_at: trx.fn.now(),
   });
   if (net) await observeNetwork(deps, trx, tenantId, { ...attempt, status: 'ACTIVE', admitted_ip: net.ip }, net, 'ADMISSION');
+  await deps.redis.set(heartbeatKey(attemptId), String(now.getTime()), 'EX', HEARTBEAT_GRACE_SECONDS * 4);
   await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'attempt.admitted', actor: `USER:${userId}`, metadata: { deadline: deadline.toISOString(), grantId: consumed[0].id } });
   await audit(trx, { tenantId, actorType: 'USER', actorId: userId, action: 'attempt.admitted', entityType: 'exam_attempt', entityId: attemptId });
   const user = await trx('users').where('id', userId).first('email', 'full_name');
@@ -507,14 +509,17 @@ export async function saveAnswer(deps: AppDeps, trx: Knex.Transaction, tenantId:
   if (doc.current_revision !== body.baseRevision) {
     throw new AppError(409, 'REVISION_CONFLICT', `Server revision is ${doc.current_revision}, client based on ${body.baseRevision}`, { retryable: false });
   }
+  validateAnswerOps(body.ops, doc.content as AnswerContent);
   const next = applyOps(doc.content as AnswerContent, body.ops);
-  const hash = contentHash(next);
+  const canonical = canonicalJson(next);
+  assertAnswerDocumentSize(canonical, next.blocks.length);
+  const hash = sha256Hex(canonical);
   if (hash !== body.contentSha256) throw AppError.unprocessable('CONTENT_HASH_MISMATCH', 'Client and server documents differ after applying ops; resync from the server revision');
   const revision = doc.current_revision + 1;
   const [rev] = await trx('answer_revisions')
     .insert({ tenant_id: tenantId, attempt_id: attemptId, question_id: questionId, revision, client_operation_id: body.clientOperationId, ops: JSON.stringify(body.ops), content_sha256: hash })
     .returning(['receipt_id', 'server_saved_at']);
-  await trx('answer_documents').where('id', doc.id).update({ current_revision: revision, content: JSON.stringify(next), content_sha256: hash, updated_at: trx.fn.now() });
+  await trx('answer_documents').where('id', doc.id).update({ current_revision: revision, content: canonical, content_sha256: hash, updated_at: trx.fn.now() });
   await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'answer.revision_saved', actor: `USER:${userId}`, questionId, metadata: { revision, ops: body.ops.length, sha256: hash } });
   return { accepted: true as const, serverRevision: revision, receiptId: rev.receipt_id, serverSavedAt: new Date(rev.server_saved_at).toISOString(), contentSha256: hash, duplicate: false };
 }
@@ -533,8 +538,15 @@ export async function heartbeat(deps: AppDeps, trx: Knex.Transaction, tenantId: 
   // Network changes (Wi-Fi switch, hotspot, IPv6 flip) are durable transport context; the exam's ipPolicy decides
   // whether a human is asked to look (REVIEW) or the write is held to the admitted address (LOCK). Never a warning (spec §28).
   if (net) await observeNetwork(deps, trx, tenantId, attempt, net, 'HEARTBEAT');
-  await deps.redis.set(`attempt:heartbeat:${attemptId}`, String(deps.clock.now().getTime()), 'EX', HEARTBEAT_GRACE_SECONDS * 4);
-  return { status: attempt.status, serverNow: deps.clock.now().toISOString(), deadlineAt: attempt.deadline_at ? new Date(attempt.deadline_at).toISOString() : null, authorizationGeneration: attempt.authorization_generation };
+  await deps.redis.set(heartbeatKey(attemptId), String(deps.clock.now().getTime()), 'EX', HEARTBEAT_GRACE_SECONDS * 4);
+  const manifest = ['SUBMITTED', 'EXPIRED', 'VOIDED_BY_AUTHORITY'].includes(attempt.status) ? await trx('submission_manifests').where({ attempt_id: attemptId }).first('receipt_id', 'manifest_sha256', 'sealed_at') : null;
+  return {
+    status: attempt.status,
+    serverNow: deps.clock.now().toISOString(),
+    deadlineAt: attempt.deadline_at ? new Date(attempt.deadline_at).toISOString() : null,
+    authorizationGeneration: attempt.authorization_generation,
+    receipt: manifest ? { receiptId: manifest.receipt_id, manifestSha256: manifest.manifest_sha256, sealedAt: new Date(manifest.sealed_at).toISOString() } : null,
+  };
 }
 
 /** A reconnect after RECOVERY_PENDING returns to ACTIVE; it never creates a new attempt or extra time (spec §6). */
@@ -566,6 +578,7 @@ export async function reconnect(deps: AppDeps, trx: Knex.Transaction, tenantId: 
     await trx('exam_attempts').where('id', attemptId).update({ status: 'ACTIVE', updated_at: trx.fn.now() });
     await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'attempt.reconnected', actor: `USER:${userId}` });
   }
+  await deps.redis.set(heartbeatKey(attemptId), String(deps.clock.now().getTime()), 'EX', HEARTBEAT_GRACE_SECONDS * 4);
   const docs = await trx('answer_documents').where({ attempt_id: attemptId }).select('question_id', 'current_revision', 'content_sha256');
   return { status: 'ACTIVE', deadlineAt: new Date(attempt.deadline_at).toISOString(), deviceSessionId: boundDevice, serverNow: deps.clock.now().toISOString(), answers: docs.map((d) => ({ questionId: d.question_id, serverRevision: d.current_revision, contentSha256: d.content_sha256 })) };
 }
@@ -592,18 +605,39 @@ export async function reportInExamScan(deps: AppDeps, trx: Knex.Transaction, ten
 
 /** Worker sweep: ACTIVE attempts with no heartbeat beyond the grace move to RECOVERY_PENDING (technical, never a warning). */
 export async function sweepStaleHeartbeats(deps: AppDeps, trx: Knex.Transaction, tenantId: string): Promise<number> {
-  const active = await trx('exam_attempts').where({ tenant_id: tenantId, status: 'ACTIVE' }).select('id', 'user_id');
+  const active = await trx('exam_attempts').where({ tenant_id: tenantId, status: 'ACTIVE' }).select('id');
+  if (!active.length) return 0;
+  const now = deps.clock.now().getTime();
+  // One round-trip for every active attempt, not one per attempt.
+  const stamps = await deps.redis.mget(active.map((a) => heartbeatKey(a.id)));
   let moved = 0;
-  for (const a of active) {
-    const hb = await deps.redis.get(`attempt:heartbeat:${a.id}`);
-    const last = hb ? Number(hb) : 0;
-    if (deps.clock.now().getTime() - last > HEARTBEAT_GRACE_SECONDS * 1000) {
+  const unknown: string[] = [];
+  for (let i = 0; i < active.length; i++) {
+    const a = active[i]!;
+    const raw = stamps[i];
+    if (raw === null || raw === undefined) {
+      // Redis lost the key (restart, eviction, failover): start a fresh grace window rather than moving every
+      // student who is quietly writing to RECOVERY_PENDING at once.
+      unknown.push(a.id);
+      continue;
+    }
+    const last = Number(raw);
+    if (now - last > HEARTBEAT_GRACE_SECONDS * 1000) {
       await trx('exam_attempts').where('id', a.id).update({ status: 'RECOVERY_PENDING', updated_at: trx.fn.now() });
       await logAttemptEvent(trx, { tenantId, attemptId: a.id, eventType: 'attempt.recovery_pending', actor: 'SYSTEM:heartbeat_sweep', metadata: { lastHeartbeatMs: last } });
       moved++;
     }
   }
+  if (unknown.length) {
+    const pipe = deps.redis.pipeline();
+    for (const id of unknown) pipe.set(heartbeatKey(id), String(now), 'EX', HEARTBEAT_GRACE_SECONDS * 4);
+    await pipe.exec();
+  }
   return moved;
+}
+
+function heartbeatKey(attemptId: string): string {
+  return `attempt:heartbeat:${attemptId}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,8 @@ import { listMyExams, attemptPolicy, startPrecheck, verifyItem, practiceSave, fi
 import { studentLedger, answerBooklet, verifyResult } from '../candidates/service.js';
 import { releasePaperForStudent } from '../papers/service.js';
 import { getOrRenderBookletPdf, getOrRenderHallTicketPdf } from '../documents/service.js';
+import { assertExportAllowed } from '../exams/service.js';
+import { grantsAllow } from '../../middleware/auth.js';
 
 const StartPrecheckBody = z.object({ clientBuild: z.string().max(64).nullable().default(null) });
 const PracticeSaveBody = z.object({ contentDigest: z.string().regex(/^[a-f0-9]{64}$/) });
@@ -25,6 +27,10 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
   // Student exam routes use their own limiter pool so ERP traffic can never starve autosaves (review §4).
   const saveLimiter = rateLimit(deps, { pool: 'student-save', limit: 240, windowSeconds: 60, keyOf: (req) => (req.ctx.principal?.type === 'USER' ? req.ctx.principal.userId : req.ip ?? 'anon') });
   const deviceOf = (req: Request) => (req.header('x-device-session') ?? '').trim() || null;
+  const perUser = (req: Request) => (req.ctx.principal?.type === 'USER' ? req.ctx.principal.userId : req.ip ?? 'anon');
+  const heartbeatLimiter = rateLimit(deps, { pool: 'student-heartbeat', limit: 30, windowSeconds: 60, keyOf: perUser });
+  const scanLimiter = rateLimit(deps, { pool: 'student-scan', limit: 10, windowSeconds: 60, keyOf: perUser });
+  const reconnectLimiter = rateLimit(deps, { pool: 'student-reconnect', limit: 20, windowSeconds: 60, keyOf: perUser });
 
   r.get(
     '/me/exams',
@@ -190,6 +196,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/attempts/:id/heartbeat',
     user,
     own,
+    heartbeatLimiter,
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
@@ -200,6 +207,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/attempts/:id/reconnect',
     user,
     own,
+    reconnectLimiter,
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
@@ -210,6 +218,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/attempts/:id/device-scans',
     user,
     own,
+    scanLimiter,
     validateBody(DeviceScanReportSchema),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
@@ -234,8 +243,18 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      const isStaff = p.grants.some((g) => ['EVALUATOR', 'MODERATOR', 'EXAM_CELL_OPERATOR', 'CONTROLLER', 'HOD'].includes(g.role));
-      res.json(await tenantTx(deps, req, (trx) => answerBooklet(trx, t.id, uuidParam(req, 'id'), { userId: p.userId, isStaff })));
+      // Staff read a script by permission, never by role name, and never while the exam is being written (export lock, like the PDF).
+      const staffView = grantsAllow(p.grants, 'marks:approve') || grantsAllow(p.grants, 'examcell:candidates:read') || grantsAllow(p.grants, 'attempts:read');
+      const attemptId = uuidParam(req, 'id');
+      res.json(
+        await tenantTx(deps, req, async (trx) => {
+          if (staffView) {
+            const packet = await trx('candidate_review_packets').where({ tenant_id: t.id, attempt_id: attemptId }).first('exam_id');
+            if (packet) await assertExportAllowed(deps, trx, t.id, packet.exam_id, p.userId, 'booklet.json');
+          }
+          return answerBooklet(trx, t.id, attemptId, { userId: p.userId, isStaff: staffView });
+        }),
+      );
     }),
   );
   r.get(

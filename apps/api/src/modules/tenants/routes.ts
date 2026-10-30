@@ -1,3 +1,4 @@
+import { assertClientSuppliedRef } from '../../lib/secrets.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import {
@@ -188,6 +189,7 @@ export function tenantAdminRoutes(deps: AppDeps, jwt: JwtService): Router {
       const p = userPrincipal(req);
       const input = body<typeof SsoConfigBody>(req);
       await tenantTx(deps, req, async (trx) => {
+        assertClientSuppliedRef(input.clientSecretRef, 'clientSecretRef');
         const secretRef = input.clientSecret ? deps.secrets.seal(input.clientSecret) : (input.clientSecretRef ?? null);
         await trx('tenant_sso_configs').insert({ tenant_id: t.id, provider: input.provider, issuer: input.issuer, client_id: input.clientId, client_secret_ref: secretRef, allowed_email_domains: input.allowedEmailDomains, enabled: input.enabled }).onConflict('tenant_id').merge({ provider: input.provider, issuer: input.issuer, client_id: input.clientId, client_secret_ref: secretRef, allowed_email_domains: input.allowedEmailDomains, enabled: input.enabled, updated_at: trx.fn.now() });
         await audit(trx, { tenantId: t.id, actorType: 'USER', actorId: p.userId, action: 'tenant.sso_config.upserted', entityType: 'tenant', entityId: t.id, metadata: { provider: input.provider, issuer: input.issuer } });

@@ -95,7 +95,7 @@ describe('network observations, ipPolicy and in-exam device scans', () => {
     const seen = await ctx.admin('attempt_network_observations').where({ attempt_id: A.attemptId }).orderBy('first_seen_at');
     expect(seen.map((s) => s.ip)).toEqual([ADMITTED_IP, '10.10.9.9']);
     expect(seen[0].first_source).toBe('PRECHECK');
-    expect(Number(seen[0].observations)).toBeGreaterThanOrEqual(4); // precheck, admission, heartbeat, save
+    expect(Number(seen[0].observations)).toBeGreaterThanOrEqual(1); // touches are recorded at most once a minute per address
     expect(seen[1].first_source).toBe('HEARTBEAT');
     const events = (await ctx.admin('attempt_event_log').where({ attempt_id: A.attemptId }).select('event_type', 'metadata')).filter((e) => e.event_type === 'network.address_changed');
     expect(events).toHaveLength(1);

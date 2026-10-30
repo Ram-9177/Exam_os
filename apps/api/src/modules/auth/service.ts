@@ -10,6 +10,8 @@ import type { JwtService } from './jwt.js';
 
 const BCRYPT_ROUNDS = 12;
 const MAX_FAILED_LOGINS = 5;
+/** A refresh retried with the just-rotated token inside this window is treated as a lost response, once. */
+const REFRESH_RETRY_GRACE_MS = 30_000;
 const LOCKOUT_MINUTES = 15;
 
 export interface TokenPair {
@@ -78,10 +80,23 @@ export class AuthService {
       const session = await trx('auth_sessions').where({ tenant_id: tenantId, refresh_token_hash: hash }).forUpdate().first();
       if (!session) return { kind: 'invalid' as const };
       if (session.revoked_at) return { kind: 'revoked' as const };
-      if (session.rotated_at) return { kind: 'reuse' as const, familyId: session.family_id as string, userId: session.user_id as string, sessionId: session.id as string };
+      const reuse = { kind: 'reuse' as const, familyId: session.family_id as string, userId: session.user_id as string, sessionId: session.id as string };
+      if (session.rotated_at) {
+        // A client that lost the response to its own rotation retries with the token it still holds (Wi-Fi drop at
+        // the wrong second during a four-hour exam). One retry inside a short window is honoured: the child issued
+        // moments ago is revoked and a fresh pair is issued, so whoever holds that child loses it and notices.
+        // A second retry, or any presentation after the window, is reuse and the whole family is revoked.
+        const withinGrace = now.getTime() - new Date(session.rotated_at).getTime() <= REFRESH_RETRY_GRACE_MS;
+        const alreadyRetried = withinGrace ? await trx('auth_sessions').where({ tenant_id: tenantId, parent_id: session.id, revoked_reason: 'superseded_by_retry' }).first('id') : null;
+        if (!withinGrace || alreadyRetried) return reuse;
+      }
       if (new Date(session.expires_at) < now) return { kind: 'expired' as const };
       const user = await trx('users').where({ id: session.user_id, tenant_id: tenantId }).first();
       if (!user || user.status !== 'ACTIVE') return { kind: 'revoked' as const };
+      if (session.rotated_at) {
+        await trx('auth_sessions').where({ tenant_id: tenantId, parent_id: session.id }).whereNull('revoked_at').update({ revoked_at: trx.fn.now(), revoked_reason: 'superseded_by_retry' });
+        await audit(trx, { tenantId, actorType: 'USER', actorId: session.user_id, action: 'auth.refresh_retried', entityType: 'auth_session', entityId: session.id, requestId, metadata: { ip: net?.ip ?? null } });
+      }
       await trx('auth_sessions').where('id', session.id).update({ rotated_at: trx.fn.now() });
       return { kind: 'ok' as const, pair: await this.issueTokens(trx, tenantId, user, { familyId: session.family_id, parentId: session.id, fingerprint: session.client_fingerprint ?? undefined, net }) };
     });

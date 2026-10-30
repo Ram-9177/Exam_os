@@ -40,6 +40,7 @@ export function proctorRoutes(deps: AppDeps, jwt: JwtService): Router {
         const attemptIds = [...new Set(input.events.map((e) => e.attemptId))];
         const owned = await trx('exam_attempts').whereIn('id', attemptIds).where({ tenant_id: t.id, user_id: p.userId }).select('id', 'exam_id', 'status', 'admitted_ip');
         if (owned.length !== attemptIds.length) throw AppError.forbidden('NOT_OWN_ATTEMPT', 'Clients may only report signals for their own attempt');
+        // observation row first, then incidents: the same order a save takes (attempt → observation → chain)
         const net = clientNet(req);
         for (const a of owned) await observeNetwork(deps, trx, t.id, a, net, 'SIGNAL');
         return ingestEvents(deps, trx, t.id, `CLIENT:${p.userId}`, input.events);

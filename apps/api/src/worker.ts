@@ -3,6 +3,7 @@ import { runMailWorkerOnce } from './modules/notifications/worker.js';
 import { runOutboxDispatcherOnce, runWebhookWorkerOnce } from './modules/integration/webhooks.js';
 import { runForensicsOnce } from './modules/candidates/service.js';
 import { sweepStaleHeartbeats } from './modules/attempts/service.js';
+import { sweepClosedExams, sweepExpiredAttempts } from './modules/exams/service.js';
 import { withTenantTx, withWorkerTx } from '@examos/db';
 
 /**
@@ -40,6 +41,8 @@ await Promise.all([
   loop('mail-bulk', () => runMailWorkerOnce(deps, 'BULK'), 5000),
   loop('forensics', () => runForensicsOnce(deps), 5000),
   loop('heartbeat-sweep', sweepAllTenants, 30_000),
+  loop('seal-closed-exams', () => sweepClosedExams(deps), 5000),
+  loop('deadline-sweep', () => sweepExpiredAttempts(deps), 15_000),
 ]);
 deps.logger.info('worker stopped');
 process.exit(0);
