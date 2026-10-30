@@ -360,19 +360,19 @@ Transitions exist (`PUBLISHED→REVALUATION_PENDING→ACADEMIC_MARKING_READY`, `
 
 | Area | Tested | In Progress | Not Started |
 | --- | --- | --- | --- |
-| Platform & tenancy | tenant groups/domains/host resolution; forced RLS; append-only audit/evidence; provisioning + activation; rate-limit pools | — | platform admin accounts; load proof of limiters |
-| Identity | bcrypt login/lockout; RS256 + JWKS; refresh rotation/reuse; per-request grants; activation; OIDC (Entra/Google) | — | MFA for high-impact roles |
+| Platform & tenancy | tenant groups/domains/host resolution; forced RLS; append-only audit/evidence; provisioning + activation; rate-limit pools; one super admin (password + TOTP); 3–4 staff logins per tenant with duty bundles | — | load proof of limiters |
+| Identity | bcrypt login/lockout; RS256 + JWKS; refresh rotation/reuse; per-request grants; activation; OIDC (Entra/Google); sessions record ip/user agent | — | MFA for high-impact tenant roles |
 | ERP integration | API keys; roster push; identity conflicts; idempotency; events/outbox/webhooks/dead-letter/replay; cursor feed; results pull | — | XLSX import UI; `uos`/`generic-rest` pull adapters |
 | Mail | outbox/dedupe/lanes/backoff; Power Automate transport + callback; templates | Graph, SMTP OAuth2/relay (code present, not exercised) | bounce reconciliation; ACS/SES transport |
 | Exam lifecycle | create; human-triggered conduct; allocation; hall tickets; export lock | — | question paper module; rooms/benches/seats |
-| Readiness & admission | runs/items/sources; clock/keyboard/canvas/practice; SEB Config Key; camera/mic honesty; readiness board; exceptions; one-time grant + lobby | — | face/PAD; media snapshot verification |
-| Answers & submission | versioned saves; device binding; heartbeat/sweep/reconnect; atomic seal; deadline authority | canvas blocks (PDF render pending); offline draft UI | — |
-| Proctoring | ingest/dedupe/grouping; decisions; fifth-warning atomic suspension; resume/epochs; technical hold | — | media buffer/clips/evidence viewer; AI signal producers |
+| Readiness & admission | runs/items/sources; clock/keyboard/canvas/practice; system scan (server-derived findings); SEB Config Key; camera/mic honesty; readiness board; exceptions; one-time grant + lobby | — | face/PAD; media snapshot verification |
+| Answers & submission | versioned saves; device binding; heartbeat/sweep/reconnect; atomic seal; deadline authority; whiteboard (all tools, one vector renderer for workspace/booklet/PDF); offline draft recovery UI | — | — |
+| Proctoring | ingest/dedupe/grouping; decisions; fifth-warning atomic suspension; resume/epochs; technical hold; IP tracking with ipPolicy LOG/REVIEW/LOCK; in-exam device scans → review incidents; addresses and scans in the timeline and the evidence PDF | — | media buffer/clips/evidence viewer; AI signal producers |
 | Post-exam | forensics; marks with one explanation; checklist/approval; holds; Controller publish; ledger; booklet JSON + verify | — | server PDF; AI rubric proposals; similarity |
 | Web | login/SSO/activation/verify; student exams/hall ticket/lobby/ledger; readiness screen; exam workspace; booklet print; Exam Section (list/new/detail/conduct/allocations/hall tickets/readiness board/candidates) | evaluator screen; proctor console; tenant admin (smoke-tested, no render tests) | question paper rendering |
 | Operations | capacity model; dependency audit (0 vulns); 18 black-box probes | worker loops (not load-tested) | load test; scale script (template); ACS transport; archival job; backups/PITR/observability; pen test/DAST/SAST/DPIA |
 
-Counts across the checklist's 88 rows: 59 Tested, 8 In Progress, 21 Not Started (as of this document).
+Counts across the checklist's 113 rows: 96 Tested, 5 In Progress, 12 Not Started (as of this document).
 
 ---
 

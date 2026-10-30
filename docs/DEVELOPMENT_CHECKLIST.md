@@ -92,7 +92,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Server deadline authority at close (expire + seal) | Tested | exam-flow |
 | Canvas vector blocks stored and server-side PDF render pipeline | Tested | documents.test.ts, web renders |
 | Whiteboard: pen, highlighter, eraser, line, arrow, rectangle, ellipse, text; colours, widths, fill, text sizes, paper (grid/ruled/dots), undo/redo, clear, grow; one scene builder (`@examos/contracts` canvas-render) for workspace, booklet, evaluator and server PDF; erasers only remove earlier items; contract limits enforced client- and server-side | Tested | apps/web/test/drawing.test.tsx, booklet.test.tsx; documents.test.ts (PDF) |
-| Offline draft recovery UI | In Progress | apps/web |
+| Offline draft recovery UI: drafts kept in sessionStorage are restored on open, the student is told which questions and that they are being sent, with Retry now / Retry saving now actions | Tested | apps/web/test/exam-workspace.test.tsx (restore after reload) |
 
 ## Proctoring
 | Feature | Status | Evidence |

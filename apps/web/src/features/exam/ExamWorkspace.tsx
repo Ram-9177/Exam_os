@@ -104,6 +104,10 @@ export function ExamWorkspace() {
     return () => sync.dispose();
   }, [sync]);
   const snap = useSyncExternalStore(sync.subscribe, sync.getSnapshot, sync.getSnapshot);
+  // Drafts kept on this device across a reload/crash: say so, show which questions, and let the student push them now.
+  const restored = useMemo(() => sync.restoredDraftIds(), [sync]);
+  const [restoredDismissed, setRestoredDismissed] = useState(false);
+  const restoredPending = restored.filter((id) => snap.unsynced.includes(id));
 
   // Pull server truth for every question once the session is live, keeping any unsynced local draft.
   useEffect(() => {
@@ -313,9 +317,29 @@ export function ExamWorkspace() {
           {scanNotice}
         </p>
       ) : null}
+      {restored.length > 0 && !restoredDismissed ? (
+        <p className="bg-accent-soft text-ink text-sm px-6 py-2 text-center flex flex-wrap items-center justify-center gap-x-3 gap-y-1" role="status">
+          <span>
+            Restored {restored.length} unsaved {restored.length === 1 ? 'answer' : 'answers'} kept on this device ({restored.map((id) => questions.find((q) => q.id === id)?.label ?? id).join(', ')}).
+            {restoredPending.length ? ' Sending to the server now.' : ' All saved to the server.'}
+          </span>
+          {restoredPending.length ? (
+            <Button size="sm" onClick={() => void sync.flushAll()}>
+              Retry now
+            </Button>
+          ) : (
+            <Button size="sm" variant="ghost" onClick={() => setRestoredDismissed(true)}>
+              Dismiss
+            </Button>
+          )}
+        </p>
+      ) : null}
       {overall === 'recovery' && session.kind !== 'offline' ? (
-        <p className="bg-stop-soft text-stop text-sm px-6 py-2 text-center" role="alert">
-          Saving to the server has failed for over 30 seconds. Your answers are kept on this device; raise your hand so the invigilator can help.
+        <p className="bg-stop-soft text-stop text-sm px-6 py-2 text-center flex flex-wrap items-center justify-center gap-x-3 gap-y-1" role="alert">
+          <span>Saving to the server has failed for over 30 seconds. Your answers are kept on this device; raise your hand so the invigilator can help.</span>
+          <Button size="sm" variant="danger" onClick={() => void sync.flushAll()}>
+            Retry saving now
+          </Button>
         </p>
       ) : null}
       {timeOver ? (

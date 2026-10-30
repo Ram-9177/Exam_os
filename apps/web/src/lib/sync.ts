@@ -111,6 +111,8 @@ export class AnswerSync {
   private pauseReason: string | null = null;
   private readonly opts: Required<Pick<SyncOptions, 'debounceMs' | 'maxWaitMs' | 'retryMs' | 'recoveryAfterMs' | 'now'>> & SyncOptions;
   private readonly storageKey: string;
+  /** Questions whose unsaved draft was restored from this device's storage when the workspace opened. */
+  private readonly restoredIds: string[] = [];
   private disposed = false;
   private readonly loads = new Map<string, Promise<void>>();
   private readonly saves = new Map<string, Promise<void>>();
@@ -408,10 +410,16 @@ export class AnswerSync {
         r.serverRevision = v.serverRevision ?? 0;
         r.dirty = !!v.dirty;
         r.dirtySince = r.dirty ? this.opts.now() : null;
+        if (r.dirty) this.restoredIds.push(questionId);
       }
     } catch {
       /* ignore corrupt drafts */
     }
+  }
+
+  /** Drafts that were kept on this device and restored on open (after a reload, crash or browser restart). */
+  restoredDraftIds(): readonly string[] {
+    return this.restoredIds;
   }
 
   clearPersisted(): void {

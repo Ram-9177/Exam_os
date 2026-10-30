@@ -131,6 +131,23 @@ describe('Exam workspace', () => {
     await waitFor(() => expect(screen.getAllByText('Saved to server').length).toBeGreaterThan(0));
   });
 
+  it('restores unsaved drafts kept on this device after a reload, says which questions, and sends them to the server', async () => {
+    sessionStorage.setItem(`examos.draft.${ATTEMPT}`, JSON.stringify({ Q2: { localDoc: { blocks: [{ id: 'b-off', kind: 'paragraph', content: 'kept offline' }] }, serverRevision: 0, serverDoc: { blocks: [] }, dirty: true } }));
+    const srv = setup();
+    renderApp([{ path: '/student/attempts/:attemptId/exam', element: <ExamWorkspace /> }], `/student/attempts/${ATTEMPT}/exam`);
+    const notice = await screen.findByRole('status', { name: '' });
+    expect(notice).toHaveTextContent('Restored 1 unsaved answer kept on this device (Question 2). Sending to the server now.');
+    expect(screen.getByRole('button', { name: 'Retry now' })).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    await waitFor(() => expect(srv.puts.some((p) => JSON.stringify(p.body['ops']).includes('kept offline'))).toBe(true));
+    await waitFor(() => expect(srv.docs.get('Q2')?.blocks).toEqual([{ id: 'b-off', kind: 'paragraph', content: 'kept offline' }]));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('All saved to the server.'));
+    await userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) }).click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/Restored 1 unsaved answer/)).not.toBeInTheDocument();
+  });
+
   it('lists unsynced questions in the submit confirmation and never shows AI scores or the word cheating', async () => {
     setup();
     renderApp([{ path: '/student/attempts/:attemptId/exam', element: <ExamWorkspace /> }], `/student/attempts/${ATTEMPT}/exam`);
