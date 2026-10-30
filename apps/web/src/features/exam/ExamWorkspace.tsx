@@ -3,6 +3,7 @@ import { useParams } from 'react-router';
 import type { PaperQuestionInput, PaperSection } from '@examos/contracts';
 import { useQuery } from '@tanstack/react-query';
 import { api, isApiError } from '@/lib/api';
+import { collectDeviceScan } from '@/lib/device-scan';
 import { useAuth } from '@/lib/auth';
 import type { AnswerDoc } from '@/lib/answers';
 import { uuid } from '@/lib/ids';
@@ -61,6 +62,19 @@ interface SubmitReceipt {
   sealedAt: string;
 }
 
+const SCAN_INTERVAL_MS = 60_000;
+const SCAN_NOTICE: Record<string, string> = {
+  MULTIPLE_DISPLAYS: 'A second display is connected. Disconnect it and keep working; the invigilator has been informed.',
+  SCREEN_SHARING_ACTIVE: 'Screen sharing is active. Stop it and keep working; the invigilator has been informed.',
+  AUTOMATION_CONTROLLED: 'This browser is under automation control. Close automation tools and keep working; the invigilator has been informed.',
+  VIRTUAL_MACHINE_SUSPECTED: 'This looks like a virtual machine. Keep working; the invigilator has been informed and may come to check.',
+  FULLSCREEN_UNSUPPORTED: 'Full-screen mode is not available in this browser. Keep working; the invigilator has been informed.',
+  COOKIES_DISABLED: 'Cookies are disabled in this browser. Keep working; the invigilator has been informed.',
+};
+function scanNoticeFor(findings: string[]): string {
+  return SCAN_NOTICE[findings[0] ?? ''] ?? 'Your device settings need attention. Keep working; the invigilator has been informed.';
+}
+
 export function ExamWorkspace() {
   const { attemptId = '' } = useParams();
   const { me } = useAuth();
@@ -106,6 +120,28 @@ export function ExamWorkspace() {
     if (session.kind === 'paused' || session.kind === 'device-mismatch' || session.kind === 'sealed' || session.kind === 'expired') sync.pause(session.kind);
     else if (session.kind === 'active' && sync.isPaused()) sync.resume();
   }, [session.kind, sync]);
+
+  // ---------- periodic system scan (evidence for a human; the student is told what to fix) ----------
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (session.kind !== 'active') return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const scan = await collectDeviceScan();
+        const out = await api.post<{ verdict: 'CLEAN' | 'REVIEW' | 'BLOCKED'; findings: string[] }>(`/student/attempts/${attemptId}/device-scans`, { scan }, { quiet: true });
+        if (!cancelled) setScanNotice(out.verdict === 'BLOCKED' ? scanNoticeFor(out.findings) : null);
+      } catch {
+        /* a failed scan is a technical gap, never a mark against the student */
+      }
+    };
+    void run();
+    const timer = setInterval(() => void run(), SCAN_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [attemptId, session.kind]);
 
   // ---------- proctor signals (context, never a verdict) ----------
   const reporter = useMemo(() => new SignalReporter({ attemptId }), [attemptId]);
@@ -270,6 +306,11 @@ export function ExamWorkspace() {
       {session.kind === 'offline' ? (
         <p className="bg-fix-soft text-fix text-sm px-6 py-2 text-center" role="status">
           Connection lost. Keep writing — your answers stay on this device and sync as soon as the connection returns.
+        </p>
+      ) : null}
+      {scanNotice ? (
+        <p className="bg-fix-soft text-fix text-sm px-6 py-2 text-center" role="alert">
+          {scanNotice}
         </p>
       ) : null}
       {overall === 'recovery' && session.kind !== 'offline' ? (

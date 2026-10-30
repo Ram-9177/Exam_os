@@ -255,6 +255,7 @@ export async function updateExamClientPolicy(
     ...(input.allowedClientBuilds !== undefined ? { allowedClientBuilds: input.allowedClientBuilds } : {}),
     ...(input.requireManagedEndpoint !== undefined ? { requireManagedEndpoint: input.requireManagedEndpoint } : {}),
     ...(input.allowedSubnets !== undefined ? { allowedSubnets: input.allowedSubnets } : {}),
+    ...(input.ipPolicy !== undefined ? { ipPolicy: input.ipPolicy } : {}),
   };
 
   await trx('exams')
@@ -272,6 +273,7 @@ export async function updateExamClientPolicy(
       allowedClientBuildsCount: input.allowedClientBuilds?.length,
       requireManagedEndpoint: input.requireManagedEndpoint,
       subnetsCount: input.allowedSubnets?.length,
+      ipPolicy: input.ipPolicy,
     },
   });
 

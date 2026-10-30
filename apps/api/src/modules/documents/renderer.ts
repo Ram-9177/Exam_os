@@ -1,4 +1,5 @@
 import { chromium, type Browser } from 'playwright';
+import { canvasToSvg, type CanvasContentWire } from '@examos/contracts';
 
 let browserInstance: Browser | null = null;
 
@@ -48,33 +49,13 @@ function escapeHtml(str: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
+let canvasSeq = 0;
+/** Same vector renderer as the web booklet (packages/contracts canvas-render), so print and screen agree. */
 function renderCanvasToSvg(content: unknown): string {
-  const c = content as { width?: number; height?: number; strokes?: Array<{ tool?: string; width?: number; points?: Array<[number, number]> }> };
+  const c = content as CanvasContentWire;
   if (!c || !c.width || !c.height || !Array.isArray(c.strokes)) return '';
-  const pens = c.strokes.filter((s) => s.tool === 'pen');
-  const erasers = c.strokes.filter((s) => s.tool === 'eraser');
-  const maskId = `mask-${Math.random().toString(36).slice(2, 9)}`;
-  const pathOf = (s: { points?: Array<[number, number]> }) => {
-    if (!s.points || s.points.length === 0) return '';
-    const [x0, y0] = s.points[0]!;
-    if (s.points.length === 1) return `M${x0} ${y0} L${x0 + 0.01} ${y0}`;
-    return `M${x0} ${y0} ` + s.points.slice(1).map(([x, y]) => `L${x} ${y}`).join(' ');
-  };
-  return `
-    <svg viewBox="0 0 ${c.width} ${c.height}" style="width: 100%; max-height: 400px; display: block; border: 1px solid #e5e7eb; background: #ffffff; border-radius: 4px; padding: 4px;">
-      ${erasers.length > 0 ? `
-        <defs>
-          <mask id="${maskId}" maskUnits="userSpaceOnUse" x="0" y="0" width="${c.width}" height="${c.height}">
-            <rect x="0" y="0" width="${c.width}" height="${c.height}" fill="#fff" />
-            ${erasers.map((s) => `<path d="${pathOf(s)}" stroke="#000" stroke-width="${s.width || 2}" fill="none" stroke-linecap="round" stroke-linejoin="round" />`).join('')}
-          </mask>
-        </defs>
-      ` : ''}
-      <g ${erasers.length > 0 ? `mask="url(#${maskId})"` : ''}>
-        ${pens.map((s) => `<path d="${pathOf(s)}" stroke="#111827" stroke-width="${s.width || 2}" fill="none" stroke-linecap="round" stroke-linejoin="round" />`).join('')}
-      </g>
-    </svg>
-  `;
+  canvasSeq = (canvasSeq + 1) % 1_000_000;
+  return canvasToSvg(c, { idPrefix: `d${canvasSeq}`, style: 'width: 100%; max-height: 400px; display: block; border: 1px solid #e5e7eb; background: #ffffff; border-radius: 4px; padding: 4px;' });
 }
 
 export function renderBookletHtml(booklet: any, qrDataUrl: string): string {
@@ -401,6 +382,42 @@ export function renderEvidenceHtml(evidence: any, qrDataUrl: string): string {
           <td>${escapeHtml(w.notes || '—')}</td>
         </tr>
       `).join('') : '<tr><td colspan="5" style="text-align: center; color: #9ca3af;">No countable proctor warnings recorded.</td></tr>'}
+    </tbody>
+  </table>
+
+  <h2 style="font-size: 15px; margin-top: 24px; border-bottom: 1px solid #111827; padding-bottom: 4px;">Network Addresses Seen</h2>
+  <table class="table">
+    <thead><tr><th>Address</th><th>First seen</th><th>Last seen</th><th>Requests</th><th>First via</th><th>Lab network</th><th>User agent</th></tr></thead>
+    <tbody>
+      ${(e.network || []).length > 0 ? (e.network || []).map((n: any) => `
+        <tr>
+          <td class="mono">${escapeHtml(n.ip)}</td>
+          <td>${new Date(n.first_seen_at).toISOString()}</td>
+          <td>${new Date(n.last_seen_at).toISOString()}</td>
+          <td class="mono">${n.observations}</td>
+          <td>${escapeHtml(n.first_source)}</td>
+          <td>${n.in_allowed_subnet === null || n.in_allowed_subnet === undefined ? '—' : n.in_allowed_subnet ? 'yes' : '<span class="badge badge-danger">no</span>'}</td>
+          <td style="font-size: 10px; word-break: break-all;">${escapeHtml(n.user_agent || '—')}</td>
+        </tr>
+      `).join('') : '<tr><td colspan="7" style="text-align: center; color: #9ca3af;">No network observations recorded.</td></tr>'}
+    </tbody>
+  </table>
+
+  <h2 style="font-size: 15px; margin-top: 24px; border-bottom: 1px solid #111827; padding-bottom: 4px;">Device System Scans</h2>
+  <p style="font-size: 11px; color: #6b7280; margin: 4px 0 0;">Findings are derived by the server from the client's raw scan. A clean scan is context, never proof; findings were reviewed by a human before any decision.</p>
+  <table class="table">
+    <thead><tr><th>Timestamp</th><th>Phase</th><th>Verdict</th><th>Findings</th><th>Address</th><th>Scan SHA-256</th></tr></thead>
+    <tbody>
+      ${(e.deviceScans || []).length > 0 ? (e.deviceScans || []).map((d: any) => `
+        <tr>
+          <td>${new Date(d.created_at).toISOString()}</td>
+          <td>${escapeHtml(d.phase)}</td>
+          <td><span class="badge ${d.verdict === 'CLEAN' ? 'badge-ok' : 'badge-danger'}">${escapeHtml(d.verdict)}</span></td>
+          <td>${escapeHtml((Array.isArray(d.findings) ? d.findings : []).join(', ') || '—')}</td>
+          <td class="mono">${escapeHtml(d.ip || '—')}</td>
+          <td class="mono" style="font-size: 10px; word-break: break-all;">${escapeHtml(d.scan_sha256)}</td>
+        </tr>
+      `).join('') : '<tr><td colspan="6" style="text-align: center; color: #9ca3af;">No device scans recorded.</td></tr>'}
     </tbody>
   </table>
 </body>

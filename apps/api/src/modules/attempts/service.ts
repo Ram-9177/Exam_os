@@ -1,5 +1,8 @@
 import { withTenantTx, type Knex } from '@examos/db';
 import { randomUUID } from 'node:crypto';
+import { DEVICE_SCAN_FINDINGS, DEVICE_SCAN_SIGNAL, type DeviceScanFinding } from '@examos/contracts';
+import type { ClientNet } from '../../lib/client-net.js';
+import { observeNetwork } from './network.js';
 import {
   ATTEMPT_TRANSITIONS,
   assertTransition,
@@ -106,8 +109,9 @@ async function lockAttemptForUser(trx: Knex.Transaction, tenantId: string, attem
   return { attempt, exam };
 }
 
-export async function startPrecheck(trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, clientBuild: string | null): Promise<{ runId: string; checks: unknown[] }> {
+export async function startPrecheck(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, clientBuild: string | null, net?: ClientNet): Promise<{ runId: string; checks: unknown[] }> {
   const { attempt, exam } = await lockAttemptForUser(trx, tenantId, attemptId, userId);
+  if (net) await observeNetwork(deps, trx, tenantId, attempt, net, 'PRECHECK');
   if (!['PRECHECK', 'LIVE'].includes(exam.status)) throw AppError.conflict('PRECHECK_NOT_OPEN', 'The readiness check has not been opened by the Examination Section yet');
   const from = attempt.status as AttemptStatus;
   if (!['PRECHECK_AVAILABLE', 'PRECHECK_RUNNING', 'READY'].includes(from)) throw AppError.conflict('ATTEMPT_STATE', `Readiness check cannot run while the attempt is ${from}`);
@@ -369,7 +373,7 @@ export async function issueEntryGrant(deps: AppDeps, trx: Knex.Transaction, tena
  * the UPDATE ... WHERE consumed_at IS NULL RETURNING is the arbiter, and the
  * attempt row is locked first so the state check and the update are serialized.
  */
-export async function admit(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, grantToken: string) {
+export async function admit(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, grantToken: string, net?: ClientNet) {
   const { attempt, exam } = await lockAttemptForUser(trx, tenantId, attemptId, userId);
   if (exam.status !== 'LIVE') throw AppError.conflict('EXAM_NOT_LIVE', `The exam is ${exam.status}`);
   if (attempt.status === 'ACTIVE') {
@@ -401,8 +405,12 @@ export async function admit(deps: AppDeps, trx: Knex.Transaction, tenantId: stri
     current_epoch_id: epoch.id,
     device_session_id: deviceSessionId,
     authorization_generation: attempt.authorization_generation + 1,
+    // The admitted address is the reference for the exam's ipPolicy (LOCK binds writes to it).
+    admitted_ip: net?.ip ?? null,
+    admitted_user_agent: net?.userAgent ?? null,
     updated_at: trx.fn.now(),
   });
+  if (net) await observeNetwork(deps, trx, tenantId, { ...attempt, status: 'ACTIVE', admitted_ip: net.ip }, net, 'ADMISSION');
   await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'attempt.admitted', actor: `USER:${userId}`, metadata: { deadline: deadline.toISOString(), grantId: consumed[0].id } });
   await audit(trx, { tenantId, actorType: 'USER', actorId: userId, action: 'attempt.admitted', entityType: 'exam_attempt', entityId: attemptId });
   const user = await trx('users').where('id', userId).first('email', 'full_name');
@@ -476,12 +484,13 @@ export function contentHash(content: AnswerContent): string {
   return sha256Hex(canonicalJson(content));
 }
 
-export async function saveAnswer(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, questionId: string, body: AnswerSave, deviceSession: string | null) {
+export async function saveAnswer(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, questionId: string, body: AnswerSave, deviceSession: string | null, net?: ClientNet) {
   const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: attemptId }).forNoKeyUpdate().first();
   if (!attempt || attempt.user_id !== userId) throw AppError.notFound('ATTEMPT_NOT_FOUND');
   // Authority check inside the same transaction that locks the row (review §2 item 11).
   if (attempt.status !== 'ACTIVE') throw AppError.conflict('ATTEMPT_NOT_ACTIVE', `attempt is ${attempt.status}; writes are not accepted`);
   await assertDeviceSession(deps, trx, tenantId, attempt, deviceSession);
+  if (net) await observeNetwork(deps, trx, tenantId, attempt, net, 'SAVE');
   const now = deps.clock.now();
   if (attempt.deadline_at && now > new Date(attempt.deadline_at)) throw AppError.conflict('DEADLINE_PASSED', 'The server deadline has passed');
 
@@ -517,23 +526,19 @@ export async function getAnswer(trx: Knex.Transaction, tenantId: string, userId:
   return doc ? { questionId, serverRevision: doc.current_revision, content: doc.content, contentSha256: doc.content_sha256 } : { questionId, serverRevision: 0, content: { blocks: [] }, contentSha256: contentHash({ blocks: [] }) };
 }
 
-export async function heartbeat(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, deviceSession: string | null, clientIp: string | null) {
+export async function heartbeat(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, deviceSession: string | null, net: ClientNet | null) {
   const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: attemptId }).first();
   if (!attempt || attempt.user_id !== userId) throw AppError.notFound('ATTEMPT_NOT_FOUND');
   if (attempt.status === 'ACTIVE') await assertDeviceSession(deps, trx, tenantId, attempt, deviceSession);
-  // Network changes (Wi-Fi switch, hotspot, IPv6 flip) are logged as transport context only — never a warning (spec §28).
-  if (clientIp) {
-    const prevIp = await deps.redis.getset(`attempt:ip:${attemptId}`, clientIp);
-    if (prevIp && prevIp !== clientIp) {
-      await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'network.address_changed', actor: 'SYSTEM:heartbeat', metadata: { from: prevIp, to: clientIp } });
-    }
-  }
+  // Network changes (Wi-Fi switch, hotspot, IPv6 flip) are durable transport context; the exam's ipPolicy decides
+  // whether a human is asked to look (REVIEW) or the write is held to the admitted address (LOCK). Never a warning (spec §28).
+  if (net) await observeNetwork(deps, trx, tenantId, attempt, net, 'HEARTBEAT');
   await deps.redis.set(`attempt:heartbeat:${attemptId}`, String(deps.clock.now().getTime()), 'EX', HEARTBEAT_GRACE_SECONDS * 4);
   return { status: attempt.status, serverNow: deps.clock.now().toISOString(), deadlineAt: attempt.deadline_at ? new Date(attempt.deadline_at).toISOString() : null, authorizationGeneration: attempt.authorization_generation };
 }
 
 /** A reconnect after RECOVERY_PENDING returns to ACTIVE; it never creates a new attempt or extra time (spec §6). */
-export async function reconnect(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, deviceSession: string | null) {
+export async function reconnect(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, deviceSession: string | null, net?: ClientNet) {
   const { attempt, exam } = await lockAttemptForUser(trx, tenantId, attemptId, userId);
   if (exam.status !== 'LIVE') throw AppError.conflict('EXAM_NOT_LIVE', 'The exam is not live');
   if (!['ACTIVE', 'RECOVERY_PENDING'].includes(attempt.status)) throw AppError.conflict('ATTEMPT_STATE', `attempt is ${attempt.status}`);
@@ -547,6 +552,15 @@ export async function reconnect(deps: AppDeps, trx: Knex.Transaction, tenantId: 
   } else {
     await assertDeviceSession(deps, trx, tenantId, attempt, deviceSession);
   }
+  if (net) {
+    if (!attempt.admitted_ip && net.ip) {
+      // A proctor resume with rebind cleared the admitted address: this connection becomes the reference.
+      await trx('exam_attempts').where('id', attemptId).update({ admitted_ip: net.ip, admitted_user_agent: net.userAgent, updated_at: trx.fn.now() });
+      await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'network.rebound', actor: `USER:${userId}`, metadata: { ip: net.ip } });
+      attempt.admitted_ip = net.ip;
+    }
+    await observeNetwork(deps, trx, tenantId, attempt, net, 'RECONNECT');
+  }
   if (attempt.status === 'RECOVERY_PENDING') {
     assertTransition('attempt', ATTEMPT_TRANSITIONS, 'RECOVERY_PENDING', 'ACTIVE');
     await trx('exam_attempts').where('id', attemptId).update({ status: 'ACTIVE', updated_at: trx.fn.now() });
@@ -554,6 +568,26 @@ export async function reconnect(deps: AppDeps, trx: Knex.Transaction, tenantId: 
   }
   const docs = await trx('answer_documents').where({ attempt_id: attemptId }).select('question_id', 'current_revision', 'content_sha256');
   return { status: 'ACTIVE', deadlineAt: new Date(attempt.deadline_at).toISOString(), deviceSessionId: boundDevice, serverNow: deps.clock.now().toISOString(), answers: docs.map((d) => ({ questionId: d.question_id, serverRevision: d.current_revision, contentSha256: d.content_sha256 })) };
+}
+
+/**
+ * Periodic in-exam system scan. The server derives the findings and keeps the
+ * raw scan as append-only evidence; a blocking finding raises the mapped
+ * proctor signal for a named human to decide on — the attempt is never
+ * paused or penalised automatically. The student is told what to fix.
+ */
+export async function reportInExamScan(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, scan: DeviceScan, net: ClientNet | null) {
+  const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: attemptId }).first();
+  if (!attempt || attempt.user_id !== userId) throw AppError.notFound('ATTEMPT_NOT_FOUND');
+  if (!['ACTIVE', 'RECOVERY_PENDING', 'SUSPENDED'].includes(attempt.status)) throw AppError.conflict('ATTEMPT_STATE', `attempt is ${attempt.status}`);
+  const { scanId, findings, verdict } = await recordDeviceScan(trx, { tenantId, attemptId, precheckRunId: null, phase: 'IN_EXAM', scan, ip: net?.ip ?? null, userAgent: net?.userAgent ?? null });
+  const blocking = findings.filter((f: DeviceScanFinding) => DEVICE_SCAN_FINDINGS[f] === 'BLOCKING' && DEVICE_SCAN_SIGNAL[f]);
+  if (blocking.length) {
+    const { ingestEvents } = await import('../proctoring/service.js');
+    await ingestEvents(deps, trx, tenantId, `CLIENT_SCAN:${userId}`, blocking.map((f) => ({ sourceEventId: `scan:${scanId}:${f}`, attemptId, signalClass: DEVICE_SCAN_SIGNAL[f]!, metadata: { finding: f, scanId, phase: 'IN_EXAM' } })));
+  }
+  await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'device.scan', actor: `USER:${userId}`, metadata: { scanId, verdict, findings } });
+  return { scanId, verdict, findings };
 }
 
 /** Worker sweep: ACTIVE attempts with no heartbeat beyond the grace move to RECOVERY_PENDING (technical, never a warning). */
@@ -575,8 +609,9 @@ export async function sweepStaleHeartbeats(deps: AppDeps, trx: Knex.Transaction,
 // ---------------------------------------------------------------------------
 // Submission / seal
 // ---------------------------------------------------------------------------
-export async function submit(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, idempotencyKey: string) {
+export async function submit(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, attemptId: string, idempotencyKey: string, net?: ClientNet) {
   const { attempt } = await lockAttemptForUser(trx, tenantId, attemptId, userId);
+  if (net) await observeNetwork(deps, trx, tenantId, attempt, net, 'SUBMIT');
   const existing = await trx('submission_manifests').where({ attempt_id: attemptId }).first();
   if (existing) {
     if (existing.idempotency_key === idempotencyKey) return manifestReceipt(existing);

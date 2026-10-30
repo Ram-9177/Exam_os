@@ -1,3 +1,4 @@
+import { clientNet } from '../../lib/client-net.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { LoginSchema, RefreshSchema, ActivateSchema } from '@examos/contracts';
@@ -24,7 +25,7 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
     validateBody(LoginSchema),
     asyncHandler(async (req, res) => {
       const { email, password } = body<typeof LoginSchema>(req);
-      const pair = await auth.login(requireTenant(req).id, email, password, req.ctx.requestId, req.header('user-agent') ?? undefined);
+      const pair = await auth.login(requireTenant(req).id, email, password, req.ctx.requestId, req.header('user-agent') ?? undefined, clientNet(req));
       res.json(pair);
     }),
   );
@@ -32,7 +33,7 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
     '/refresh',
     validateBody(RefreshSchema),
     asyncHandler(async (req, res) => {
-      res.json(await auth.refresh(requireTenant(req).id, body<typeof RefreshSchema>(req).refreshToken, req.ctx.requestId));
+      res.json(await auth.refresh(requireTenant(req).id, body<typeof RefreshSchema>(req).refreshToken, req.ctx.requestId, clientNet(req)));
     }),
   );
   r.post(
@@ -41,7 +42,7 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
     validateBody(ActivateSchema),
     asyncHandler(async (req, res) => {
       const { token, password } = body<typeof ActivateSchema>(req);
-      res.json(await auth.activate(requireTenant(req).id, token, password, req.ctx.requestId));
+      res.json(await auth.activate(requireTenant(req).id, token, password, req.ctx.requestId, clientNet(req)));
     }),
   );
   r.post(

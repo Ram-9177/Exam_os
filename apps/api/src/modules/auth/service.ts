@@ -1,3 +1,4 @@
+import type { ClientNet } from '../../lib/client-net.js';
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
 import { withTenantTx, type Knex } from '@examos/db';
@@ -29,7 +30,7 @@ export class AuthService {
   }
 
   /** Local password login with lockout. SSO is the default where configured (spec §4). */
-  async login(tenantId: string, email: string, password: string, requestId: string, fingerprint?: string): Promise<TokenPair> {
+  async login(tenantId: string, email: string, password: string, requestId: string, fingerprint?: string, net?: ClientNet): Promise<TokenPair> {
     const now = this.deps.clock.now();
     const user = await withTenantTx(this.deps.db, tenantId, (trx) => trx('users').where({ tenant_id: tenantId, email: email.toLowerCase() }).first());
     // Constant-work path: compare against a dummy hash when the user does not exist.
@@ -44,22 +45,23 @@ export class AuthService {
           await trx('users')
             .where('id', user.id)
             .update({ failed_login_count: failed, locked_until: failed >= MAX_FAILED_LOGINS ? new Date(now.getTime() + LOCKOUT_MINUTES * 60_000) : user.locked_until, updated_at: trx.fn.now() });
-          await audit(trx, { tenantId, actorType: 'USER', actorId: user.id, action: 'auth.login_failed', entityType: 'user', entityId: user.id, requestId, metadata: { locked: failed >= MAX_FAILED_LOGINS } });
+          await audit(trx, { tenantId, actorType: 'USER', actorId: user.id, action: 'auth.login_failed', entityType: 'user', entityId: user.id, requestId, metadata: { locked: failed >= MAX_FAILED_LOGINS, ip: net?.ip ?? null } });
         });
       }
       throw AppError.unauthorized('INVALID_CREDENTIALS', 'Invalid e-mail or password');
     }
     return withTenantTx(this.deps.db, tenantId, async (trx) => {
       await trx('users').where('id', user.id).update({ failed_login_count: 0, locked_until: null, last_login_at: trx.fn.now(), updated_at: trx.fn.now() });
-      await audit(trx, { tenantId, actorType: 'USER', actorId: user.id, action: 'auth.login', entityType: 'user', entityId: user.id, requestId });
-      return this.issueTokens(trx, tenantId, user, { familyId: randomUUID(), parentId: null, fingerprint });
+      await audit(trx, { tenantId, actorType: 'USER', actorId: user.id, action: 'auth.login', entityType: 'user', entityId: user.id, requestId, metadata: { ip: net?.ip ?? null } });
+      return this.issueTokens(trx, tenantId, user, { familyId: randomUUID(), parentId: null, fingerprint, net });
     });
   }
 
-  async issueTokens(trx: Knex.Transaction, tenantId: string, user: { id: string; email: string; full_name: string; kind: string }, s: { familyId: string; parentId: string | null; fingerprint?: string }): Promise<TokenPair> {
+  async issueTokens(trx: Knex.Transaction, tenantId: string, user: { id: string; email: string; full_name: string; kind: string }, s: { familyId: string; parentId: string | null; fingerprint?: string; net?: ClientNet }): Promise<TokenPair> {
     const refreshToken = randomToken(48);
     const expiresAt = new Date(this.deps.clock.now().getTime() + this.deps.config.REFRESH_TTL_SECONDS * 1000);
-    await trx('auth_sessions').insert({ tenant_id: tenantId, user_id: user.id, family_id: s.familyId, refresh_token_hash: sha256Hex(refreshToken), parent_id: s.parentId, client_fingerprint: s.fingerprint ?? null, expires_at: expiresAt });
+    // Each session row remembers where it was issued from: context for the security auditor, never a verdict.
+    await trx('auth_sessions').insert({ tenant_id: tenantId, user_id: user.id, family_id: s.familyId, refresh_token_hash: sha256Hex(refreshToken), parent_id: s.parentId, client_fingerprint: s.fingerprint ?? null, ip: s.net?.ip ?? null, user_agent: s.net?.userAgent ?? null, expires_at: expiresAt });
     const accessToken = await this.jwt.signAccessToken({ userId: user.id, tenantId, sessionFamilyId: s.familyId, jti: randomUUID(), now: this.deps.clock.now() });
     return { accessToken, refreshToken, expiresIn: this.deps.config.JWT_ACCESS_TTL_SECONDS, user: { id: user.id, email: user.email, fullName: user.full_name, kind: user.kind } };
   }
@@ -69,7 +71,7 @@ export class AuthService {
    * revokes the whole family (an attacker and the victim both lose the session).
    * The revocation is committed separately so the 401 cannot roll it back.
    */
-  async refresh(tenantId: string, refreshToken: string, requestId: string): Promise<TokenPair> {
+  async refresh(tenantId: string, refreshToken: string, requestId: string, net?: ClientNet): Promise<TokenPair> {
     const hash = sha256Hex(refreshToken);
     const now = this.deps.clock.now();
     const outcome = await withTenantTx(this.deps.db, tenantId, async (trx) => {
@@ -81,7 +83,7 @@ export class AuthService {
       const user = await trx('users').where({ id: session.user_id, tenant_id: tenantId }).first();
       if (!user || user.status !== 'ACTIVE') return { kind: 'revoked' as const };
       await trx('auth_sessions').where('id', session.id).update({ rotated_at: trx.fn.now() });
-      return { kind: 'ok' as const, pair: await this.issueTokens(trx, tenantId, user, { familyId: session.family_id, parentId: session.id, fingerprint: session.client_fingerprint ?? undefined }) };
+      return { kind: 'ok' as const, pair: await this.issueTokens(trx, tenantId, user, { familyId: session.family_id, parentId: session.id, fingerprint: session.client_fingerprint ?? undefined, net }) };
     });
     switch (outcome.kind) {
       case 'ok':
@@ -115,7 +117,7 @@ export class AuthService {
   }
 
   /** Consumes a single-use activation token atomically and sets the first password. */
-  async activate(tenantId: string, token: string, password: string, requestId: string): Promise<TokenPair> {
+  async activate(tenantId: string, token: string, password: string, requestId: string, net?: ClientNet): Promise<TokenPair> {
     return withTenantTx(this.deps.db, tenantId, async (trx) => {
       const now = this.deps.clock.now();
       const rows = await trx('one_time_tokens')
@@ -130,7 +132,7 @@ export class AuthService {
       await trx('users').where({ id: t.user_id, tenant_id: tenantId }).update({ password_hash: passwordHash, status: 'ACTIVE', updated_at: trx.fn.now() });
       const user = await trx('users').where({ id: t.user_id }).first();
       await audit(trx, { tenantId, actorType: 'USER', actorId: t.user_id, action: 'auth.activated', entityType: 'user', entityId: t.user_id, requestId });
-      return this.issueTokens(trx, tenantId, user, { familyId: randomUUID(), parentId: null });
+      return this.issueTokens(trx, tenantId, user, { familyId: randomUUID(), parentId: null, net });
     });
   }
 }

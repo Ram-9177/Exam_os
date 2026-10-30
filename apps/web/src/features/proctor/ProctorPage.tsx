@@ -39,6 +39,8 @@ interface Timeline {
   events: Array<Record<string, unknown> & { seq: number; event_type: string; actor: string; metadata?: Record<string, unknown> | null }>;
   warnings: Array<Record<string, unknown> & { warning_no: number; epoch_no: number; created_at: string }>;
   epochs: Array<Record<string, unknown> & { epoch_no: number; confirmed_count: number; closed_at: string | null; reason: string | null }>;
+  network: Array<{ ip: string; user_agent: string | null; first_seen_at: string; last_seen_at: string; observations: number; first_source: string; in_allowed_subnet: boolean | null }>;
+  deviceScans: Array<{ id: string; phase: string; verdict: string; findings: string[]; ip: string | null; created_at: string }>;
 }
 
 const SIGNAL_LABEL: Record<ProctorSignalClass, string> = {
@@ -389,6 +391,44 @@ function TimelineView({ timeline, loading, tz, threshold }: { timeline: Timeline
             </li>
           ))}
         </ul>
+      </section>
+      <section>
+        <h3 className="text-h3 mb-2">Network addresses</h3>
+        {timeline.network?.length ? (
+          <ul className="divide-y divide-rule border-y border-rule text-sm" aria-label="Network addresses seen">
+            {timeline.network.map((n) => (
+              <li key={n.ip} className="py-2 flex flex-wrap gap-x-4 gap-y-1">
+                <span className="font-mono">{n.ip}</span>
+                <span className="text-ink-2">
+                  first {formatTime(n.first_seen_at, tz)} via {humanize(n.first_source)} · last {formatTime(n.last_seen_at, tz)} · {n.observations} {n.observations === 1 ? 'request' : 'requests'}
+                </span>
+                {n.in_allowed_subnet === false ? <StatusChip tone="fix">Outside lab network</StatusChip> : null}
+                {n.user_agent ? <span className="block w-full font-mono text-xs text-ink-3 break-all">{n.user_agent}</span> : null}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-ink-2 text-sm">No network observations yet.</p>
+        )}
+      </section>
+      <section>
+        <h3 className="text-h3 mb-2">Device scans</h3>
+        <p className="text-sm text-ink-2 mb-2">Findings are derived by the server from what the browser reports. A clean scan is context, never proof; nothing here counts without your decision.</p>
+        {timeline.deviceScans?.length ? (
+          <ul className="divide-y divide-rule border-y border-rule text-sm" aria-label="Device scans">
+            {timeline.deviceScans.map((d) => (
+              <li key={d.id} className="py-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span className="text-ink-2 tabular">{formatTime(d.created_at, tz)}</span>
+                <span>{humanize(d.phase)}</span>
+                <StatusChip tone={d.verdict === 'CLEAN' ? 'ready' : d.verdict === 'REVIEW' ? 'note' : 'fix'}>{humanize(d.verdict)}</StatusChip>
+                <span className="text-ink-2">{d.findings.length ? d.findings.map(humanize).join(', ') : 'No findings'}</span>
+                {d.ip ? <span className="font-mono text-xs text-ink-3">{d.ip}</span> : null}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-ink-2 text-sm">No scans recorded.</p>
+        )}
       </section>
       <section>
         <h3 className="text-h3 mb-2">Events</h3>

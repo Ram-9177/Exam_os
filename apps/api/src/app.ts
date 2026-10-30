@@ -45,7 +45,8 @@ export async function createApp(deps: AppDeps): Promise<App> {
 
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', deps.config.isProduction ? 1 : false);
+  // Production sits behind one reverse proxy. Elsewhere only loopback callers (dev tools, tests) may present X-Forwarded-For.
+  app.set('trust proxy', deps.config.isProduction ? 1 : 'loopback');
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(express.json({ limit: '5mb' }));
   app.use(requestContext());

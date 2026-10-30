@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { PrecheckCheckCode } from '@examos/contracts';
 import { api, isApiError } from '@/lib/api';
+import { collectDeviceScan } from '@/lib/device-scan';
 import { useAuth } from '@/lib/auth';
 import { sha256Hex } from '@/lib/canonical';
 import { formatDateTime } from '@/lib/time';
@@ -86,6 +87,8 @@ export function ReadinessPage() {
       // Automatic checks first. The Safe Exam Browser headers, when present, are added by the browser itself.
       if (codes.has('CLIENT_VERSION')) await verify('CLIENT_VERSION', { clientBuild });
       if (codes.has('CLOCK_SYNC')) await verify('CLOCK_SYNC', { clientClockMs: Date.now() });
+      // System scan: the browser reports its settings, the server decides what they mean.
+      if (codes.has('SYSTEM_SCAN')) await verify('SYSTEM_SCAN', { scan: await collectDeviceScan() });
     } catch (e) {
       runIdRef.current = null;
       if (isApiError(e, 'PRECHECK_NOT_OPEN')) setStartError('The Examination Section has not opened the readiness check for this exam yet. Come back closer to the exam time.');
@@ -121,6 +124,11 @@ export function ReadinessPage() {
         await verify('NETWORK_SAVE_ROUNDTRIP', {});
       }
       advance();
+    });
+
+  const rescan = () =>
+    runStep(async () => {
+      await verify('SYSTEM_SCAN', { scan: await collectDeviceScan() });
     });
 
   const submitCanvas = (ops: number) =>
@@ -208,6 +216,7 @@ export function ReadinessPage() {
               <h2 className="text-h3">Before you start</h2>
               <ul className="mt-3 list-disc pl-5 text-ink-2 space-y-1">
                 <li>Sit where you will take the exam, on the same network.</li>
+                <li>Use one screen only. Close screen-sharing, remote-desktop and automation tools; the system scan checks for them.</li>
                 <li>Close video calls and other apps that use the camera or microphone, if this exam uses them.</li>
                 <li>Keep your hall ticket handy. The desk can help with anything that does not pass.</li>
               </ul>
@@ -228,7 +237,7 @@ export function ReadinessPage() {
           {interactiveDone ? (
             <div className="sheet p-6 flex flex-col gap-4">
               <h2 className="text-h3">All steps done</h2>
-              {fix ? <FixCard row={fix} onRetry={() => retryStep(fix.code, steps, setStepIndex)} /> : <p className="text-ink-2">Finish to record your readiness. You can run the check again at any time before the exam starts.</p>}
+              {fix ? <FixCard row={fix} onRetry={() => (fix.code === 'SYSTEM_SCAN' ? void rescan() : retryStep(fix.code, steps, setStepIndex))} /> : <p className="text-ink-2">Finish to record your readiness. You can run the check again at any time before the exam starts.</p>}
               {Object.values(mediaNote).map((n, i) => (
                 <p key={i} className="text-ink-2 text-sm">
                   {n}
@@ -332,9 +341,9 @@ function FixCard({ row, onRetry }: { row: CheckRow; onRetry?: () => void }) {
         {row.label}
       </p>
       <p className="text-ink-2 mt-1">{row.instruction ?? 'Ask the Examination Section desk for help.'}</p>
-      {onRetry && ['KEYBOARD_INPUT', 'CANVAS_INPUT', 'CONSENT', 'CAMERA', 'MICROPHONE'].includes(row.code) ? (
+      {onRetry && ['KEYBOARD_INPUT', 'CANVAS_INPUT', 'CONSENT', 'CAMERA', 'MICROPHONE', 'SYSTEM_SCAN'].includes(row.code) ? (
         <Button size="sm" className="mt-3" onClick={onRetry}>
-          Retry this step
+          {row.code === 'SYSTEM_SCAN' ? 'Scan again' : 'Retry this step'}
         </Button>
       ) : null}
     </div>

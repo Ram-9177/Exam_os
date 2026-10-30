@@ -1,13 +1,14 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
-import { AnswerSaveSchema, SubmitSchema, PrecheckItemVerifySchema } from '@examos/contracts';
+import { AnswerSaveSchema, SubmitSchema, PrecheckItemVerifySchema, DeviceScanReportSchema } from '@examos/contracts';
+import { clientNet } from '../../lib/client-net.js';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
 import { requireUser, requirePermission, userPrincipal } from '../../middleware/auth.js';
 import { rateLimit } from '../../middleware/rate-limit.js';
 import type { JwtService } from '../auth/jwt.js';
-import { listMyExams, attemptPolicy, startPrecheck, verifyItem, practiceSave, finalizePrecheck, issueEntryGrant, admit, saveAnswer, getAnswer, heartbeat, reconnect, submit } from './service.js';
+import { listMyExams, attemptPolicy, startPrecheck, verifyItem, practiceSave, finalizePrecheck, issueEntryGrant, admit, saveAnswer, getAnswer, heartbeat, reconnect, submit, reportInExamScan } from './service.js';
 import { studentLedger, answerBooklet, verifyResult } from '../candidates/service.js';
 import { releasePaperForStudent } from '../papers/service.js';
 import { getOrRenderBookletPdf, getOrRenderHallTicketPdf } from '../documents/service.js';
@@ -92,7 +93,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.status(201).json(await tenantTx(deps, req, (trx) => startPrecheck(trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof StartPrecheckBody>(req).clientBuild)));
+      res.status(201).json(await tenantTx(deps, req, (trx) => startPrecheck(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof StartPrecheckBody>(req).clientBuild, clientNet(req))));
     }),
   );
   r.post(
@@ -105,7 +106,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
       const p = userPrincipal(req);
       const ev = body<typeof PrecheckItemVerifySchema>(req);
       const requestUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress || '';
+      const clientIp = clientNet(req).ip ?? '';
       const checks = await tenantTx(deps, req, (trx) =>
         verifyItem(deps, trx, t.id, p.userId, uuidParam(req, 'runId'), {
           ...ev,
@@ -158,7 +159,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => admit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof AdmitBody>(req).grantToken)));
+      res.json(await tenantTx(deps, req, (trx) => admit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof AdmitBody>(req).grantToken, clientNet(req))));
     }),
   );
   r.put(
@@ -172,7 +173,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
       const p = userPrincipal(req);
       const questionId = String(req.params['questionId']);
       if (!/^[A-Za-z0-9._-]{1,64}$/.test(questionId)) return res.status(400).json({ code: 'INVALID_QUESTION_ID' });
-      res.json(await tenantTx(deps, req, (trx) => saveAnswer(deps, trx, t.id, p.userId, uuidParam(req, 'id'), questionId, body<typeof AnswerSaveSchema>(req), deviceOf(req))));
+      res.json(await tenantTx(deps, req, (trx) => saveAnswer(deps, trx, t.id, p.userId, uuidParam(req, 'id'), questionId, body<typeof AnswerSaveSchema>(req), deviceOf(req), clientNet(req))));
     }),
   );
   r.get(
@@ -192,7 +193,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => heartbeat(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), req.ip ?? null)));
+      res.json(await tenantTx(deps, req, (trx) => heartbeat(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), clientNet(req))));
     }),
   );
   r.post(
@@ -202,7 +203,18 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => reconnect(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req))));
+      res.json(await tenantTx(deps, req, (trx) => reconnect(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), clientNet(req))));
+    }),
+  );
+  r.post(
+    '/attempts/:id/device-scans',
+    user,
+    own,
+    validateBody(DeviceScanReportSchema),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      res.status(202).json(await tenantTx(deps, req, (trx) => reportInExamScan(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof DeviceScanReportSchema>(req).scan, clientNet(req))));
     }),
   );
   r.post(
@@ -213,7 +225,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => submit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof SubmitSchema>(req).idempotencyKey)));
+      res.json(await tenantTx(deps, req, (trx) => submit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof SubmitSchema>(req).idempotencyKey, clientNet(req))));
     }),
   );
   r.get(

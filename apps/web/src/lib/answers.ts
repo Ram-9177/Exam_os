@@ -1,3 +1,4 @@
+import type { CanvasContentWire, CanvasItem } from '@examos/contracts';
 import { canonicalJson, sha256Hex } from './canonical';
 
 /**
@@ -13,18 +14,15 @@ export interface Block {
   content: unknown;
 }
 
-/** A point is [x, y] in canvas pixels, optionally followed by pressure 0..1. */
-export type StrokePoint = [number, number] | [number, number, number];
-export interface Stroke {
-  tool: 'pen' | 'eraser';
-  width: number;
-  points: StrokePoint[];
-}
-export interface CanvasContent {
-  width: number;
-  height: number;
-  strokes: Stroke[];
-}
+/**
+ * Whiteboard content is the contract's wire shape: items (pen, highlighter,
+ * eraser, line, arrow, rect, ellipse, text) over an optional ruled/grid/dot
+ * background. A point is [x, y] in canvas pixels, optionally followed by
+ * pressure 0..1.
+ */
+export type StrokePoint = CanvasItem['points'][number];
+export type Stroke = CanvasItem;
+export type CanvasContent = CanvasContentWire;
 
 export interface AnswerDoc {
   blocks: Block[];
