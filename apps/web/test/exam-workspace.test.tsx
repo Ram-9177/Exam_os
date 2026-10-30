@@ -153,9 +153,10 @@ describe('Exam workspace', () => {
     renderApp([{ path: '/student/attempts/:attemptId/exam', element: <ExamWorkspace /> }], `/student/attempts/${ATTEMPT}/exam`);
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
     const textarea = await screen.findByLabelText('Answer paragraph 1');
-    await user.type(textarea, 'draft');
-    expect(screen.getByLabelText('Answer paragraph 1')).toBe(textarea);
-    expect(textarea).toHaveValue('draft');
+    // the editor stays read-only until the server copy of the answer has loaded (nothing typed can be overwritten)
+    await waitFor(() => expect(screen.getByLabelText('Answer paragraph 1')).toBeEnabled());
+    await user.type(screen.getByLabelText('Answer paragraph 1'), 'draft');
+    expect(screen.getByLabelText('Answer paragraph 1')).toHaveValue('draft');
     await user.click(screen.getByRole('button', { name: 'Submit' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveAccessibleName('Submit your answers?');
