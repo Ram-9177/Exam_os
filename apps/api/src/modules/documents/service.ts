@@ -261,6 +261,8 @@ export async function getOrRenderEvidencePdf(
     manifestSha256: manifest?.manifest_sha256,
     events: timeline.events,
     warnings: timeline.warnings,
+    network: timeline.network,
+    deviceScans: timeline.deviceScans,
   };
 
   const qrUrl = `https://${host}/candidates/${attemptId}/checklist`;

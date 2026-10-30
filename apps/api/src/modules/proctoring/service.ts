@@ -12,6 +12,8 @@ import type { AppDeps } from '../../types.js';
 import { AppError } from '../../lib/errors.js';
 import { audit, logAttemptEvent } from '../../lib/audit.js';
 import { enqueueMail } from '../notifications/service.js';
+import { advisoryXactLock, LOCK_NS } from '../../lib/locks.js';
+import { listNetworkObservations } from '../attempts/network.js';
 
 /** Rapid repeats of the same signal within this window are one incident (spec §8, §30). */
 const GROUPING_WINDOW_SECONDS = 120;
@@ -36,6 +38,8 @@ export interface IngestedEvent {
 export async function ingestEvents(deps: AppDeps, trx: Knex.Transaction, tenantId: string, sourceId: string, events: IngestedEvent[]) {
   const results: Array<{ sourceEventId: string; accepted: boolean; incidentId: string | null; duplicate: boolean }> = [];
   for (const ev of events) {
+    // No attempt-row lock here: ingest also runs inside record-then-refuse transactions while the refused request
+    // holds that row. Grouping is serialised by the per-attempt advisory lock below instead.
     const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: ev.attemptId }).first('id', 'exam_id', 'status');
     if (!attempt) {
       results.push({ sourceEventId: ev.sourceEventId, accepted: false, incidentId: null, duplicate: false });
@@ -51,6 +55,9 @@ export async function ingestEvents(deps: AppDeps, trx: Knex.Transaction, tenantI
       results.push({ sourceEventId: ev.sourceEventId, accepted: true, incidentId: existing?.incident_id ?? null, duplicate: true });
       continue;
     }
+    // Grouping is select-then-insert: serialise per attempt so two signals arriving together never open two incidents
+    // that a proctor could confirm twice.
+    await advisoryXactLock(trx, LOCK_NS.ATTEMPT_INCIDENTS, ev.attemptId);
     const now = deps.clock.now();
     const windowStart = new Date(now.getTime() - GROUPING_WINDOW_SECONDS * 1000);
     let incident = await trx('proctor_incidents').where({ attempt_id: ev.attemptId, signal_class: ev.signalClass }).whereIn('status', ['PROCTOR_REVIEW', 'TECHNICAL']).where('last_event_at', '>=', windowStart).orderBy('last_event_at', 'desc').forUpdate().first();
@@ -100,9 +107,12 @@ export async function decideIncident(deps: AppDeps, trx: Knex.Transaction, tenan
   const prior = await trx('proctor_decisions').where({ tenant_id: tenantId, idempotency_key: input.idempotencyKey }).first();
   if (prior) return decisionResult(trx, prior.attempt_id, prior.id);
 
+  const found = await trx('proctor_incidents').where({ tenant_id: tenantId, id: incidentId }).first('attempt_id');
+  if (!found) throw AppError.notFound('INCIDENT_NOT_FOUND');
+  // attempt row before incident row: the same order the ingest path takes
+  const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: found.attempt_id }).forNoKeyUpdate().first();
   const incident = await trx('proctor_incidents').where({ tenant_id: tenantId, id: incidentId }).forUpdate().first();
   if (!incident) throw AppError.notFound('INCIDENT_NOT_FOUND');
-  const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: incident.attempt_id }).forNoKeyUpdate().first();
   const exam = await trx('exams').where('id', attempt.exam_id).first('warning_threshold', 'title', 'id');
   const now = deps.clock.now();
 
@@ -202,7 +212,7 @@ export async function resumeAttempt(deps: AppDeps, trx: Knex.Transaction, tenant
     toEpochId = next.id;
   }
   const newDeadline = input.deadlineExtensionMinutes > 0 && attempt.deadline_at ? new Date(Math.min(new Date(attempt.deadline_at).getTime() + input.deadlineExtensionMinutes * 60_000, new Date(exam.window_end_at).getTime())) : attempt.deadline_at;
-  await trx('exam_attempts').where('id', attemptId).update({ status: 'ACTIVE', suspension_kind: null, suspended_at: null, current_epoch_id: toEpochId, deadline_at: newDeadline, authorization_generation: attempt.authorization_generation + 1, device_session_id: input.rebindDevice ? null : attempt.device_session_id, updated_at: trx.fn.now() });
+  await trx('exam_attempts').where('id', attemptId).update({ status: 'ACTIVE', suspension_kind: null, suspended_at: null, current_epoch_id: toEpochId, deadline_at: newDeadline, authorization_generation: attempt.authorization_generation + 1, device_session_id: input.rebindDevice ? null : attempt.device_session_id, admitted_ip: input.rebindDevice ? null : attempt.admitted_ip, admitted_user_agent: input.rebindDevice ? null : attempt.admitted_user_agent, updated_at: trx.fn.now() });
   await trx('resume_grants').insert({ tenant_id: tenantId, attempt_id: attemptId, decision_id: decision.id, actor_user_id: actorUserId, from_epoch_id: fromEpochId, to_epoch_id: toEpochId, reason_code: input.reasonCode, notes: input.notes, deadline_extension_minutes: input.deadlineExtensionMinutes });
   await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'attempt.resumed', actor: `USER:${actorUserId}`, metadata: { reasonCode: input.reasonCode, fromEpochId, toEpochId, deadlineExtensionMinutes: input.deadlineExtensionMinutes } });
   await audit(trx, { tenantId, actorType: 'USER', actorId: actorUserId, action: 'attempt.resumed', entityType: 'exam_attempt', entityId: attemptId, metadata: { reasonCode: input.reasonCode, deadlineExtensionMinutes: input.deadlineExtensionMinutes } });
@@ -215,5 +225,8 @@ export async function attemptTimeline(trx: Knex.Transaction, tenantId: string, a
   const events = await trx('attempt_event_log').where({ attempt_id: attemptId }).orderBy('seq');
   const warnings = await trx('proctor_warnings as w').join('warning_epochs as e', 'e.id', 'w.warning_epoch_id').where('w.attempt_id', attemptId).select('w.*', 'e.epoch_no').orderBy('w.created_at');
   const epochs = await trx('warning_epochs').where({ attempt_id: attemptId }).orderBy('epoch_no');
-  return { attempt, events, warnings, epochs };
+  // Transport and device context for the human reading the timeline: every address seen and every system scan.
+  const network = await listNetworkObservations(trx, tenantId, attemptId);
+  const deviceScans = await trx('device_scans').where({ tenant_id: tenantId, attempt_id: attemptId }).orderBy('created_at').select('id', 'phase', 'verdict', 'findings', 'ip', 'user_agent', 'scan_sha256', 'created_at');
+  return { attempt, events, warnings, epochs, network, deviceScans };
 }

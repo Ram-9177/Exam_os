@@ -8,6 +8,8 @@ import { requireUser, requirePermission, userPrincipal } from '../../middleware/
 import type { JwtService } from '../auth/jwt.js';
 import { ingestEvents, listIncidents, decideIncident, technicalHold, resumeAttempt, attemptTimeline } from './service.js';
 import { AppError } from '../../lib/errors.js';
+import { clientNet } from '../../lib/client-net.js';
+import { observeNetwork } from '../attempts/network.js';
 
 const ListQuery = z.object({ examId: z.string().uuid().optional(), status: z.string().optional(), limit: z.coerce.number().int().min(1).max(500).default(100) });
 
@@ -36,8 +38,11 @@ export function proctorRoutes(deps: AppDeps, jwt: JwtService): Router {
       const input = body<typeof ProctorEventIngestSchema>(req);
       const out = await tenantTx(deps, req, async (trx) => {
         const attemptIds = [...new Set(input.events.map((e) => e.attemptId))];
-        const owned = await trx('exam_attempts').whereIn('id', attemptIds).where({ tenant_id: t.id, user_id: p.userId }).select('id');
+        const owned = await trx('exam_attempts').whereIn('id', attemptIds).where({ tenant_id: t.id, user_id: p.userId }).select('id', 'exam_id', 'status', 'admitted_ip');
         if (owned.length !== attemptIds.length) throw AppError.forbidden('NOT_OWN_ATTEMPT', 'Clients may only report signals for their own attempt');
+        // observation row first, then incidents: the same order a save takes (attempt → observation → chain)
+        const net = clientNet(req);
+        for (const a of owned) await observeNetwork(deps, trx, t.id, a, net, 'SIGNAL');
         return ingestEvents(deps, trx, t.id, `CLIENT:${p.userId}`, input.events);
       });
       res.status(202).json({ results: out });

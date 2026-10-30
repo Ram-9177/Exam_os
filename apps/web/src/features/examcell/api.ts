@@ -212,6 +212,7 @@ export const CHECK_SHORT: Record<PrecheckCheckCode, string> = {
   CAMERA: 'Cam',
   MICROPHONE: 'Mic',
   CONSENT: 'Consent',
+  SYSTEM_SCAN: 'Scan',
 };
 
 export async function generateSebConfig(examId: string, options?: SebConfigGenerateInput) {

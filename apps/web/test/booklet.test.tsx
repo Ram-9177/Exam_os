@@ -67,7 +67,7 @@ describe('Booklet print layout', () => {
     // The answer is on ruled paper; the diagram is a vector re-render with an eraser mask.
     expect(within(questions[0] as HTMLElement).getByText('Define a process and describe its structure in memory.')).toBeInTheDocument();
     expect(container.querySelectorAll('.ruled').length).toBeGreaterThanOrEqual(2);
-    const svg = within(questions[1] as HTMLElement).getByRole('img', { name: /Diagram 2, 1 strokes/ });
+    const svg = within(questions[1] as HTMLElement).getByRole('img', { name: /Diagram 2, 1 stroke\b/ });
     expect(svg.tagName.toLowerCase()).toBe('svg');
     expect(svg.querySelector('mask')).not.toBeNull();
     expect(svg.querySelectorAll('path')).toHaveLength(2);

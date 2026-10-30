@@ -12,9 +12,14 @@ export function Timer({ deadlineAt, sync, onExpired, className }: { deadlineAt: 
   const [announcement, setAnnouncement] = useState('');
   const lastMinute = useRef<number | null>(null);
   const expiredFired = useRef(false);
+  const firedFor = useRef<string | null>(null);
 
   useEffect(() => {
-    expiredFired.current = false;
+    // A new deadline (extension) re-arms the callback; a mere clock re-sync does not.
+    if (firedFor.current !== deadlineAt) {
+      expiredFired.current = false;
+      firedFor.current = deadlineAt;
+    }
     const tick = () => {
       const left = remainingMs(deadlineAt, sync);
       setMs(left);

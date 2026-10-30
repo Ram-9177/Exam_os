@@ -3,6 +3,19 @@ import type { Knex } from 'knex';
 const DOC_KINDS = ['BOOKLET_PDF', 'HALL_TICKET_PDF', 'EVIDENCE_PDF'] as const;
 
 export async function up(db: Knex): Promise<void> {
+  // This and the next migrations grant to examos_app, which 0099 used to be the
+  // first to create; create it here (idempotently, same attributes) so a fresh
+  // cluster can migrate.
+  const password = (process.env['EXAMOS_APP_DB_PASSWORD'] ?? 'examos_app').replace(/'/g, "''");
+  await db.raw(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'examos_app') THEN
+        EXECUTE 'CREATE ROLE examos_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD ' || quote_literal('${password}');
+      END IF;
+    END $$;
+  `);
+
   const kindsList = DOC_KINDS.map((k) => `'${k}'`).join(',');
   await db.raw(`
     CREATE TABLE stored_documents (

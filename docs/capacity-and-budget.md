@@ -131,6 +131,18 @@ Per additional campus (tenant): + $180/year licence, + its own free shared mailb
 
 ## 6. Status
 
+### Measured on 2026-10-30 (single box, not the exam-day tier)
+
+`apps/api/scripts/load-smoke.ts` on one 4-vCPU / 15 GB machine running PostgreSQL 16, Redis 7, one API process (pool 20) **and** the load generator. Real routes for activation, readiness and admission; then per student a heartbeat every 20 s, a save every ~4 s and a system scan every 60 s.
+
+| Students × duration | req/s | save p50 / p95 / p99 | heartbeat p99 | admission burst | errors | chain forks |
+| --- | --- | --- | --- | --- | --- | --- |
+| 300 × 90 s (code before the audit fixes) | 107.5 | 24 / 43 / 56 ms | 46 ms | 300 in 3.3 s | 0 | **1 timeline, 124 audit** |
+| 300 × 90 s (after) | 107.7 | 24 / 44 / 64 ms | 49 ms | 300 in 4.0 s | 0 | 0 |
+| 600 × 120 s (after) | 201.6 | 54 / 2,214 / 2,543 ms (one process, pool 20 queueing) | 2,553 ms | 600 in 8.0 s, p99 1.16 s | 0 | 0 |
+
+Reading it: the request path is cheap (≈10 SQL round trips per save, ≈7 per heartbeat, 2 transactions per request). At 300 students the box idled (≤ 6 active backends); at 600 a single API process with a pool of 20 became the queue (21 active backends, p95 2.2 s, still zero errors) — so plan **≈200 req/s per API process at p50 ≈50 ms**, i.e. four processes for 2,000 students, behind PgBouncer. PostgreSQL itself was not the limit in either run. What the earlier model missed was not throughput but write amplification and correctness under concurrency (fixed; see the audit). The sizing table above still stands; the Gate G test on the real tier remains the acceptance criterion.
+
 | Item | State |
 |---|---|
 | Capacity model (`scripts/capacity-model.mjs`) | Tested (runs; figures are estimates from the request mix, not measurements) |

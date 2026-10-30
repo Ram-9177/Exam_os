@@ -1,5 +1,14 @@
 import type { Knex } from '@examos/db';
 import { canonicalJson, sha256Hex } from './crypto.js';
+import { advisoryXactLock, LOCK_NS } from './locks.js';
+
+/**
+ * Both chains are built read-latest-then-insert. Without serialisation two
+ * concurrent transactions for the same tenant (or attempt) read the same tail
+ * and both append to it, forking the chain — and the forensic walk then reports
+ * "hash chain broken" against an innocent student. A transaction-scoped
+ * advisory lock per chain makes appends sequential; it is released at commit.
+ */
 
 export interface AuditInput {
   tenantId: string | null;
@@ -19,6 +28,7 @@ export interface AuditInput {
  * insider. Must be called inside the same transaction as the change it records.
  */
 export async function audit(trx: Knex.Transaction, input: AuditInput): Promise<string> {
+  await advisoryXactLock(trx, LOCK_NS.TENANT_AUDIT_CHAIN, input.tenantId);
   const prev = await trx('audit_events')
     .modify((qb) => (input.tenantId ? qb.where('tenant_id', input.tenantId) : qb.whereNull('tenant_id')))
     .orderBy('seq', 'desc')
@@ -60,6 +70,7 @@ export async function logAttemptEvent(
   trx: Knex.Transaction,
   input: { tenantId: string; attemptId: string; eventType: string; actor: string; questionId?: string | null; metadata?: Record<string, unknown> },
 ): Promise<void> {
+  await advisoryXactLock(trx, LOCK_NS.ATTEMPT_TIMELINE_CHAIN, input.attemptId);
   const prev = await trx('attempt_event_log').where('attempt_id', input.attemptId).orderBy('seq', 'desc').first('hash');
   const prevHash: string | null = prev?.hash ?? null;
   const at = new Date();

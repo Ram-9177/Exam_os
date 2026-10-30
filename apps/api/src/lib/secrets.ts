@@ -1,4 +1,15 @@
 import { decryptAtRest, encryptAtRest } from './crypto.js';
+import { AppError } from './errors.js';
+
+/**
+ * A secret reference supplied through a tenant API call may only be ciphertext
+ * this service produced (`enc:`). `env:`/`vault:` would let a tenant admin point
+ * a mail or SSO transport at the deployment's own secrets (JWT key, database
+ * password) and have them sent to an endpoint of their choosing.
+ */
+export function assertClientSuppliedRef(ref: string | null | undefined, field: string): void {
+  if (ref && !ref.startsWith('enc:')) throw AppError.unprocessable('SECRET_REF_NOT_ALLOWED', `${field}: provide the secret value itself; environment and vault references are reserved for platform operators`);
+}
 
 /**
  * Secret references stored in configuration rows are resolved here, never

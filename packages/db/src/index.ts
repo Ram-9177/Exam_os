@@ -12,6 +12,8 @@ export interface DbConfig {
   adminConnectionString?: string;
   poolMin?: number;
   poolMax?: number;
+  /** Pool acquire timeout; knex's default of 60 s hides pool exhaustion behind slow requests. */
+  acquireTimeoutMs?: number;
 }
 
 export function dbConfigFromEnv(): DbConfig {
@@ -40,6 +42,7 @@ export function createDb(cfg: DbConfig = dbConfigFromEnv()): Knex {
     client: 'pg',
     connection: cfg.connectionString,
     pool: { min: cfg.poolMin ?? 0, max: cfg.poolMax ?? 20 },
+    acquireConnectionTimeout: cfg.acquireTimeoutMs ?? 10_000,
   });
 }
 

@@ -1,3 +1,4 @@
+import { assertClientSuppliedRef } from '../../lib/secrets.js';
 import { withTenantTx, type Knex } from '@examos/db';
 import type { z } from 'zod';
 import type { TenantCreateSchema, TenantMailConfigSchema } from '@examos/contracts';
@@ -60,6 +61,9 @@ export async function upsertMailConfig(
   input: TenantMailConfig & { category?: string | null; endpointSecret?: string; tokenSecret?: string; callbackSecret?: string },
 ): Promise<void> {
   if (input.transportKind === 'capture' && deps.config.isProduction) throw AppError.unprocessable('TRANSPORT_NOT_ALLOWED', 'capture transport is not allowed in production');
+  assertClientSuppliedRef(input.endpointRef, 'endpointRef');
+  assertClientSuppliedRef(input.tokenRef, 'tokenRef');
+  assertClientSuppliedRef(input.callbackSecretRef, 'callbackSecretRef');
   const endpointRef = input.endpointSecret ? deps.secrets.seal(input.endpointSecret) : (input.endpointRef ?? null);
   const tokenRef = input.tokenSecret ? deps.secrets.seal(input.tokenSecret) : (input.tokenRef ?? null);
   const callbackSecretRef = input.callbackSecret ? deps.secrets.seal(input.callbackSecret) : (input.callbackSecretRef ?? null);

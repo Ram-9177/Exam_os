@@ -1,4 +1,4 @@
-import { withWorkerTx, type Knex } from '@examos/db';
+import { withTenantTx, withWorkerTx, type Knex } from '@examos/db';
 import { CANDIDATE_TRANSITIONS, assertTransition, type CandidateStatus } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { AppError } from '../../lib/errors.js';
@@ -86,10 +86,20 @@ export async function setPacketStatus(trx: Knex.Transaction, packet: { id: strin
 export async function runForensicsOnce(deps: AppDeps, batch = 50): Promise<number> {
   const sealed = await withWorkerTx(deps.db, (trx) => trx('candidate_review_packets').where('status', 'ATTEMPT_SEALED').orderBy('created_at').limit(batch).select('tenant_id', 'attempt_id'));
   for (const p of sealed) {
-    await deps.db.transaction(async (trx) => {
-      await trx.raw("SELECT set_config('app.tenant_id', ?, true)", [p.tenant_id]);
-      await runForensicChecks(deps, trx, p.tenant_id, p.attempt_id);
-    });
+    try {
+      await withTenantTx(deps.db, p.tenant_id, (trx) => runForensicChecks(deps, trx, p.tenant_id, p.attempt_id));
+    } catch (e) {
+      // A packet whose checks cannot run (corrupt manifest, unexpected data) goes to a human instead of
+      // blocking every later packet of every tenant on this lane.
+      deps.logger.error({ err: e, tenantId: p.tenant_id, attemptId: p.attempt_id }, 'forensic checks failed; routed to technical review');
+      await withTenantTx(deps.db, p.tenant_id, async (trx) => {
+        const packet = await trx('candidate_review_packets').where({ tenant_id: p.tenant_id, attempt_id: p.attempt_id }).forNoKeyUpdate().first();
+        if (!packet || packet.status !== 'ATTEMPT_SEALED') return;
+        assertTransition('candidate', CANDIDATE_TRANSITIONS, packet.status, 'TECHNICAL_REVIEW_REQUIRED');
+        await trx('candidate_review_packets').where('id', packet.id).update({ status: 'TECHNICAL_REVIEW_REQUIRED', version: packet.version + 1, hold_reason: `FORENSICS_FAILED: ${e instanceof Error ? e.message.slice(0, 200) : 'error'}`, updated_at: trx.fn.now() });
+        await logAttemptEvent(trx, { tenantId: p.tenant_id, attemptId: p.attempt_id, eventType: 'forensics.failed', actor: 'SYSTEM:forensics', metadata: { error: e instanceof Error ? e.message.slice(0, 200) : 'error' } });
+      }).catch((err) => deps.logger.error({ err, attemptId: p.attempt_id }, 'could not route failed packet to technical review'));
+    }
   }
   return sealed.length;
 }
@@ -305,12 +315,13 @@ export async function holdCandidate(trx: Knex.Transaction, tenantId: string, act
 export async function releaseHold(trx: Knex.Transaction, tenantId: string, actorId: string, attemptId: string, reason: string) {
   const packet = await trx('candidate_review_packets').where({ tenant_id: tenantId, attempt_id: attemptId }).forUpdate().first();
   if (!packet) throw AppError.notFound('PACKET_NOT_FOUND');
-  const target: CandidateStatus = packet.result_version_id ? 'EXAM_CELL_REVIEW' : 'FORENSIC_REVIEW_READY';
-  if (!packet.result_version_id && packet.status === 'TECHNICAL_REVIEW_REQUIRED') {
+  // A hold placed before marks exist (technical, identity or integrity) releases straight back into the marking
+  // queue; a hold placed after marks returns to the Exam Cell's review. Neither may strand the candidate.
+  if (!packet.result_version_id) {
     await setPacketStatus(trx, packet, 'FORENSIC_REVIEW_READY');
     await setPacketStatus(trx, packet, 'ACADEMIC_MARKING_READY');
   } else {
-    await setPacketStatus(trx, packet, target);
+    await setPacketStatus(trx, packet, 'EXAM_CELL_REVIEW');
   }
   await trx('candidate_review_packets').where('id', packet.id).update({ hold_reason: null, integrity_state: packet.integrity_state === 'PENDING' || packet.integrity_state === 'PENDING_TECHNICAL' ? 'CLEARED_WITH_NOTES' : packet.integrity_state });
   await audit(trx, { tenantId, actorType: 'USER', actorId, action: 'candidate.hold_released', entityType: 'candidate_review_packet', entityId: packet.id, metadata: { attemptId, reason } });
@@ -345,8 +356,8 @@ export async function controllerAuthorizeAndPublish(trx: Knex.Transaction, tenan
   // If there was an approved revaluation request, mark it DONE
   await trx('revaluation_requests').where({ tenant_id: tenantId, attempt_id: attemptId, status: 'APPROVED' }).update({ status: 'DONE', updated_at: now });
 
-  await audit(trx, { tenantId, actorType: 'USER', actorId: controllerId, action: 'result.published', entityType: 'candidate_review_packet', entityId: packet.id, metadata: { attemptId, resultVersionId: rv.id, approvalId: approval.id } });
   await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'result.published', actor: `USER:${controllerId}`, metadata: { resultVersionId: rv.id, version: rv.version } });
+  await audit(trx, { tenantId, actorType: 'USER', actorId: controllerId, action: 'result.published', entityType: 'candidate_review_packet', entityId: packet.id, metadata: { attemptId, resultVersionId: rv.id, approvalId: approval.id } });
   const user = await trx('users').where('id', packet.user_id).first('email', 'full_name');
   const ident = await erpIdentity(trx, tenantId, packet.user_id);
   const host = await tenantPrimaryHost(trx, tenantId);

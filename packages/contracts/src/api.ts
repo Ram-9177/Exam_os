@@ -18,6 +18,7 @@ import {
   REVALUATION_STATUSES,
   STAFF_BUNDLE_CODES,
   DEVICE_SCAN_FINDING_CODES,
+  IP_POLICIES,
   type StaffBundle,
   type DeviceScanFinding,
 } from './enums.js';
@@ -488,6 +489,8 @@ export const ExamClientPolicyUpdateSchema = z.object({
   allowedClientBuilds: z.array(z.string().min(1).max(64)).optional(),
   requireManagedEndpoint: z.boolean().optional(),
   allowedSubnets: z.array(z.string().min(1).max(64)).optional(),
+  /** What an in-exam network address change does: LOG (default), REVIEW (signal for a human), LOCK (writes held to the admitted address). */
+  ipPolicy: z.enum(IP_POLICIES).optional(),
 });
 export type ExamClientPolicyUpdate = z.infer<typeof ExamClientPolicyUpdateSchema>;
 

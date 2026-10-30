@@ -46,7 +46,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    setupFiles: ['./test/setup.ts'],
+    setupFiles: ['./test/pointer-events.ts', './test/setup.ts'],
     include: ['test/**/*.test.{ts,tsx}'],
     css: false,
     restoreMocks: true,

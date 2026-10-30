@@ -1,16 +1,19 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
-import { AnswerSaveSchema, SubmitSchema, PrecheckItemVerifySchema } from '@examos/contracts';
+import { AnswerSaveSchema, SubmitSchema, PrecheckItemVerifySchema, DeviceScanReportSchema } from '@examos/contracts';
+import { clientNet } from '../../lib/client-net.js';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
 import { requireUser, requirePermission, userPrincipal } from '../../middleware/auth.js';
 import { rateLimit } from '../../middleware/rate-limit.js';
 import type { JwtService } from '../auth/jwt.js';
-import { listMyExams, attemptPolicy, startPrecheck, verifyItem, practiceSave, finalizePrecheck, issueEntryGrant, admit, saveAnswer, getAnswer, heartbeat, reconnect, submit } from './service.js';
+import { listMyExams, attemptPolicy, startPrecheck, verifyItem, practiceSave, finalizePrecheck, issueEntryGrant, admit, saveAnswer, getAnswer, heartbeat, reconnect, submit, reportInExamScan } from './service.js';
 import { studentLedger, answerBooklet, verifyResult } from '../candidates/service.js';
 import { releasePaperForStudent } from '../papers/service.js';
 import { getOrRenderBookletPdf, getOrRenderHallTicketPdf } from '../documents/service.js';
+import { assertExportAllowed } from '../exams/service.js';
+import { grantsAllow } from '../../middleware/auth.js';
 
 const StartPrecheckBody = z.object({ clientBuild: z.string().max(64).nullable().default(null) });
 const PracticeSaveBody = z.object({ contentDigest: z.string().regex(/^[a-f0-9]{64}$/) });
@@ -24,6 +27,10 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
   // Student exam routes use their own limiter pool so ERP traffic can never starve autosaves (review §4).
   const saveLimiter = rateLimit(deps, { pool: 'student-save', limit: 240, windowSeconds: 60, keyOf: (req) => (req.ctx.principal?.type === 'USER' ? req.ctx.principal.userId : req.ip ?? 'anon') });
   const deviceOf = (req: Request) => (req.header('x-device-session') ?? '').trim() || null;
+  const perUser = (req: Request) => (req.ctx.principal?.type === 'USER' ? req.ctx.principal.userId : req.ip ?? 'anon');
+  const heartbeatLimiter = rateLimit(deps, { pool: 'student-heartbeat', limit: 30, windowSeconds: 60, keyOf: perUser });
+  const scanLimiter = rateLimit(deps, { pool: 'student-scan', limit: 10, windowSeconds: 60, keyOf: perUser });
+  const reconnectLimiter = rateLimit(deps, { pool: 'student-reconnect', limit: 20, windowSeconds: 60, keyOf: perUser });
 
   r.get(
     '/me/exams',
@@ -92,7 +99,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.status(201).json(await tenantTx(deps, req, (trx) => startPrecheck(trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof StartPrecheckBody>(req).clientBuild)));
+      res.status(201).json(await tenantTx(deps, req, (trx) => startPrecheck(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof StartPrecheckBody>(req).clientBuild, clientNet(req))));
     }),
   );
   r.post(
@@ -105,12 +112,13 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
       const p = userPrincipal(req);
       const ev = body<typeof PrecheckItemVerifySchema>(req);
       const requestUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress || '';
+      const clientIp = clientNet(req).ip ?? '';
       const checks = await tenantTx(deps, req, (trx) =>
         verifyItem(deps, trx, t.id, p.userId, uuidParam(req, 'runId'), {
           ...ev,
           requestUrl,
           clientIp,
+          userAgent: req.get('user-agent') ?? undefined,
           sebConfigKeyHash: req.header('x-safeexambrowser-configkeyhash') ?? undefined,
           sebBrowserExamKeyHash: req.header('x-safeexambrowser-requesthash') ?? undefined,
         }),
@@ -157,7 +165,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => admit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof AdmitBody>(req).grantToken)));
+      res.json(await tenantTx(deps, req, (trx) => admit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof AdmitBody>(req).grantToken, clientNet(req))));
     }),
   );
   r.put(
@@ -171,7 +179,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
       const p = userPrincipal(req);
       const questionId = String(req.params['questionId']);
       if (!/^[A-Za-z0-9._-]{1,64}$/.test(questionId)) return res.status(400).json({ code: 'INVALID_QUESTION_ID' });
-      res.json(await tenantTx(deps, req, (trx) => saveAnswer(deps, trx, t.id, p.userId, uuidParam(req, 'id'), questionId, body<typeof AnswerSaveSchema>(req), deviceOf(req))));
+      res.json(await tenantTx(deps, req, (trx) => saveAnswer(deps, trx, t.id, p.userId, uuidParam(req, 'id'), questionId, body<typeof AnswerSaveSchema>(req), deviceOf(req), clientNet(req))));
     }),
   );
   r.get(
@@ -188,20 +196,34 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/attempts/:id/heartbeat',
     user,
     own,
+    heartbeatLimiter,
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => heartbeat(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), req.ip ?? null)));
+      res.json(await tenantTx(deps, req, (trx) => heartbeat(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), clientNet(req))));
     }),
   );
   r.post(
     '/attempts/:id/reconnect',
     user,
     own,
+    reconnectLimiter,
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => reconnect(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req))));
+      res.json(await tenantTx(deps, req, (trx) => reconnect(deps, trx, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), clientNet(req))));
+    }),
+  );
+  r.post(
+    '/attempts/:id/device-scans',
+    user,
+    own,
+    scanLimiter,
+    validateBody(DeviceScanReportSchema),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      res.status(202).json(await tenantTx(deps, req, (trx) => reportInExamScan(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof DeviceScanReportSchema>(req).scan, clientNet(req))));
     }),
   );
   r.post(
@@ -212,7 +234,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => submit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof SubmitSchema>(req).idempotencyKey)));
+      res.json(await tenantTx(deps, req, (trx) => submit(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof SubmitSchema>(req).idempotencyKey, clientNet(req))));
     }),
   );
   r.get(
@@ -221,8 +243,18 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      const isStaff = p.grants.some((g) => ['EVALUATOR', 'MODERATOR', 'EXAM_CELL_OPERATOR', 'CONTROLLER', 'HOD'].includes(g.role));
-      res.json(await tenantTx(deps, req, (trx) => answerBooklet(trx, t.id, uuidParam(req, 'id'), { userId: p.userId, isStaff })));
+      // Staff read a script by permission, never by role name, and never while the exam is being written (export lock, like the PDF).
+      const staffView = grantsAllow(p.grants, 'marks:approve') || grantsAllow(p.grants, 'examcell:candidates:read') || grantsAllow(p.grants, 'attempts:read');
+      const attemptId = uuidParam(req, 'id');
+      res.json(
+        await tenantTx(deps, req, async (trx) => {
+          if (staffView) {
+            const packet = await trx('candidate_review_packets').where({ tenant_id: t.id, attempt_id: attemptId }).first('exam_id');
+            if (packet) await assertExportAllowed(deps, trx, t.id, packet.exam_id, p.userId, 'booklet.json');
+          }
+          return answerBooklet(trx, t.id, attemptId, { userId: p.userId, isStaff: staffView });
+        }),
+      );
     }),
   );
   r.get(

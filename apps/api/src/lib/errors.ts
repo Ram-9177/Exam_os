@@ -61,5 +61,9 @@ export function toProblem(err: unknown, requestId: string): Problem {
   if (anyErr?.code === '40001' || anyErr?.code === '40P01') {
     return { type: 'urn:examos:error:SERIALIZATION', title: 'Please retry', status: 409, code: 'SERIALIZATION_FAILURE', requestId, retryable: true };
   }
+  // Database busy — pool exhausted, lock wait or statement cancelled by the app role's timeouts: the client retries; never a 500.
+  if (anyErr?.name === 'KnexTimeoutError' || anyErr?.code === '55P03' || anyErr?.code === '57014') {
+    return { type: 'urn:examos:error:DB_BUSY', title: 'The server is busy; please retry', status: 503, code: 'DB_BUSY', requestId, retryable: true };
+  }
   return { type: 'about:blank', title: 'Internal error', status: 500, code: 'INTERNAL', requestId, retryable: false };
 }

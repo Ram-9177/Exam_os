@@ -138,7 +138,7 @@ describe('AnswerSync', () => {
     await wait(30);
     expect(sync.getSnapshot().overall).toBe('recovery');
     expect(sync.getDoc('Q1').blocks[0]?.content).toBe('still here');
-    expect(JSON.parse(storage.get('examos.draft.a1') ?? '{}')['Q1']?.dirty).toBe(true);
+    expect(JSON.parse(storage.get('examos.draft.a1.Q1') ?? '{}').dirty).toBe(true);
     sync.dispose();
   });
 

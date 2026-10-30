@@ -1,3 +1,4 @@
+import { promptText } from '@examos/contracts';
 import type { ReactNode } from 'react';
 import { isCanvasContent, paragraphText, type AnswerDoc } from '@/lib/answers';
 import { formatDateTime } from '@/lib/time';
@@ -12,7 +13,8 @@ function examTypeLabel(t: string): string {
 
 export interface BookletQuestion {
   questionId: string;
-  prompt?: string | null;
+  /** Prompt blocks as stored on the paper (a plain string from older data is accepted too). */
+  prompt?: unknown;
   answer: AnswerDoc;
   answerSha256: string | null;
   revision: number;
@@ -120,10 +122,10 @@ export function BookletView({ booklet, tz, marks, headerActions }: { booklet: Bo
               </div>
             )}
           </div>
-          {q.prompt ? (
+          {promptText(q.prompt) ? (
             <div className="mb-4 p-3.5 bg-sheet-2 border border-rule-2 rounded text-[15px] leading-relaxed whitespace-pre-wrap">
               <span className="block text-xs font-semibold text-ink-2 uppercase tracking-wider mb-1">Question Prompt</span>
-              {q.prompt}
+              {promptText(q.prompt)}
             </div>
           ) : null}
           <AnswerRender doc={q.answer} />

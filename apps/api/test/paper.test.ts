@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { createTestContext, provisionTenant, createStaff, answerHash, type TestContext, type ProvisionedTenant } from './helpers.js';
+import { createTestContext, provisionTenant, createStaff, answerHash, cleanScan, type TestContext, type ProvisionedTenant } from './helpers.js';
 
 describe('Question paper module (authoring, review, encrypted seal, release, marking validation)', () => {
   let ctx: TestContext;
@@ -262,6 +262,7 @@ describe('Question paper module (authoring, review, encrypted seal, release, mar
     const runId = preRes.body.runId;
     await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'CLOCK_SYNC', clientClockMs: Date.now() });
     await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'KEYBOARD_INPUT', keyboardSample: 'The quick brown fox, 2026; jumps (over) the lazy dog!' });
+    await req().post(`/api/v1/student/prechecks/${runId}/items/verify`).set(H(student.token)).send({ code: 'SYSTEM_SCAN', scan: cleanScan() });
     const practiceHash = 'a'.repeat(64);
     const ps = await req().post(`/api/v1/student/prechecks/${runId}/practice-saves`).set(H(student.token)).send({ contentDigest: practiceHash });
     expect(ps.status).toBe(200);

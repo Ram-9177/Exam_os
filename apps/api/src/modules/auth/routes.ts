@@ -1,3 +1,4 @@
+import { clientNet } from '../../lib/client-net.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { LoginSchema, RefreshSchema, ActivateSchema } from '@examos/contracts';
@@ -16,7 +17,8 @@ const OidcCallbackSchema = z.object({ code: z.string().min(1), state: z.string()
 export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, jwt: JwtService): Router {
   const r = Router();
   const loginLimiter = rateLimit(deps, { pool: 'auth-login', limit: 20, windowSeconds: 300, keyOf: (req) => `${req.ip}:${String((req.body as { email?: string })?.email ?? '')}` });
-  const activateLimiter = rateLimit(deps, { pool: 'auth-activate', limit: 60, windowSeconds: 300, keyOf: (req) => String(req.ip) });
+  // Activation links are single-use random tokens; the limiter only blunts scanning. Whole labs activate behind one NAT address.
+  const activateLimiter = rateLimit(deps, { pool: 'auth-activate', limit: 600, windowSeconds: 300, keyOf: (req) => String(req.ip) });
 
   r.post(
     '/login',
@@ -24,7 +26,7 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
     validateBody(LoginSchema),
     asyncHandler(async (req, res) => {
       const { email, password } = body<typeof LoginSchema>(req);
-      const pair = await auth.login(requireTenant(req).id, email, password, req.ctx.requestId, req.header('user-agent') ?? undefined);
+      const pair = await auth.login(requireTenant(req).id, email, password, req.ctx.requestId, req.header('user-agent') ?? undefined, clientNet(req));
       res.json(pair);
     }),
   );
@@ -32,7 +34,7 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
     '/refresh',
     validateBody(RefreshSchema),
     asyncHandler(async (req, res) => {
-      res.json(await auth.refresh(requireTenant(req).id, body<typeof RefreshSchema>(req).refreshToken, req.ctx.requestId));
+      res.json(await auth.refresh(requireTenant(req).id, body<typeof RefreshSchema>(req).refreshToken, req.ctx.requestId, clientNet(req)));
     }),
   );
   r.post(
@@ -41,7 +43,7 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
     validateBody(ActivateSchema),
     asyncHandler(async (req, res) => {
       const { token, password } = body<typeof ActivateSchema>(req);
-      res.json(await auth.activate(requireTenant(req).id, token, password, req.ctx.requestId));
+      res.json(await auth.activate(requireTenant(req).id, token, password, req.ctx.requestId, clientNet(req)));
     }),
   );
   r.post(

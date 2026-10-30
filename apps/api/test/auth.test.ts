@@ -26,18 +26,22 @@ describe('authentication and authorization', () => {
     expect(payload.exp - payload.iat).toBeLessThanOrEqual(600);
   });
 
-  it('rotates refresh tokens and revokes the whole family on reuse', async () => {
+  it('rotates refresh tokens; one retry inside the grace window is a lost response, reuse after that revokes the whole family', async () => {
     const first = await login(ctx, t.host, t.admin.email, t.admin.password);
     const r1 = await ctx.request().post('/api/v1/auth/refresh').set('Host', t.host).send({ refreshToken: first.refreshToken });
     expect(r1.status).toBe(200);
     expect(r1.body.refreshToken).not.toBe(first.refreshToken);
-    // reuse of the rotated token = theft signal → family revoked
+    // the same token again moments later: the client never saw r1 (dropped connection) → a fresh pair, r1 withdrawn
+    const retry = await ctx.request().post('/api/v1/auth/refresh').set('Host', t.host).send({ refreshToken: first.refreshToken });
+    expect(retry.status).toBe(200);
+    expect((await ctx.request().post('/api/v1/auth/refresh').set('Host', t.host).send({ refreshToken: r1.body.refreshToken })).body.code).toBe('SESSION_REVOKED');
+    // a second retry of the rotated token = theft signal → family revoked
     const reuse = await ctx.request().post('/api/v1/auth/refresh').set('Host', t.host).send({ refreshToken: first.refreshToken });
     expect(reuse.status).toBe(401);
     expect(reuse.body.code).toBe('SESSION_REVOKED');
-    const afterRevoke = await ctx.request().post('/api/v1/auth/refresh').set('Host', t.host).send({ refreshToken: r1.body.refreshToken });
+    const afterRevoke = await ctx.request().post('/api/v1/auth/refresh').set('Host', t.host).send({ refreshToken: retry.body.refreshToken });
     expect(afterRevoke.status).toBe(401);
-    const me = await ctx.request().get('/api/v1/auth/me').set('Host', t.host).set('Authorization', `Bearer ${r1.body.accessToken}`);
+    const me = await ctx.request().get('/api/v1/auth/me').set('Host', t.host).set('Authorization', `Bearer ${retry.body.accessToken}`);
     expect(me.status).toBe(401);
   });
 

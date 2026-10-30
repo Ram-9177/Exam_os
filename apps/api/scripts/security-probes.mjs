@@ -48,7 +48,7 @@ r = await fetch(`${B}/api/v1/student/attempts/${attemptA}/answers/Q1`, { headers
 r = await fetch(`${B}/api/v1/student/attempts/${attemptA}/prechecks`, { method: 'POST', headers: auth(s06), body: '{}' }); ok('student B starts A readiness → 404', r.status === 404);
 r = await fetch(`${B}/api/v1/exams/${examsA.exams[0].examId}/readiness`, { headers: auth(s05) }); ok('student opens staff readiness board → 403', r.status === 403);
 // 5 mass assignment / unknown fields
-r = await fetch(`${B}/api/v1/tenant/users`, { method: 'POST', headers: auth(await login('admin@demo.local', 'Demo-Admin!2026')), body: JSON.stringify({ email: `probe-${Date.now()}@demo.local`, fullName: 'Probe', kind: 'STAFF', roles: [], sendActivation: false, tenant_id: '00000000-0000-0000-0000-000000000000', status: 'ACTIVE', password_hash: 'x' }) });
+r = await fetch(`${B}/api/v1/tenant/users`, { method: 'POST', headers: auth(await login('admin@demo.local', 'Demo-Admin!2026')), body: JSON.stringify({ email: `probe-${Date.now()}@demo.local`, fullName: 'Probe Student', kind: 'STUDENT', roles: [], isAdmin: true, tenantId: '00000000-0000-0000-0000-000000000000', staffLoginLimit: 99, status: 'ACTIVE', passwordHash: 'x' }) });
 body = await j(r); ok('unknown/privileged fields in body are stripped (201, no error)', r.status === 201, `status ${r.status}`);
 r = await fetch(`${B}/api/v1/auth/login`, { method: 'POST', headers: H, body: JSON.stringify({ __proto__: { polluted: true }, email: 'student05@demo.local', password: 'Demo-Student!2026' }) }); ok('prototype pollution payload has no effect', r.status === 200 && ({}).polluted === undefined);
 // 6 headers
@@ -66,5 +66,15 @@ ok('login brute force → 429 within 25 attempts', last === 429, `last status ${
 r = await fetch(`${B}/api/v1/student/attempts/not-a-uuid/answers/Q1`, { headers: auth(s05) }); body = await j(r); ok('bad id → 400 with problem envelope, no stack', r.status === 400 && !JSON.stringify(body).includes('at ') && !!body.requestId);
 // 10 export lock & cross-tenant style: host/token mismatch
 r = await fetch(`${B}/api/v1/auth/me`, { headers: { Host: 'demo.examos.local', authorization: `Bearer ${s05.accessToken}` } }); ok('same tenant, alternate host → 200 (both hosts registered)', r.status === 200);
+// 11 device scans and network context: evidence endpoints are owned, authenticated and never accept a client verdict
+r = await fetch(`${B}/api/v1/student/attempts/${attemptA}/device-scans`, { method: 'POST', headers: H, body: JSON.stringify({ scan: {} }) }); ok('device scan without token → 401', r.status === 401);
+r = await fetch(`${B}/api/v1/student/attempts/${attemptA}/device-scans`, { method: 'POST', headers: auth(s06), body: JSON.stringify({ scan: { verdict: 'CLEAN' } }) }); ok('student B reports a scan for student A → 400/404, never accepted', r.status === 400 || r.status === 404, `status ${r.status}`);
+r = await fetch(`${B}/api/v1/student/attempts/${attemptA}/device-scans`, { method: 'POST', headers: auth(s05), body: JSON.stringify({ scan: { verdict: 'CLEAN', findings: [] } }) }); ok('client-declared scan verdict → 400 (server derives findings)', r.status === 400, `status ${r.status}`);
+r = await fetch(`${B}/api/v1/exams/${examsA.exams[0].examId}/client-policy`, { method: 'PUT', headers: auth(s05), body: JSON.stringify({ ipPolicy: 'LOG' }) }); ok('student cannot relax the exam network policy → 403', r.status === 403, `status ${r.status}`);
+r = await fetch(`${B}/api/v1/proctor/attempts/${attemptA}/timeline`, { headers: auth(s05) }); ok('student cannot read the proctor timeline (addresses, scans) → 403', r.status === 403, `status ${r.status}`);
+// 12 platform super admin surface
+r = await fetch(`${B}/api/v1/platform/tenants`, { headers: H }); ok('platform API without a super-admin session → 401', r.status === 401);
+r = await fetch(`${B}/api/v1/platform/tenants`, { headers: auth(s05) }); ok('tenant login is never a platform login → 403', r.status === 403, `status ${r.status}`);
+r = await fetch(`${B}/api/v1/platform/auth/login`, { method: 'POST', headers: H, body: JSON.stringify({ email: 'admin@demo.local', password: 'Demo-Admin!2026xx', otp: '123456' }) }); ok('platform login refuses tenant credentials → 401', r.status === 401, `status ${r.status}`);
 console.log(results.join('\n'));
 console.log(`\n${results.filter((x) => x.startsWith('PASS')).length}/${results.length} probes passed`);

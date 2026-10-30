@@ -7,6 +7,10 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().default('postgres://examos_app:examos_app@127.0.0.1:5432/examos_dev'),
   DATABASE_ADMIN_URL: z.string().default('postgres://postgres:postgres@127.0.0.1:5432/examos_dev'),
   REDIS_URL: z.string().default('redis://127.0.0.1:6379/0'),
+  /** Connections per API process; sized with PgBouncer in mind (docs/capacity-and-budget.md). */
+  DB_POOL_MAX: z.coerce.number().int().min(2).max(200).default(20),
+  /** Waiting longer than this for a pooled connection fails the request with 503 DB_BUSY (retryable) instead of queueing. */
+  DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(10_000),
   JWT_ISSUER: z.string().default('https://examos.local'),
   JWT_AUDIENCE: z.string().default('examos-api'),
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
