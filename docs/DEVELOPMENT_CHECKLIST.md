@@ -70,7 +70,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | --- | --- | --- |
 | Precheck runs/items with sources; server-measured identity/eligibility/consent | Tested | exam-flow, recovery |
 | Clock sync, keyboard functional test (no WPM), optional canvas/stylus test, practice save round-trip | Tested | exam-flow |
-| System scan (SYSTEM_SCAN): server-derived findings from the raw client scan (displays, automation, VM/remote-desktop hints, screen sharing, full-screen/cookies, window/viewport, timezone, battery); blocking findings remediate; clean scans stay CLIENT_DECLARED | Tested | exam-flow (dual display → REMEDIATE, clean → PASS), network-and-scans.test.ts |
+| System scan (SYSTEM_SCAN): server-derived findings from the raw client scan (displays, automation, VM/remote-desktop hints, screen sharing, full-screen/cookies, window/viewport, time zone compared by UTC offset so aliases such as Asia/Calcutta = Asia/Kolkata never flag, battery); blocking findings remediate; clean scans stay CLIENT_DECLARED | Tested | exam-flow (dual display → REMEDIATE, clean → PASS), network-and-scans.test.ts, device-scan.test.ts |
 | Secure client verification via SEB Config Key hash; allowed client builds | Tested | recovery.test.ts, secure-client.test.ts |
 | SEB configuration generator (POST /exams/:id/seb-config), kiosk mode XML plist, download authorization, and audit trail | Tested | secure-client.test.ts, docs/seb-rollout.md |
 | MANAGED_ENDPOINT lab network subnet attestation and client policy management | Tested | secure-client.test.ts |
@@ -94,7 +94,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Canvas vector blocks stored and server-side PDF render pipeline | Tested | documents.test.ts, web renders |
 | Server-side validation of every stored answer block by kind (paragraph ≤ 50k chars, drawing per CanvasContentSchema, choice), document ≤ 200 blocks / 4 MB; refusals are 422 the client does not blindly retry | Tested | hardening.test.ts, apps/web/test/sync-backoff.test.ts |
 | Per-attempt deadline authority: writes refused from the deadline, the attempt sealed by the worker ≈30 s later, receipt returned through the heartbeat; exam close sets all deadlines in one statement and seals one attempt per transaction (inline budget + worker) | Tested | hardening.test.ts, scale-invariants.test.ts, exam-flow |
-| Whiteboard: pen, highlighter, eraser, line, arrow, rectangle, ellipse, text; colours, widths, fill, text sizes, paper (grid/ruled/dots), undo/redo, clear, grow; one scene builder (`@examos/contracts` canvas-render) for workspace, booklet, evaluator and server PDF; erasers only remove earlier items; contract limits enforced client- and server-side | Tested | apps/web/test/drawing.test.tsx, booklet.test.tsx; documents.test.ts (PDF) |
+| Whiteboard: pen, highlighter, eraser, line, arrow, rectangle, ellipse, text; colours, widths, fill, text sizes, paper (grid/ruled/dots), undo/redo, clear, grow; one scene builder (`@examos/contracts` canvas-render) for workspace, booklet, evaluator and server PDF; erasers only remove earlier items; contract limits enforced client- and server-side; the Text tool keeps focus under a real mouse (the canvas cancels mousedown) | Tested | apps/web/test/drawing.test.tsx, booklet.test.tsx; documents.test.ts (PDF) |
 | Offline draft recovery UI: drafts kept in sessionStorage are restored on open, the student is told which questions and that they are being sent, with Retry now / Retry saving now actions | Tested | apps/web/test/exam-workspace.test.tsx (restore after reload) |
 
 ## Proctoring
@@ -147,7 +147,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Digital answer booklet with print layout (A4, page per question) | Tested | apps/web/test/booklet.test.tsx; printed to PDF in smoke test |
 | Exam Section: hierarchical exam list, new exam, conduct controls with consequence dialogs, allocations, hall tickets, Readiness Board (10 s), exceptions, Candidates with checklist drawer (approve/hold/release/authorize), export lock message | Tested | apps/web/test/readiness-board.test.tsx; smoke-tested through the full post-exam chain |
 | Safe Exam Browser integration: student .seb download on exam cards, Exam Section SEB generator and policy panel | Tested | apps/web/test/secure-client.test.tsx |
-| Evaluator marks screen (assigned queue, anonymization, one explanation per question, criteria) | Tested | apps/web/test/evaluation.test.tsx; smoke-tested |
+| Evaluator marks screen (assigned queue, anonymization, one explanation per question, criteria; lists exactly the approved paper's questions) | Tested | apps/web/test/evaluation.test.tsx; smoke-tested; evaluate-marks.test.tsx |
 | Proctor console (5 s queue, decisions, technical hold, resume for Chief Proctor, timeline with network addresses and device scans) | Tested | apps/web/test/proctor.test.tsx (queue, drawer, timeline sections); decisions smoke-tested |
 | Tenant admin (users/roles, mail config, mail log, SSO, API keys, webhooks, deliveries replay, audit) | In Progress | smoke-tested; no render test yet |
 | Question paper rendering in the workspace (released paper, question navigator, prompt per question) | Tested | apps/web/test/exam-workspace.test.tsx (mocked released paper) |

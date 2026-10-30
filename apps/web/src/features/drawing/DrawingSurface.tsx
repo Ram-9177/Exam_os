@@ -326,6 +326,11 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
         style={{ width: '100%', height: '100%', touchAction: 'none', cursor, ...backgroundStyle(value.background) }}
         className="block bg-sheet rounded-sm"
         onPointerDown={onPointerDown}
+        // A press on the canvas must not move focus: the browser's mousedown default would blur the text box the
+        // Text tool has just opened (it would close empty), and a drag would start selecting page text.
+        onMouseDown={(e) => {
+          if (!readOnly) e.preventDefault();
+        }}
         onPointerMove={onPointerMove}
         onPointerUp={finish}
         onPointerCancel={finish}

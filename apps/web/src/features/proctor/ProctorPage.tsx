@@ -400,7 +400,7 @@ function TimelineView({ timeline, loading, tz, threshold }: { timeline: Timeline
               <li key={n.ip} className="py-2 flex flex-wrap gap-x-4 gap-y-1">
                 <span className="font-mono">{n.ip}</span>
                 <span className="text-ink-2">
-                  first {formatTime(n.first_seen_at, tz)} via {humanize(n.first_source)} · last {formatTime(n.last_seen_at, tz)} · {n.observations} {n.observations === 1 ? 'request' : 'requests'}
+                  first {formatTime(n.first_seen_at, tz)} via {humanize(n.first_source)} · last {formatTime(n.last_seen_at, tz)} · seen {n.observations} {n.observations === 1 ? 'time' : 'times'} (counted at most once a minute)
                 </span>
                 {n.in_allowed_subnet === false ? <StatusChip tone="fix">Outside lab network</StatusChip> : null}
                 {n.user_agent ? <span className="block w-full font-mono text-xs text-ink-3 break-all">{n.user_agent}</span> : null}

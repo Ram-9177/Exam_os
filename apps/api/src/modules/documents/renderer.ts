@@ -387,7 +387,7 @@ export function renderEvidenceHtml(evidence: any, qrDataUrl: string): string {
 
   <h2 style="font-size: 15px; margin-top: 24px; border-bottom: 1px solid #111827; padding-bottom: 4px;">Network Addresses Seen</h2>
   <table class="table">
-    <thead><tr><th>Address</th><th>First seen</th><th>Last seen</th><th>Requests</th><th>First via</th><th>Lab network</th><th>User agent</th></tr></thead>
+    <thead><tr><th>Address</th><th>First seen</th><th>Last seen</th><th>Times seen (≤ 1/min)</th><th>First via</th><th>Lab network</th><th>User agent</th></tr></thead>
     <tbody>
       ${(e.network || []).length > 0 ? (e.network || []).map((n: any) => `
         <tr>

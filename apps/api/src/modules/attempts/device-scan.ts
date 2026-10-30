@@ -30,9 +30,35 @@ export function deriveScanFindings(scan: DeviceScan, tenantTimezone: string | nu
   const w = scan.window;
   if (s.availWidth > 0 && s.availHeight > 0 && (w.outerWidth < s.availWidth * 0.9 || w.outerHeight < s.availHeight * 0.85)) out.add('WINDOW_NOT_MAXIMISED');
   if (w.innerWidth < 800 || w.innerHeight < 500) out.add('SMALL_VIEWPORT');
-  if (tenantTimezone && scan.timezone && scan.timezone !== tenantTimezone) out.add('TIMEZONE_MISMATCH');
+  if (tenantTimezone && scan.timezone && !sameUtcOffset(scan.timezone, tenantTimezone, new Date())) out.add('TIMEZONE_MISMATCH');
   if (scan.battery && !scan.battery.charging && scan.battery.level < 0.3) out.add('LOW_BATTERY_UNPLUGGED');
   return [...out];
+}
+
+/**
+ * Minutes east of UTC for an IANA zone at an instant, or null for a name the runtime does not know.
+ * Zones are compared by offset, not by name: browsers report aliases (Chrome on many Indian machines
+ * says "Asia/Calcutta" while the tenant is configured as "Asia/Kolkata"), and a name check would flag
+ * every one of those students.
+ */
+export function utcOffsetMinutes(timeZone: string, at: Date): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(at);
+    const get = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === type)?.value ?? NaN);
+    const wall = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+    if (!Number.isFinite(wall)) return null;
+    return Math.round((wall - Math.floor(at.getTime() / 1000) * 1000) / 60_000);
+  } catch {
+    return null;
+  }
+}
+
+/** True when both zones are known and keep the same UTC offset at `at`; an unknown zone name is never "the same". */
+export function sameUtcOffset(a: string, b: string, at: Date): boolean {
+  if (a === b) return true;
+  const x = utcOffsetMinutes(a, at);
+  const y = utcOffsetMinutes(b, at);
+  return x !== null && y !== null && x === y;
 }
 
 export function scanVerdict(findings: DeviceScanFinding[]): ScanVerdict {

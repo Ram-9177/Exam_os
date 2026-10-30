@@ -125,6 +125,9 @@ describe('DrawingSurface tools', () => {
     const onChange = vi.fn();
     render(<Surface tool="text" onChange={onChange} />);
     const canvas = screen.getByRole('img', { name: /Diagram 1\./ });
+    // In a real browser the mousedown that follows pointerdown would move focus off the text box the tool just
+    // opened (it would close empty). The canvas cancels it; jsdom has no focus default action, so assert the cancel.
+    expect(fireEvent.mouseDown(canvas, { button: 0 })).toBe(false);
     pointer(canvas, 'pointerDown', 30, 40);
     const box = await screen.findByLabelText('Text to place on the diagram');
     await user.type(box, 'draft');

@@ -93,7 +93,19 @@ Earlier in the same day (previous commits): migrations on a fresh cluster, `SYST
 4. Exam-day runbook: two API processes, `DB_POOL_MAX=20`, worker with all seven loops, Chromium present, `STORAGE_DIR` shared, alerts on `DB_BUSY` count, `attempt_event_log` tripwire violations (should be zero), `seal-closed-exams.pending`, mail lane depth.
 5. O5–O6 before publication of the first results; O7 is a §11 decision for the university.
 
-## 5. How this was produced
+## 5. Full UI rehearsal on merged `main` (headless Chromium, 14 steps)
+
+The exam-day rehearsal (`.agents/workflows/exam-day-rehearsal.md`) was driven through the real web UI against the demo tenant: student readiness (including the system scan, and a second, automation-controlled browser that the scan correctly refused), the Examination Section starting the exam, writing with paragraphs and a whiteboard diagram, a network change, a second display and a blocked F12 during the exam, the Chief Proctor deciding every incident from the timeline, submission with receipt, close, worker sealing and completeness checks, marking, Exam Cell approval, Controller publication, and the student's ledger and booklet. After the fixes below, all 14 steps passed with no browser console errors.
+
+| # | Found by running it | Fix | Test |
+|---|---|---|---|
+| R1 | The evaluator could not record marks: the marking sheet padded every script to Q1–Q5 (a stopgap from before the paper module), so a four-question paper produced an extra question the server refused (`UNKNOWN_QUESTION_ID`) | the sheet lists exactly the approved paper's questions; padding remains only for scripts with no paper on record | `apps/web/test/evaluate-marks.test.tsx` (fails on the old code) |
+| R2 | The whiteboard Text tool never opened its text box under a real mouse: the canvas's mousedown default moved focus to the page, the box blurred and closed empty | the canvas cancels mousedown while editable (also stops drag-selecting page text) | `apps/web/test/drawing.test.tsx` |
+| R3 | Every student in India got a "time zone mismatch" review finding: browsers report `Asia/Calcutta`, tenants are `Asia/Kolkata` | zones compared by UTC offset at scan time; unknown names still flag | `apps/api/test/device-scan.test.ts` |
+| R4 | After publication the candidate drawer kept showing "Candidate approved" and the Authorize publication button | the drawer follows the live candidate list that each action refetches | `apps/web/test/candidates-drawer.test.tsx` (fails on the old code) |
+| R5 | The proctor timeline said "1 request" for an address used all exam (observations are recorded at most once a minute since F18) | the console and the evidence PDF say "seen N times (at most once a minute)" | `apps/web/test/proctor.test.tsx` |
+
+## 6. How this was produced
 
 - Reviews: four parallel read-only audits, each required to cite `file:line` and mark CONFIRMED vs SUSPECTED; every CONFIRMED item was re-read before being fixed or listed.
 - Load: `npx tsx apps/api/scripts/load-smoke.ts --students N --seconds S` against a running API on a fresh `examos_dev` (requires `PLATFORM_BOOTSTRAP_KEY` in the API's environment); the script prints latency percentiles, DB write volumes and the fork/deadlock counts used above.

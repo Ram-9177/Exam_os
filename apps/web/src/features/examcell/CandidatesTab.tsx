@@ -79,7 +79,9 @@ export function CandidatesTab({ examId, tz, active }: { examId: string; tz: stri
         {({ id }) => <TextInput id={id} type="search" placeholder="Register number, hall ticket or name" value={q} onChange={(e) => setQ(e.target.value)} />}
       </Field>
       <Table caption="Candidates" columns={columns} rows={rows} rowKey={(c) => c.attempt_id} empty="No sealed attempts yet. Candidates appear here after submission." />
-      {open ? <CandidateDrawer examId={examId} candidate={open} tz={tz} onClose={() => setOpen(null)} /> : null}
+      {/* The drawer follows the live list (every action refetches it), so a published or held candidate never keeps
+          showing the actions of the state it was opened in. */}
+      {open ? <CandidateDrawer examId={examId} candidate={list.data.candidates.find((c) => c.attempt_id === open.attempt_id) ?? open} tz={tz} onClose={() => setOpen(null)} /> : null}
     </div>
   );
 }

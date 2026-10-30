@@ -57,7 +57,8 @@ describe('Proctor console', () => {
     expect(within(addresses).getByText('10.10.1.20')).toBeInTheDocument();
     expect(within(addresses).getByText('10.10.9.9')).toBeInTheDocument();
     expect(within(addresses).getByText('Outside lab network')).toBeInTheDocument();
-    expect(within(addresses).getByText(/14 requests/)).toBeInTheDocument();
+    // the server records an address at most once a minute, so the console says "seen N times", never "N requests"
+    expect(within(addresses).getByText(/seen 14 times \(counted at most once a minute\)/)).toBeInTheDocument();
 
     expect(within(dialog).getByRole('heading', { name: 'Device scans' })).toBeInTheDocument();
     const scans = within(dialog).getByRole('list', { name: 'Device scans' });

@@ -208,16 +208,22 @@ export function EvaluateHomePage() {
 }
 
 /**
- * PAPER MODULE INTEGRATION POINT (see ExamWorkspace): until the API has a
- * question paper, the marking sheet lists the questions the student answered
- * plus the placeholder list (`?questions=` or Q1..Q5) so unanswered questions
- * can be marked 0. The server refuses marks above 0 for an unanswered question.
+ * The marking sheet lists every question of the approved paper: the booklet
+ * API already returns them all, answered or not (unanswered ones can only be
+ * marked 0). Only a script with no paper on record (exams from before the
+ * paper module) falls back to the answered questions plus a placeholder list
+ * (`?questions=` or Q1..Q5); an explicit `?questions=` list always wins.
+ * Padding a paper-backed script would add questions the server refuses
+ * (UNKNOWN_QUESTION_ID), and the evaluator could not record marks at all.
  */
+const byQuestionId = (a: BookletQuestion, b: BookletQuestion) => a.questionId.localeCompare(b.questionId, undefined, { numeric: true });
 function withPlaceholderQuestions(booklet: Booklet, raw: string | null): Booklet {
+  const fromPaper = booklet.questions.some((q) => q.prompt !== null && q.prompt !== undefined);
+  if (fromPaper && !raw) return { ...booklet, questions: [...booklet.questions].sort(byQuestionId) };
   const ids = (raw ? raw.split(',') : ['Q1', 'Q2', 'Q3', 'Q4', 'Q5']).map((x) => x.trim()).filter((x) => /^[A-Za-z0-9._-]{1,64}$/.test(x));
   const known = new Set(booklet.questions.map((q) => q.questionId));
   const extra: BookletQuestion[] = ids.filter((id) => !known.has(id)).map((id) => ({ questionId: id, answer: { blocks: [] }, answerSha256: null, revision: 0, marks: null, maxMarks: null, explanation: null, criteria: null }));
-  const questions = [...booklet.questions, ...extra].sort((a, b) => a.questionId.localeCompare(b.questionId, undefined, { numeric: true }));
+  const questions = [...booklet.questions, ...extra].sort(byQuestionId);
   return { ...booklet, questions };
 }
 
