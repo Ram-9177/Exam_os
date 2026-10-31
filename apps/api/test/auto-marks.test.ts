@@ -75,3 +75,75 @@ describe('automatic mark proposals', () => {
     expect(proposeMark(step(10), doc('I do not know.')).proposedMarks).toBe(0);
   });
 });
+
+describe('maths, health and coding question kinds', () => {
+  const opts = [{ key: 'A', text: 'Aspirin' }, { key: 'B', text: 'Heparin' }, { key: 'C', text: 'Warfarin' }, { key: 'D', text: 'Paracetamol' }, { key: 'E', text: 'Clopidogrel' }];
+  const choice = (sel: string | string[] | null) => ({ blocks: [{ id: 'c', kind: 'choice', content: { selected: sel } }] });
+  const final = (text: string, working = '') => ({ blocks: [...(working ? [{ id: 'w', kind: 'paragraph', content: working }] : []), { id: 'f', kind: 'final', content: { text } }] });
+
+  it('MCQ from the option buttons, no text reading needed', () => {
+    expect(proposeMark(q({ kind: 'MCQ', max_marks: 2, options: opts, expected_answer: 'B' }), choice('B'))).toMatchObject({ proposedMarks: 2, basis: 'Chose B, which is the answer key.' });
+    expect(proposeMark(q({ kind: 'MCQ', max_marks: 2, options: opts, expected_answer: 'B' }), choice('A'))).toMatchObject({ proposedMarks: 0 });
+    expect(proposeMark(q({ kind: 'MCQ', max_marks: 2, options: opts, expected_answer: 'B' }), choice(null))).toMatchObject({ proposedMarks: 0, method: 'NO_ANSWER' });
+  });
+
+  it('MCQ_MULTI: partial credit for a partly right selection, never below zero, nothing for ticking everything', () => {
+    const multi = q({ kind: 'MCQ_MULTI', max_marks: 4, options: opts, expected_answer: ['A', 'C', 'E'] }); // antiplatelet/anticoagulant… 3 of 5
+    expect(proposeMark(multi, choice(['A', 'C', 'E'])).proposedMarks).toBe(4);
+    expect(proposeMark(multi, choice(['A', 'C'])).proposedMarks).toBe(2.5); // 2/3 → 2.67 → nearest half 2.5
+    expect(proposeMark(multi, choice(['A', 'C', 'B'])).proposedMarks).toBe(0.5); // 2/3 − 1/2 = 0.17 → 0.67 → 0.5
+    expect(proposeMark(multi, choice(['A', 'B', 'C', 'D', 'E'])).proposedMarks).toBe(0); // 1 − 1 = 0
+    expect(proposeMark(multi, choice(['B', 'D'])).proposedMarks).toBe(0); // never negative
+    expect(proposeMark(multi, choice(['A', 'C'])).review).toBe('CHECK_CAREFULLY');
+  });
+
+  it('MATH: the final answer is checked for mathematical equivalence, accepted forms included', () => {
+    const m = q({ kind: 'MATH', max_marks: 3, expected_answer: { expression: 'x^2 + 2x + 1', accepted: ['(x+1)^2'] } });
+    expect(proposeMark(m, final('(x + 1)(x + 1)'))).toMatchObject({ proposedMarks: 3, method: 'ANSWER_KEY' });
+    expect(proposeMark(m, final('y = x² + 2x + 1'))).toMatchObject({ proposedMarks: 3 });
+    expect(proposeMark(m, final('x^2 + 1'))).toMatchObject({ proposedMarks: 0, basis: expect.stringContaining('not equivalent') });
+  });
+
+  it('answer marks from the key; method marks follow a right answer, otherwise the examiner reads the working', () => {
+    const m = q({ kind: 'MATH', max_marks: 5, expected_answer: { expression: '6', answerMarks: 2 } });
+    expect(proposeMark(m, final('6', 'd/dx(3x^2) = 6x, at x = 1 → 6'))).toMatchObject({ proposedMarks: 5 });
+    const wrong = proposeMark(m, final('7', 'd/dx(3x^2) = 6x … slip at the end'));
+    expect(wrong).toMatchObject({ proposedMarks: null, method: 'EXAMINER', review: 'CHECK_CAREFULLY' });
+    expect(wrong.basis).toContain('3 method marks need the examiner');
+  });
+
+  it('NUMERIC with a unit: a right number in the wrong unit earns nothing (a dose in g is not a dose in mg)', () => {
+    const dose = q({ kind: 'NUMERIC', max_marks: 2, expected_answer: { values: [500], tolerance: 0, unit: 'mg' } });
+    expect(proposeMark(dose, final('500 mg'))).toMatchObject({ proposedMarks: 2 });
+    expect(proposeMark(dose, final('500mg every 6 h'))).toMatchObject({ proposedMarks: 2 });
+    const g = proposeMark(dose, final('500 g'));
+    expect(g.proposedMarks).toBe(0);
+    expect(g.basis).toContain('without the unit mg');
+    expect(proposeMark(dose, final('0.5 g')).proposedMarks).toBe(0);
+  });
+
+  it('a must-not-miss step that is missing: no proposed marks, flagged for the examiner', () => {
+    const clinical = q({
+      max_marks: 6,
+      rubric: [
+        { code: 'DX', max: 3, description: 'Diagnosis', keywords: ['myocardial infarction|heart attack'] },
+        { code: 'RED', max: 3, description: 'Red flags', keywords: ['chest pain radiating', 'sweating'], critical: true },
+      ],
+    });
+    const p = proposeMark(clinical, doc('This is a myocardial infarction; give aspirin.'));
+    expect(p).toMatchObject({ proposedMarks: 0, review: 'CHECK_CAREFULLY' });
+    expect(p.basis).toContain('Must-not-miss step RED is missing');
+    expect(proposeMark(clinical, doc('Myocardial infarction: chest pain radiating to the arm, sweating.')).proposedMarks).toBe(6);
+  });
+
+  it('CODE: marks from the share of hidden-test weight passed; not run yet or judge failure goes to the examiner', () => {
+    const c = q({ kind: 'CODE', max_marks: 10 });
+    const program = { blocks: [{ id: 'k', kind: 'code', content: { language: 'python', source: 'print(input())' } }] };
+    expect(proposeMark(c, { blocks: [] })).toMatchObject({ proposedMarks: 0, method: 'NO_ANSWER' });
+    expect(proposeMark(c, program)).toMatchObject({ proposedMarks: null, method: 'EXAMINER' });
+    expect(proposeMark(c, program, { status: 'ERROR', passedWeight: 0, totalWeight: 0, results: [], error: 'judge down' })).toMatchObject({ proposedMarks: null, review: 'CHECK_CAREFULLY' });
+    const done = proposeMark(c, program, { status: 'DONE', passedWeight: 3, totalWeight: 4, results: [{ index: 0, passed: true, verdict: 'passed' }, { index: 1, passed: true, verdict: 'passed' }, { index: 2, passed: false, verdict: 'time limit exceeded' }, { index: 3, passed: true, verdict: 'passed' }] });
+    expect(done).toMatchObject({ proposedMarks: 7.5, method: 'CODE_TESTS', review: 'CHECK_CAREFULLY' });
+    expect(done.basis).toContain('Failed: test 3 (time limit exceeded)');
+  });
+});

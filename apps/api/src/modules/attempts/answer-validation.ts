@@ -1,4 +1,4 @@
-import { CanvasContentSchema, ChoiceContentSchema, PARAGRAPH_MAX_CHARS, type AnswerSave } from '@examos/contracts';
+import { CanvasContentSchema, ChoiceContentSchema, CodeContentSchema, FinalContentSchema, PARAGRAPH_MAX_CHARS, type AnswerSave } from '@examos/contracts';
 import { AppError } from '../../lib/errors.js';
 
 /** Hard ceilings for one answer document; the contract's per-block limits apply inside them. */
@@ -34,7 +34,15 @@ export function validateAnswerOps(ops: AnswerSave['ops'], current: { blocks: Arr
         break;
       }
       case 'choice': {
-        if (!ChoiceContentSchema.safeParse(content).success) throw AppError.unprocessable('ANSWER_INVALID', `ops[${i}]: a choice is {selected: key | null}`);
+        if (!ChoiceContentSchema.safeParse(content).success) throw AppError.unprocessable('ANSWER_INVALID', `ops[${i}]: a choice is {selected: key | [keys] | null}`);
+        break;
+      }
+      case 'final': {
+        if (!FinalContentSchema.safeParse(content).success) throw AppError.unprocessable('ANSWER_INVALID', `ops[${i}]: a final answer is {text} of at most 500 characters`);
+        break;
+      }
+      case 'code': {
+        if (!CodeContentSchema.safeParse(content).success) throw AppError.unprocessable('ANSWER_INVALID', `ops[${i}]: code is {language: c|cpp|java|python, source} of at most 100,000 characters`);
         break;
       }
       default:

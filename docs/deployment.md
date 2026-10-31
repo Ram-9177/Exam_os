@@ -41,3 +41,7 @@ Permissions-Policy: camera=(self), microphone=(self), display-capture=(), window
 ```
 
 `connect-src 'self'` keeps every request from a student's device on the exam origin (the on-device face detector's runtime would otherwise send usage telemetry to Google; the app also refuses it in code). `'wasm-unsafe-eval'` lets the detector run; it is loaded only for exams with the camera presence check on. After every deploy run `SMOKE_BASE_URL=https://<host> SMOKE_HOST=<host> npm run smoke` with the tenant's own staff and student test accounts.
+
+## Coding questions: the judge
+
+Programs run only in a self-hosted Judge0 (https://github.com/judge0/judge0) on its own server: no outbound network, CPU/memory/time limits per run. Set `JUDGE_URL` (and `JUDGE_TOKEN` if the judge requires `X-Auth-Token`) for the API and the worker. Language ids used: C 50, C++ 54, Java 62, Python 3 71 (check your Judge0 version's `/languages`). Load: one run per hidden test per student after the exam, plus limited sample runs during it — size the judge before the first coding exam. Without `JUDGE_URL`, coding answers are marked by examiners only.

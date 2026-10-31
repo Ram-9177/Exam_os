@@ -1,6 +1,7 @@
 import { promptText } from '@examos/contracts';
 import type { ReactNode } from 'react';
-import { isCanvasContent, paragraphText, type AnswerDoc } from '@/lib/answers';
+import { blockHasContent, isCanvasContent, paragraphText, STRUCTURED_KINDS, type AnswerDoc } from '@/lib/answers';
+import { StructuredRender } from '@/features/exam/StructuredAnswer';
 import { formatDateTime } from '@/lib/time';
 import { cn } from '@/ui';
 import { StrokesSvg } from '@/features/drawing/StrokesSvg';
@@ -45,13 +46,17 @@ export function questionLabel(id: string, index: number): string {
 /** The answer rendered as it was written: paragraphs on ruled paper, diagrams from their strokes. */
 export function AnswerRender({ doc, className }: { doc: AnswerDoc; className?: string }) {
   const blocks = doc.blocks ?? [];
-  if (blocks.length === 0 || blocks.every((b) => b.kind === 'paragraph' && !paragraphText(b).trim())) {
+  if (blocks.length === 0 || !blocks.some((b) => (b.kind === 'paragraph' ? !!paragraphText(b).trim() : blockHasContent(b)))) {
     return <p className={cn('ruled ruled-inset text-ink-3 italic min-h-16', className)}>No answer was written.</p>;
   }
   return (
     <div className={cn('flex flex-col gap-3', className)}>
       {blocks.map((b, i) =>
-        b.kind === 'canvas' && isCanvasContent(b.content) ? (
+        STRUCTURED_KINDS.includes(b.kind) ? (
+          <div key={b.id}>
+            <StructuredRender block={b} />
+          </div>
+        ) : b.kind === 'canvas' && isCanvasContent(b.content) ? (
           <figure key={b.id} className="border border-rule-2 rounded-sm bg-sheet p-2 text-ink">
             <StrokesSvg content={b.content} label={`Diagram ${i + 1}`} />
             <figcaption className="text-xs text-ink-2 mt-1">Diagram, drawn by the candidate</figcaption>

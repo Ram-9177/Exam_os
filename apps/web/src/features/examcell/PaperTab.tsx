@@ -95,6 +95,7 @@ export function PaperTab({ exam }: { exam: ExamRow }) {
           rubric: q.rubric,
           expectedAnswer: q.expectedAnswer,
           attachments: q.attachments ?? [],
+          ...(q.kind === 'CODE' && q.codeSpec ? { codeSpec: q.codeSpec } : {}),
         })),
       });
 
@@ -283,9 +284,12 @@ export function PaperTab({ exam }: { exam: ExamRow }) {
                           disabled={!canEdit}
                         >
                           <option value="DESCRIPTIVE">Descriptive</option>
-                          <option value="MCQ">MCQ</option>
+                          <option value="MCQ">MCQ (one correct)</option>
+                          <option value="MCQ_MULTI">MCQ (several correct)</option>
                           <option value="NUMERIC">Numeric</option>
+                          <option value="MATH">Maths expression</option>
                           <option value="DRAWING">Drawing</option>
+                          <option value="CODE">Coding</option>
                         </Select>
                       )}
                     </Field>
@@ -417,38 +421,9 @@ export function RubricEditor({ question, disabled, onChange }: { question: Paper
   const rubric: Rubric = question.rubric ?? [];
   const setStep = (i: number, patch: Partial<Rubric[number]>) => onChange({ rubric: rubric.map((r, k) => (k === i ? { ...r, ...patch } : r)) });
   const sum = rubric.reduce((a, r) => a + (Number(r.max) || 0), 0);
-  const ea = question.expectedAnswer as unknown;
-  const keyText = question.kind === 'MCQ' ? (Array.isArray(ea) ? ea.join(', ') : typeof ea === 'string' ? ea : '') : question.kind === 'NUMERIC' ? (ea && typeof ea === 'object' && Array.isArray((ea as { values?: number[] }).values) ? (ea as { values: number[] }).values.join(', ') : typeof ea === 'number' ? String(ea) : '') : '';
-  const tolerance = ea && typeof ea === 'object' && typeof (ea as { tolerance?: number }).tolerance === 'number' ? String((ea as { tolerance: number }).tolerance) : '';
   return (
     <section className="space-y-3 border-t border-rule pt-3" aria-label={`Marking scheme for ${question.questionId}`}>
-      {question.kind === 'MCQ' || question.kind === 'NUMERIC' ? (
-        <div className="flex flex-wrap gap-3">
-          <Field label={question.kind === 'MCQ' ? 'Answer key (option)' : 'Expected values'} hint={question.kind === 'MCQ' ? 'e.g. B, or B, D when either is correct' : 'e.g. 9.33, 5.33'} className="w-56">
-            {({ id, describedBy }) => (
-              <RawListInput
-                id={id}
-                describedBy={describedBy}
-                initial={keyText}
-                separator=","
-                disabled={disabled}
-                onList={(parts) => {
-                  if (question.kind === 'MCQ') onChange({ expectedAnswer: parts.length > 1 ? parts.map((x) => x.toUpperCase()) : (parts[0] ?? '').toUpperCase() || undefined });
-                  else {
-                    const values = parts.map(Number).filter((n) => Number.isFinite(n));
-                    onChange({ expectedAnswer: values.length ? { values, ...(tolerance ? { tolerance: Number(tolerance) } : {}) } : undefined });
-                  }
-                }}
-              />
-            )}
-          </Field>
-          {question.kind === 'NUMERIC' ? (
-            <Field label="Tolerance" hint="± per value; default 1 %" className="w-32">
-              {({ id, describedBy }) => <TextInput id={id} aria-describedby={describedBy} type="number" step="0.01" min={0} value={tolerance} disabled={disabled} onChange={(e) => onChange({ expectedAnswer: { values: keyText.split(',').map((x) => x.trim()).filter(Boolean).map(Number).filter((n) => Number.isFinite(n)), ...(e.target.value ? { tolerance: Number(e.target.value) } : {}) } })} />}
-            </Field>
-          ) : null}
-        </div>
-      ) : null}
+      <AnswerKeyEditor question={question} disabled={disabled} onChange={onChange} />
       <div className="flex items-baseline justify-between gap-3">
         <h4 className="text-sm font-semibold">Marking steps</h4>
         {rubric.length ? <span className={sum === Number(question.maxMarks) ? 'text-xs text-ink-2' : 'text-xs text-fix'} role="status">{sum === Number(question.maxMarks) ? `Steps add up to ${sum} marks` : `Steps add up to ${sum}; the question is worth ${question.maxMarks}`}</span> : null}
@@ -471,6 +446,10 @@ export function RubricEditor({ question, disabled, onChange }: { question: Paper
               </select>
             )}
           </Field>
+          <label className="sm:col-span-4 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={!!r.critical} disabled={disabled} onChange={(e) => setStep(i, { critical: e.target.checked })} />
+            Must not miss (missing it means no proposed marks and a warning for the examiner — e.g. a red-flag symptom or a safe dose)
+          </label>
           <Field label="Key terms a full answer mentions" hint="One per line; use | for alternatives (hold and wait|hold-and-wait)" className="sm:col-span-4">
             {({ id, describedBy }) => <RawListInput id={id} describedBy={describedBy} rows={2} initial={(r.keywords ?? []).join('\n')} separator={'\n'} disabled={disabled} onList={(xs) => setStep(i, { keywords: xs })} />}
           </Field>
@@ -501,4 +480,105 @@ function RawListInput({ id, describedBy, initial, separator, disabled, onList, r
     onList(v.split(separator).map((x) => x.trim()).filter(Boolean));
   };
   return rows ? <TextArea id={id} aria-describedby={describedBy} rows={rows} value={raw} disabled={disabled} onChange={(e) => change(e.target.value)} /> : <TextInput id={id} aria-describedby={describedBy} value={raw} disabled={disabled} onChange={(e) => change(e.target.value)} />;
+}
+
+const LANGS: Array<['c' | 'cpp' | 'java' | 'python', string]> = [['c', 'C'], ['cpp', 'C++'], ['java', 'Java'], ['python', 'Python 3']];
+type Obj = Record<string, unknown>;
+
+/** The key the system marks against: options and correct ones, expected values/expression, or tests for a program. */
+function AnswerKeyEditor({ question, disabled, onChange }: { question: PaperQuestion; disabled: boolean; onChange: (patch: Partial<PaperQuestion>) => void }) {
+  const ea = (question.expectedAnswer ?? null) as unknown;
+  const obj = (ea && typeof ea === 'object' && !Array.isArray(ea) ? ea : {}) as Obj;
+  const setKey = (patch: Obj) => onChange({ expectedAnswer: { ...obj, ...patch } });
+  if (question.kind === 'MCQ' || question.kind === 'MCQ_MULTI') {
+    const options = question.options ?? [];
+    const keys = new Set((Array.isArray(ea) ? ea : typeof ea === 'string' ? [ea] : []) as string[]);
+    const toggle = (k: string) => {
+      if (question.kind === 'MCQ') onChange({ expectedAnswer: k });
+      else {
+        const next = new Set(keys);
+        if (next.has(k)) next.delete(k);
+        else next.add(k);
+        onChange({ expectedAnswer: [...next].sort() });
+      }
+    };
+    return (
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-semibold">Options {question.kind === 'MCQ' ? '(select the correct one)' : '(tick every correct one; no negative marking)'}</legend>
+        {options.map((o, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input type={question.kind === 'MCQ' ? 'radio' : 'checkbox'} name={`key-${question.questionId}`} aria-label={`Option ${o.key} is correct`} checked={keys.has(o.key)} disabled={disabled} onChange={() => toggle(o.key)} />
+            <span className="font-mono w-5">{o.key}</span>
+            <TextInput aria-label={`Option ${o.key} text`} value={o.text} disabled={disabled} onChange={(e) => onChange({ options: options.map((x, k) => (k === i ? { ...x, text: e.target.value } : x)) })} />
+            {!disabled ? <Button size="sm" variant="ghost" onClick={() => onChange({ options: options.filter((_, k) => k !== i).map((x, k) => ({ ...x, key: String.fromCharCode(65 + k) })), expectedAnswer: question.kind === 'MCQ' ? undefined : [] })}>Remove</Button> : null}
+          </div>
+        ))}
+        {!disabled && options.length < 10 ? <Button size="sm" onClick={() => onChange({ options: [...options, { key: String.fromCharCode(65 + options.length), text: '' }] })}>Add option</Button> : null}
+      </fieldset>
+    );
+  }
+  if (question.kind === 'NUMERIC') {
+    const values = Array.isArray(obj['values']) ? (obj['values'] as number[]).join(', ') : typeof ea === 'number' ? String(ea) : '';
+    return (
+      <div className="flex flex-wrap gap-3">
+        <Field label="Expected values" hint="e.g. 9.33, 5.33" className="w-48">{({ id, describedBy }) => <RawListInput id={id} describedBy={describedBy} initial={values} separator="," disabled={disabled} onList={(xs) => setKey({ values: xs.map(Number).filter((n) => Number.isFinite(n)) })} />}</Field>
+        <Field label="Tolerance" hint="± per value; default 1 %" className="w-28">{({ id }) => <TextInput id={id} type="number" step="0.01" min={0} value={typeof obj['tolerance'] === 'number' ? String(obj['tolerance']) : ''} disabled={disabled} onChange={(e) => setKey({ tolerance: e.target.value === '' ? undefined : Number(e.target.value) })} />}</Field>
+        <Field label="Unit" hint="e.g. mg, ms; required in the answer" className="w-28">{({ id }) => <TextInput id={id} value={typeof obj['unit'] === 'string' ? obj['unit'] : ''} disabled={disabled} onChange={(e) => setKey({ unit: e.target.value || undefined })} />}</Field>
+        <Field label="Answer marks" hint="the rest are method marks" className="w-32">{({ id }) => <TextInput id={id} type="number" step="0.5" min={0} value={typeof obj['answerMarks'] === 'number' ? String(obj['answerMarks']) : ''} disabled={disabled} onChange={(e) => setKey({ answerMarks: e.target.value === '' ? undefined : Number(e.target.value) })} />}</Field>
+      </div>
+    );
+  }
+  if (question.kind === 'MATH') {
+    return (
+      <div className="flex flex-wrap gap-3">
+        <Field label="Answer (expression)" hint="any equivalent form is accepted, e.g. x^2+2x+1" className="w-64">{({ id, describedBy }) => <TextInput id={id} aria-describedby={describedBy} className="font-mono" value={typeof obj['expression'] === 'string' ? obj['expression'] : typeof ea === 'string' ? ea : ''} disabled={disabled} onChange={(e) => setKey({ expression: e.target.value })} />}</Field>
+        <Field label="Answer marks" hint="the rest are method marks" className="w-32">{({ id }) => <TextInput id={id} type="number" step="0.5" min={0} value={typeof obj['answerMarks'] === 'number' ? String(obj['answerMarks']) : ''} disabled={disabled} onChange={(e) => setKey({ answerMarks: e.target.value === '' ? undefined : Number(e.target.value) })} />}</Field>
+      </div>
+    );
+  }
+  if (question.kind === 'CODE') {
+    const spec = question.codeSpec ?? { languages: ['python'] as Array<'c' | 'cpp' | 'java' | 'python'>, samples: [], sampleRunsAllowed: 10, timeLimitMs: 2000, memoryMb: 128 };
+    const setSpec = (patch: Partial<NonNullable<PaperQuestion['codeSpec']>>) => onChange({ codeSpec: { ...spec, ...patch } });
+    const tests = (Array.isArray(obj['tests']) ? obj['tests'] : []) as Array<{ input: string; expected: string; weight?: number }>;
+    const pairs = (list: Array<{ input: string; expected: string; weight?: number }>, setList: (l: Array<{ input: string; expected: string; weight?: number }>) => void, label: string, weights: boolean) => (
+      <div className="space-y-2">
+        {list.map((t, i) => (
+          <div key={i} className={weights ? 'grid gap-2 sm:grid-cols-[1fr_1fr_5rem_auto]' : 'grid gap-2 sm:grid-cols-[1fr_1fr_auto]'}>
+            <TextArea aria-label={`${label} ${i + 1} input`} rows={2} className="font-mono text-xs" value={t.input} disabled={disabled} onChange={(e) => setList(list.map((x, k) => (k === i ? { ...x, input: e.target.value } : x)))} />
+            <TextArea aria-label={`${label} ${i + 1} expected output`} rows={2} className="font-mono text-xs" value={t.expected} disabled={disabled} onChange={(e) => setList(list.map((x, k) => (k === i ? { ...x, expected: e.target.value } : x)))} />
+            {weights ? <TextInput aria-label={`${label} ${i + 1} weight`} type="number" min={1} placeholder="1" value={t.weight ?? ''} disabled={disabled} onChange={(e) => setList(list.map((x, k) => (k === i ? { ...x, weight: e.target.value === '' ? undefined : Math.max(1, Number(e.target.value) || 1) } : x)))} /> : null}
+            {!disabled ? <Button size="sm" variant="ghost" onClick={() => setList(list.filter((_, k) => k !== i))}>Remove</Button> : null}
+          </div>
+        ))}
+        {!disabled ? <Button size="sm" onClick={() => setList([...list, { input: '', expected: '' }])}>Add {label.toLowerCase()}</Button> : null}
+      </div>
+    );
+    return (
+      <div className="space-y-3">
+        <fieldset className="flex flex-wrap gap-3">
+          <legend className="text-sm font-semibold mb-1">Languages allowed</legend>
+          {LANGS.map(([id, label]) => (
+            <label key={id} className="flex items-center gap-1 text-sm">
+              <input type="checkbox" checked={spec.languages.includes(id)} disabled={disabled} onChange={(e) => setSpec({ languages: e.target.checked ? [...spec.languages, id] : spec.languages.filter((l) => l !== id) })} />
+              {label}
+            </label>
+          ))}
+        </fieldset>
+        <div className="flex flex-wrap gap-3">
+          <Field label="Time limit (ms)" className="w-32">{({ id }) => <TextInput id={id} type="number" min={100} max={10000} value={spec.timeLimitMs ?? 2000} disabled={disabled} onChange={(e) => setSpec({ timeLimitMs: Number(e.target.value) })} />}</Field>
+          <Field label="Memory (MB)" className="w-28">{({ id }) => <TextInput id={id} type="number" min={16} max={512} value={spec.memoryMb ?? 128} disabled={disabled} onChange={(e) => setSpec({ memoryMb: Number(e.target.value) })} />}</Field>
+          <Field label="Sample runs per student" className="w-44">{({ id }) => <TextInput id={id} type="number" min={0} max={50} value={spec.sampleRunsAllowed ?? 10} disabled={disabled} onChange={(e) => setSpec({ sampleRunsAllowed: Number(e.target.value) })} />}</Field>
+        </div>
+        <div>
+          <p className="text-sm font-semibold">Sample tests (students see these and may run them)</p>
+          {pairs(spec.samples ?? [], (l) => setSpec({ samples: l.map(({ input, expected }) => ({ input, expected })) }), 'Sample', false)}
+        </div>
+        <div>
+          <p className="text-sm font-semibold">Hidden tests (grade the program after the exam; never shown to students)</p>
+          {pairs(tests, (l) => setKey({ tests: l }), 'Hidden test', true)}
+        </div>
+      </div>
+    );
+  }
+  return null;
 }

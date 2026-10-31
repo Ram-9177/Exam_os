@@ -6,7 +6,21 @@ import { canonicalJson, sha256Hex } from './canonical';
  * carry plain text; canvas blocks carry vector strokes. Equation and table
  * kinds are accepted by the API but the editor does not create them yet.
  */
-export type BlockKind = 'paragraph' | 'equation' | 'table' | 'canvas';
+export type BlockKind = 'paragraph' | 'equation' | 'table' | 'canvas' | 'choice' | 'final' | 'code';
+/** Blocks with their own controls (option buttons, final-answer box, code editor), not shown as paragraphs. */
+export const STRUCTURED_KINDS: readonly BlockKind[] = ['choice', 'final', 'code'];
+export type CodeLanguageId = 'c' | 'cpp' | 'java' | 'python';
+
+/** Whether a block holds something the student wrote or chose. */
+export function blockHasContent(b: Block): boolean {
+  const c = b.content as Record<string, unknown> | string | null | undefined;
+  if (typeof c === 'string') return c.trim().length > 0;
+  if (!c) return false;
+  if (b.kind === 'choice') return Array.isArray(c['selected']) ? (c['selected'] as unknown[]).length > 0 : c['selected'] !== null && c['selected'] !== undefined;
+  if (b.kind === 'final') return typeof c['text'] === 'string' && c['text'].trim().length > 0;
+  if (b.kind === 'code') return typeof c['source'] === 'string' && c['source'].trim().length > 0;
+  return true;
+}
 
 export interface Block {
   id: string;

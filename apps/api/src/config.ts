@@ -26,6 +26,9 @@ const EnvSchema = z.object({
   ACTIVATION_TTL_HOURS: z.coerce.number().int().min(1).max(168).default(48),
   ADMISSION_GRANT_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
   LOG_LEVEL: z.string().default('info'),
+  /** Self-hosted Judge0 (isolated sandbox) that runs CODE answers; without it code is marked by examiners only. */
+  JUDGE_URL: z.string().url().optional(),
+  JUDGE_TOKEN: z.string().optional(),
   EXAMOS_ALLOW_HTTP_WEBHOOKS: z.string().optional(),
 });
 

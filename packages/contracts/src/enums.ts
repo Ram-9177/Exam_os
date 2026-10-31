@@ -23,7 +23,15 @@ export type ExamStatus = (typeof EXAM_STATUSES)[number];
 export const PAPER_STATUSES = ['DRAFT', 'REVIEW', 'APPROVED', 'SUPERSEDED'] as const;
 export type PaperStatus = (typeof PAPER_STATUSES)[number];
 
-export const QUESTION_KINDS = ['DESCRIPTIVE', 'MCQ', 'NUMERIC', 'DRAWING'] as const;
+/**
+ * DESCRIPTIVE written answer · MCQ one correct option · MCQ_MULTI several correct options (partial credit, never below
+ * zero) · NUMERIC a number (units, tolerance) · MATH an expression checked for mathematical equivalence · DRAWING a
+ * diagram (examiner) · CODE a program run against the examiner's tests in a sandbox.
+ */
+export const QUESTION_KINDS = ['DESCRIPTIVE', 'MCQ', 'MCQ_MULTI', 'NUMERIC', 'MATH', 'DRAWING', 'CODE'] as const;
+/** Languages a CODE question may allow (the judge maps each to its compiler/runtime). */
+export const CODE_LANGUAGES = ['c', 'cpp', 'java', 'python'] as const;
+export type CodeLanguage = (typeof CODE_LANGUAGES)[number];
 export type QuestionKind = (typeof QUESTION_KINDS)[number];
 
 export const DOC_KINDS = ['BOOKLET_PDF', 'HALL_TICKET_PDF', 'EVIDENCE_PDF'] as const;

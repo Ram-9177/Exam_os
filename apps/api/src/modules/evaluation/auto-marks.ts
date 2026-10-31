@@ -1,4 +1,5 @@
 import type { Knex } from '@examos/db';
+import { equivalent } from './math-equivalence.js';
 
 /**
  * Automatic mark proposals. Deterministic and explainable: the same answer always gets the same proposal, and every
@@ -12,7 +13,7 @@ import type { Knex } from '@examos/db';
  *           share of key terms present, rounded down to half marks.
  *  else     no proposal: the examiner marks it (drawings, criteria without key terms).
  */
-export type ProposalMethod = 'NO_ANSWER' | 'ANSWER_KEY' | 'NUMERIC_KEY' | 'RUBRIC_TERMS' | 'EXAMINER';
+export type ProposalMethod = 'NO_ANSWER' | 'ANSWER_KEY' | 'NUMERIC_KEY' | 'RUBRIC_TERMS' | 'CODE_TESTS' | 'EXAMINER';
 
 export interface ProposedCriterion {
   code: string;
@@ -64,6 +65,7 @@ export function answerText(content: unknown): { text: string; hasDrawing: boolea
   let hasDrawing = false;
   for (const b of blocks) {
     if (typeof b.content === 'string') parts.push(b.content);
+    else if (b.kind === 'final' && b.content && typeof (b.content as { text?: unknown }).text === 'string') parts.push((b.content as { text: string }).text);
     else if (b.kind === 'canvas' && b.content && typeof b.content === 'object') {
       const strokes = ((b.content as { strokes?: Array<{ text?: unknown }> }).strokes ?? []) as Array<{ text?: unknown }>;
       if (strokes.length) hasDrawing = true;
@@ -71,6 +73,23 @@ export function answerText(content: unknown): { text: string; hasDrawing: boolea
     }
   }
   return { text: parts.join('\n').trim(), hasDrawing };
+}
+
+/** The structured parts of an answer: the option(s) chosen, the typed final answer, the program. */
+export function answerParts(content: unknown): { selected: string[] | null; final: string | null; code: { language: string; source: string } | null } {
+  const blocks = ((content as { blocks?: Array<{ kind?: string; content?: unknown }> } | null)?.blocks ?? []) as Array<{ kind?: string; content?: unknown }>;
+  let selected: string[] | null = null;
+  let final: string | null = null;
+  let code: { language: string; source: string } | null = null;
+  for (const b of blocks) {
+    const c = b.content as Record<string, unknown> | null;
+    if (b.kind === 'choice' && c) {
+      const v = c['selected'];
+      selected = v === null || v === undefined ? [] : (Array.isArray(v) ? v : [v]).map((x) => String(x).toUpperCase());
+    } else if (b.kind === 'final' && c && typeof c['text'] === 'string' && c['text'].trim()) final = c['text'].trim();
+    else if (b.kind === 'code' && c && typeof c['source'] === 'string' && c['source'].trim()) code = { language: String(c['language']), source: c['source'] };
+  }
+  return { selected, final, code };
 }
 
 /** A key term matches as a whole phrase; `a|b` lists alternatives. */
@@ -83,10 +102,16 @@ function termFound(text: string, term: string): string | null {
   return null;
 }
 
-function mcq(q: PaperQuestionRow, text: string, max: number): MarkProposal | null {
+function mcq(q: PaperQuestionRow, text: string, max: number, selected: string[] | null = null): MarkProposal | null {
   const keys = (Array.isArray(q.expected_answer) ? q.expected_answer : [q.expected_answer]).filter((k): k is string => typeof k === 'string' && k.trim() !== '').map((k) => k.trim().toUpperCase());
   const options = (Array.isArray(q.options) ? q.options : []) as Array<{ key: string; text: string }>;
   if (!keys.length || !options.length) return null;
+  if (selected && selected.length) {
+    // the student picked with the option buttons: no reading of text needed
+    const base = { questionId: q.question_id, maxMarks: max, method: 'ANSWER_KEY' as const };
+    if (selected.length > 1) return { ...base, proposedMarks: 0, basis: `More than one option chosen (${selected.join(', ')}); one answer is expected. Key: ${keys.join(' or ')}.` };
+    return keys.includes(selected[0]!) ? { ...base, proposedMarks: max, basis: `Chose ${selected[0]}, which is the answer key.` } : { ...base, proposedMarks: 0, basis: `Chose ${selected[0]}; the answer key is ${keys.join(' or ')}.` };
+  }
   // Only explicit choices count: the bare key ("B"), "(B)", "Option B", "Answer: B", a line that is just the key,
   // or the full text of an option. A capital letter inside a sentence ("A process is…") is not a choice.
   const chosen = new Set<string>();
@@ -108,34 +133,9 @@ function mcq(q: PaperQuestionRow, text: string, max: number): MarkProposal | nul
   return keys.includes(c!) ? { ...base, proposedMarks: max, basis: `Chose ${c}, which is the answer key.` } : { ...base, proposedMarks: 0, basis: `Chose ${c}; the answer key is ${keys.join(' or ')}.` };
 }
 
-function numeric(q: PaperQuestionRow, text: string, max: number): MarkProposal | null {
-  const ea = q.expected_answer;
-  let values: number[] = [];
-  let tolerance: number | null = null;
-  if (typeof ea === 'number') values = [ea];
-  else if (Array.isArray(ea)) values = ea.filter((v): v is number => typeof v === 'number');
-  else if (ea && typeof ea === 'object') {
-    const o = ea as { values?: unknown; value?: unknown; tolerance?: unknown };
-    values = (Array.isArray(o.values) ? o.values : [o.value]).filter((v): v is number => typeof v === 'number');
-    tolerance = typeof o.tolerance === 'number' ? o.tolerance : null;
-  }
-  if (!values.length) return null;
-  const found = [...text.replace(/(\d),(\d{3})/g, '$1$2').matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => Number(m[0]));
-  const hits = values.map((v) => found.some((n) => Math.abs(n - v) <= (tolerance ?? Math.max(0.01, Math.abs(v) * 0.01))));
-  const n = hits.filter(Boolean).length;
-  const marks = half((max * n) / values.length);
-  return {
-    questionId: q.question_id,
-    maxMarks: max,
-    proposedMarks: marks,
-    method: 'NUMERIC_KEY',
-    review: n > 0 && n < values.length ? 'CHECK_CAREFULLY' : 'ROUTINE',
-    basis: `${n} of ${values.length} expected ${values.length === 1 ? 'value' : 'values'} found (${values.map((v, i) => `${v}${hits[i] ? ' ✓' : ' ✗'}`).join(', ')}; tolerance ${tolerance ?? '1 %'}). Working is not checked automatically.`,
-  };
-}
 
 function rubricTerms(q: PaperQuestionRow, text: string, max: number): MarkProposal | null {
-  const rubric = (Array.isArray(q.rubric) ? q.rubric : []) as Array<{ code: string; max: number; description: string; keywords?: string[]; difficulty?: number }>;
+  const rubric = (Array.isArray(q.rubric) ? q.rubric : []) as Array<{ code: string; max: number; description: string; keywords?: string[]; difficulty?: number; critical?: boolean }>;
   if (!rubric.length || rubric.some((c) => !Array.isArray(c.keywords) || c.keywords.length === 0)) return null;
   let partial = false;
   const criteria: ProposedCriterion[] = rubric.map((c) => {
@@ -156,6 +156,20 @@ function rubricTerms(q: PaperQuestionRow, text: string, max: number): MarkPropos
     };
   });
   const total = Math.min(max, criteria.reduce((a, c) => a + c.awarded, 0));
+  // "Must not miss" steps (a red-flag symptom, a safe dose, a safety check): missing one means no proposed marks for
+  // the question — the examiner reads it with a warning and decides.
+  const missedCritical = rubric.filter((c, i) => c.critical && criteria[i]!.awarded === 0).map((c) => c.code);
+  if (missedCritical.length) {
+    return {
+      questionId: q.question_id,
+      maxMarks: max,
+      proposedMarks: 0,
+      method: 'RUBRIC_TERMS',
+      review: 'CHECK_CAREFULLY',
+      basis: `Must-not-miss step ${missedCritical.join(', ')} is missing, so the system proposes 0 and flags the answer. The examiner reads it and decides; other steps found would have earned ${total}.`,
+      criteria,
+    };
+  }
   return {
     questionId: q.question_id,
     maxMarks: max,
@@ -167,11 +181,135 @@ function rubricTerms(q: PaperQuestionRow, text: string, max: number): MarkPropos
   };
 }
 
-export function proposeMark(q: PaperQuestionRow, content: unknown): MarkProposal {
+/**
+ * MCQ_MULTI: several correct options. Credit = correct chosen / all correct − wrong chosen / all wrong, never below
+ * zero (no negative marking): ticking every option earns nothing, a partly right selection earns partly.
+ */
+function mcqMulti(q: PaperQuestionRow, max: number, selected: string[] | null): MarkProposal | null {
+  const keys = (Array.isArray(q.expected_answer) ? q.expected_answer : [q.expected_answer]).filter((k): k is string => typeof k === 'string').map((k) => k.trim().toUpperCase());
+  const options = ((Array.isArray(q.options) ? q.options : []) as Array<{ key: string }>).map((o) => String(o.key).toUpperCase());
+  if (!keys.length || !options.length) return null;
+  if (!selected || !selected.length) return { questionId: q.question_id, maxMarks: max, proposedMarks: 0, method: 'ANSWER_KEY', basis: 'No option chosen.' };
+  const wrongOptions = options.filter((o) => !keys.includes(o));
+  const right = selected.filter((x) => keys.includes(x)).length;
+  const wrong = selected.filter((x) => !keys.includes(x)).length;
+  const credit = Math.max(0, right / keys.length - (wrongOptions.length ? wrong / wrongOptions.length : 0));
+  const marks = Math.min(max, nearestHalf(max * credit));
+  return {
+    questionId: q.question_id,
+    maxMarks: max,
+    proposedMarks: marks,
+    method: 'ANSWER_KEY',
+    review: marks > 0 && marks < max ? 'CHECK_CAREFULLY' : 'ROUTINE',
+    basis: `Chose ${selected.join(', ')}; correct options are ${keys.join(', ')}. ${right} of ${keys.length} correct chosen, ${wrong} wrong chosen. Partial credit, never below zero.`,
+  };
+}
+
+interface AnswerSpec {
+  answerMarks?: number;
+  unit?: string;
+}
+
+/** Answer marks from the key; method marks follow a right answer, otherwise the examiner judges the working. */
+function withMethodMarks(q: PaperQuestionRow, max: number, method: ProposalMethod, correctShare: number, answerBasis: string, spec: AnswerSpec): MarkProposal {
+  const answerMarks = typeof spec.answerMarks === 'number' && spec.answerMarks > 0 && spec.answerMarks <= max ? spec.answerMarks : max;
+  const methodMarks = Math.round((max - answerMarks) * 100) / 100;
+  const answerAwarded = nearestHalf(answerMarks * correctShare);
+  if (methodMarks > 0 && correctShare < 1) {
+    return { questionId: q.question_id, maxMarks: max, proposedMarks: null, method: 'EXAMINER', review: 'CHECK_CAREFULLY', basis: `${answerBasis} Answer marks ${answerAwarded} of ${answerMarks}. The ${methodMarks} method marks need the examiner: read the working (an error carried forward is not punished twice).` };
+  }
+  return { questionId: q.question_id, maxMarks: max, proposedMarks: Math.min(max, answerAwarded + (correctShare >= 1 ? methodMarks : 0)), method, review: correctShare > 0 && correctShare < 1 ? 'CHECK_CAREFULLY' : 'ROUTINE', basis: methodMarks > 0 ? `${answerBasis} Right answer: method marks follow.` : answerBasis };
+}
+
+/** A number counts only with the expected unit when the key names one (a dose in mg is not a dose in g). */
+function unitOk(text: string, numberIndex: number, numberLength: number, unit: string | undefined): boolean {
+  if (!unit) return true;
+  const after = text.slice(numberIndex + numberLength, numberIndex + numberLength + 24).trim().toLowerCase();
+  return after.startsWith(unit.toLowerCase());
+}
+
+function numericKeyed(q: PaperQuestionRow, text: string, max: number): MarkProposal | null {
+  const ea = q.expected_answer;
+  let values: number[] = [];
+  let tolerance: number | null = null;
+  let spec: AnswerSpec = {};
+  if (typeof ea === 'number') values = [ea];
+  else if (Array.isArray(ea)) values = ea.filter((v): v is number => typeof v === 'number');
+  else if (ea && typeof ea === 'object') {
+    const o = ea as { values?: unknown; value?: unknown; tolerance?: unknown; unit?: unknown; answerMarks?: unknown };
+    values = (Array.isArray(o.values) ? o.values : [o.value]).filter((v): v is number => typeof v === 'number');
+    tolerance = typeof o.tolerance === 'number' ? o.tolerance : null;
+    spec = { unit: typeof o.unit === 'string' && o.unit.trim() ? o.unit.trim() : undefined, answerMarks: typeof o.answerMarks === 'number' ? o.answerMarks : undefined };
+  }
+  if (!values.length) return null;
+  const clean = text.replace(/(\d),(\d{3})/g, '$1$2');
+  const found = [...clean.matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => ({ n: Number(m[0]), at: m.index ?? 0, len: m[0].length }));
+  const tol = (v: number) => tolerance ?? Math.max(0.01, Math.abs(v) * 0.01);
+  let unitMiss = 0;
+  const hits = values.map((v) => {
+    const near = found.filter((f) => Math.abs(f.n - v) <= tol(v));
+    if (!near.length) return false;
+    if (near.some((f) => unitOk(clean, f.at, f.len, spec.unit))) return true;
+    unitMiss++;
+    return false;
+  });
+  const n = hits.filter(Boolean).length;
+  const basis = `${n} of ${values.length} expected ${values.length === 1 ? 'value' : 'values'} found (${values.map((v, i) => `${v}${spec.unit ? ` ${spec.unit}` : ''}${hits[i] ? ' ✓' : ' ✗'}`).join(', ')}; tolerance ${tolerance ?? '1 %'}).${unitMiss ? ` ${unitMiss} right number${unitMiss > 1 ? 's' : ''} without the unit ${spec.unit}: no credit for those.` : ''}`;
+  return withMethodMarks(q, max, 'NUMERIC_KEY', n / values.length, basis, spec);
+}
+
+/** MATH: the final answer must be mathematically equivalent to the key (or one of its accepted forms). */
+function mathKeyed(q: PaperQuestionRow, finalText: string | null, text: string, max: number): MarkProposal | null {
+  const ea = q.expected_answer as { expression?: unknown; accepted?: unknown; answerMarks?: unknown } | string | null;
+  const forms = typeof ea === 'string' ? [ea] : ea && typeof ea === 'object' ? [ea.expression, ...(Array.isArray(ea.accepted) ? ea.accepted : [])].filter((x): x is string => typeof x === 'string' && x.trim() !== '') : [];
+  if (!forms.length) return null;
+  const spec: AnswerSpec = ea && typeof ea === 'object' && typeof ea.answerMarks === 'number' ? { answerMarks: ea.answerMarks } : {};
+  const candidate = finalText ?? text.split('\n').map((l) => l.trim()).filter(Boolean).pop() ?? '';
+  const answer = candidate.replace(/^.*=\s*/, ''); // "y = 2x+2" → "2x+2"
+  const ok = forms.some((f) => equivalent(answer, f.replace(/^.*=\s*/, '')));
+  return withMethodMarks(q, max, 'ANSWER_KEY', ok ? 1 : 0, ok ? `Final answer "${candidate}" is equivalent to the key.` : `Final answer "${candidate || '(none)'}" is not equivalent to the key ${forms[0]}.`, spec);
+}
+
+/** CODE: share of the hidden tests' weight the program passed in the sandbox. */
+function codeGraded(q: PaperQuestionRow, max: number, run: CodeRunSummary | undefined): MarkProposal {
+  const base = { questionId: q.question_id, maxMarks: max };
+  if (!run) return { ...base, proposedMarks: null, method: 'EXAMINER', basis: 'The program has not been run against the tests yet; the examiner marks it, or re-runs the evaluation later.' };
+  if (run.status !== 'DONE' || !run.totalWeight) return { ...base, proposedMarks: null, method: 'EXAMINER', review: 'CHECK_CAREFULLY', basis: `The judge could not run the program (${run.error ?? run.status}); the examiner marks it.` };
+  const share = run.passedWeight / run.totalWeight;
+  const failed = run.results.filter((r) => !r.passed);
+  return {
+    ...base,
+    proposedMarks: Math.min(max, nearestHalf(max * share)),
+    method: 'CODE_TESTS',
+    review: share > 0 && share < 1 ? 'CHECK_CAREFULLY' : 'ROUTINE',
+    basis: `${run.results.length - failed.length} of ${run.results.length} hidden tests passed (${Math.round(share * 100)} % of the test weight).${failed.length ? ` Failed: ${failed.slice(0, 5).map((r) => `test ${r.index + 1} (${r.verdict})`).join(', ')}${failed.length > 5 ? ', …' : ''}.` : ''} Code quality and approach are the examiner's judgement.`,
+  };
+}
+
+export interface CodeRunSummary {
+  status: 'QUEUED' | 'DONE' | 'ERROR';
+  passedWeight: number;
+  totalWeight: number;
+  results: Array<{ index: number; passed: boolean; verdict: string }>;
+  error?: string | null;
+}
+
+export function proposeMark(q: PaperQuestionRow, content: unknown, codeRun?: CodeRunSummary): MarkProposal {
   const max = Number(q.max_marks);
   const { text, hasDrawing } = answerText(content);
-  if (!text && !hasDrawing) return { questionId: q.question_id, maxMarks: max, proposedMarks: 0, method: 'NO_ANSWER', basis: 'No answer was written.' };
-  const p = (q.kind === 'MCQ' ? mcq(q, text, max) : null) ?? (q.kind === 'NUMERIC' ? numeric(q, text, max) : null) ?? (q.kind !== 'DRAWING' ? rubricTerms(q, text, max) : null);
+  const parts = answerParts(content);
+  const empty = { questionId: q.question_id, maxMarks: max, proposedMarks: 0, method: 'NO_ANSWER' as const, basis: 'No answer was written.' };
+  if (q.kind === 'CODE') return parts.code ? codeGraded(q, max, codeRun) : empty;
+  if ((q.kind === 'MCQ' || q.kind === 'MCQ_MULTI') && parts.selected?.length) {
+    const p = q.kind === 'MCQ' ? mcq(q, text, max, parts.selected) : mcqMulti(q, max, parts.selected);
+    if (p) return p;
+  }
+  if (!text && !hasDrawing) return empty;
+  const p =
+    (q.kind === 'MCQ' ? mcq(q, text, max) : null) ??
+    (q.kind === 'NUMERIC' ? numericKeyed(q, parts.final ?? text, max) : null) ??
+    (q.kind === 'MATH' ? mathKeyed(q, parts.final, text, max) : null) ??
+    (q.kind !== 'DRAWING' ? rubricTerms(q, text, max) : null);
   return p ?? { questionId: q.question_id, maxMarks: max, proposedMarks: null, method: 'EXAMINER', basis: q.kind === 'DRAWING' ? 'Drawings are marked by the examiner.' : 'No answer key or rubric key terms for this question; the examiner marks it.' };
 }
 
@@ -182,7 +320,19 @@ export async function proposeMarksForAttempt(trx: Knex.Transaction, tenantId: st
   const questions = (await trx('paper_questions').where({ tenant_id: tenantId, paper_id: paper.id }).orderBy('number').select('question_id', 'kind', 'max_marks', 'options', 'rubric', 'expected_answer')) as PaperQuestionRow[];
   const docs = await trx('answer_documents').where({ tenant_id: tenantId, attempt_id: attemptId }).select('question_id', 'content');
   const byQ = new Map(docs.map((d) => [d.question_id as string, typeof d.content === 'string' ? JSON.parse(d.content) : d.content]));
-  return questions.map((q) => proposeMark(q, byQ.get(q.question_id) ?? { blocks: [] }));
+  const runs = questions.some((q) => q.kind === 'CODE') ? await latestGradingRuns(trx, tenantId, attemptId) : new Map<string, CodeRunSummary>();
+  return questions.map((q) => proposeMark(q, byQ.get(q.question_id) ?? { blocks: [] }, runs.get(q.question_id)));
+}
+
+/** The newest grading run per CODE question of an attempt. */
+export async function latestGradingRuns(trx: Knex.Transaction, tenantId: string, attemptId: string): Promise<Map<string, CodeRunSummary>> {
+  const rows = await trx('code_runs').where({ tenant_id: tenantId, attempt_id: attemptId, purpose: 'GRADING' }).orderBy('created_at', 'desc').select('question_id', 'status', 'results', 'passed_weight', 'total_weight', 'error');
+  const out = new Map<string, CodeRunSummary>();
+  for (const r of rows) {
+    if (out.has(r.question_id)) continue;
+    out.set(r.question_id, { status: r.status, passedWeight: Number(r.passed_weight ?? 0), totalWeight: Number(r.total_weight ?? 0), results: (r.results ?? []) as CodeRunSummary['results'], error: r.error });
+  }
+  return out;
 }
 
 /**

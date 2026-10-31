@@ -9,6 +9,7 @@ import {
   type ResultItem,
 } from '@examos/contracts';
 import { proposeMarksForAttempt, snapshotProposals } from './auto-marks.js';
+import { enqueueCodeGrading } from './judge.js';
 import { AppError } from '../../lib/errors.js';
 import { audit, logAttemptEvent } from '../../lib/audit.js';
 import { sha256Hex } from '../../lib/crypto.js';
@@ -651,6 +652,9 @@ export async function autoEvaluateExam(trx: Knex.Transaction, tenantId: string, 
   let checkCarefully = 0;
   let needsExaminer = 0;
   for (const p of packets) {
+    // programs whose grading failed (judge down) or changed are queued again; the worker refreshes the proposal after
+    await trx('code_runs').where({ tenant_id: tenantId, attempt_id: p.attempt_id, purpose: 'GRADING', status: 'ERROR' }).update({ status: 'QUEUED', attempts: 0, error: null, claimed_at: null });
+    await enqueueCodeGrading(trx, tenantId, examId, p.attempt_id);
     const s = await snapshotProposals(trx, tenantId, examId, p.attempt_id);
     if (!s) throw AppError.notFound('APPROVED_PAPER_NOT_FOUND', 'No approved question paper for this exam');
     evaluated++;

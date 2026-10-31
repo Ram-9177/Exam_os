@@ -81,6 +81,7 @@ export async function getExamPaper(
       rubric: q.rubric,
       expectedAnswer: q.expected_answer,
       attachments: q.attachments,
+      codeSpec: q.code_spec ?? undefined,
     })),
     sets: sets.map((s) => ({
       setCode: s.set_code,
@@ -189,6 +190,7 @@ export async function upsertExamPaper(
       rubric: q.rubric ? JSON.stringify(q.rubric) : null,
       expected_answer: q.expectedAnswer ? JSON.stringify(q.expectedAnswer) : null,
       attachments: JSON.stringify(q.attachments ?? []),
+      code_spec: q.codeSpec ? JSON.stringify(q.codeSpec) : null,
     });
   }
 
@@ -329,6 +331,7 @@ export async function reviewPaper(
       maxMarks: Number(q.max_marks),
       rubric: q.rubric,
       expectedAnswer: q.expected_answer,
+      codeSpec: q.code_spec ?? null,
     })),
   };
 
@@ -525,6 +528,8 @@ export async function releasePaperForStudent(
     options: q.options,
     maxMarks: Number(q.max_marks),
     attachments: q.attachments,
+    // visible part of a CODE question: languages, starter, sample tests, limits (hidden tests stay server-side)
+    codeSpec: q.code_spec ?? undefined,
   }));
 
   return {
@@ -600,6 +605,7 @@ export async function getCandidatePaper(
       rubric: q.rubric,
       expectedAnswer: q.expected_answer,
       attachments: q.attachments,
+      codeSpec: q.code_spec ?? undefined,
     })),
   };
 }

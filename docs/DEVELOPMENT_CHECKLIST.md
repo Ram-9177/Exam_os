@@ -142,6 +142,8 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | System evaluates each script when it reaches marking (`mark_proposals`), shown in the examiner's queue; Exam Section can re-run it for an exam | Tested | exam-flow.e2e.test.ts |
 | One release of all results by the COE (`POST /exams/:id/publish-results`): CLOSED exam, every script approved, holds withheld, idempotent; no single publication before it; published results cannot be re-marked | Tested | exam-flow.e2e.test.ts; apps/web/test/candidates-drawer.test.tsx |
 | Revaluation decided only by the COE; every change from the published mark needs a reason; ledger supersedes | Tested | evaluation-scale.test.ts |
+| Question kinds MCQ_MULTI (partial credit, never below zero), MATH (expression equivalence), NUMERIC with units and answer/method marks, must-not-miss rubric steps; option buttons, final-answer box and code editor in the workspace; answer-key editors in the paper editor | Tested | auto-marks.test.ts, code-exam.test.ts; apps/web/test/structured-answer.test.tsx, rubric-editor.test.tsx; browser check of the demo exam CS301-LAB |
+| CODE questions: sample runs during the exam (visible samples only, limited per question, device-bound), hidden-test grading after sealing by a worker with lease/retries, proposals from test weight; Judge0 adapter | Tested against an in-process judge and a fake Judge0 HTTP server; a real Judge0 deployment is pending | code-exam.test.ts |
 | Booklet tells the student how the marks were decided and how to apply for revaluation | Tested | browser rehearsal (apps/web/e2e) |
 | Answer similarity analysis and adjudication (MinHash/shingles, integrity hold) | Tested | evaluation-scale.test.ts |
 

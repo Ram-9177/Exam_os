@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AnswerSaveSchema, SubmitSchema, PrecheckItemVerifySchema, DeviceScanReportSchema } from '@examos/contracts';
 import { clientNet } from '../../lib/client-net.js';
 import { sebEvidence } from '../seb/verify.js';
+import { runSampleTests } from '../evaluation/judge.js';
+import { CodeRunRequestSchema } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
@@ -226,6 +228,18 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
       const t = requireTenant(req);
       const p = userPrincipal(req);
       res.status(202).json(await tenantTx(deps, req, (trx) => reportInExamScan(deps, trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof DeviceScanReportSchema>(req).scan, clientNet(req))));
+    }),
+  );
+  // A student runs their program against the question's visible sample tests (limited per question).
+  r.post(
+    '/attempts/:id/code-runs',
+    user,
+    own,
+    validateBody(CodeRunRequestSchema),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      res.json(await runSampleTests(deps, t.id, p.userId, uuidParam(req, 'id'), deviceOf(req), body<typeof CodeRunRequestSchema>(req)));
     }),
   );
   r.post(

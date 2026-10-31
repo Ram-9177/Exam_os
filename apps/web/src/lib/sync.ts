@@ -1,5 +1,5 @@
 import { ApiError } from './api';
-import { buildOps, contentHash, docsEqual, wireDoc, type AnswerDoc, type AnswerOp, EMPTY_DOC } from './answers';
+import { blockHasContent, buildOps, contentHash, docsEqual, wireDoc, type AnswerDoc, type AnswerOp, EMPTY_DOC } from './answers';
 import { uuid } from './ids';
 
 /**
@@ -158,7 +158,7 @@ export class AnswerSync {
     const unsynced: string[] = [];
     for (const r of this.records.values()) {
       const state = this.stateOf(r, now);
-      questions[r.questionId] = { questionId: r.questionId, state, serverRevision: r.serverRevision, localDoc: r.localDoc, lastSavedAt: r.lastSavedAt, answered: r.localDoc.blocks.some((b) => (typeof b.content === 'string' ? b.content.trim().length > 0 : b.content !== null && b.content !== undefined)) };
+      questions[r.questionId] = { questionId: r.questionId, state, serverRevision: r.serverRevision, localDoc: r.localDoc, lastSavedAt: r.lastSavedAt, answered: r.localDoc.blocks.some(blockHasContent) };
       if (r.dirty || r.inflight || r.retry) unsynced.push(r.questionId);
       if (state === 'recovery') anyRecovery = true;
       else if (state === 'syncing') anySyncing = true;

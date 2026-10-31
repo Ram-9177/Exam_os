@@ -106,13 +106,14 @@ export interface PaperQuestion {
   questionId: string;
   sectionCode: string;
   number: number;
-  kind: 'DESCRIPTIVE' | 'MCQ' | 'NUMERIC' | 'DRAWING';
+  kind: 'DESCRIPTIVE' | 'MCQ' | 'MCQ_MULTI' | 'NUMERIC' | 'MATH' | 'DRAWING' | 'CODE';
   prompt: { blocks: Array<{ id?: string; kind: string; content: unknown }> };
   options?: Array<{ key: string; text: string }>;
   maxMarks: number;
-  rubric?: Array<{ code: string; max: number; description: string; difficulty?: number; keywords?: string[] }>;
+  rubric?: Array<{ code: string; max: number; description: string; difficulty?: number; keywords?: string[]; critical?: boolean }>;
   expectedAnswer?: unknown;
   attachments?: unknown[];
+  codeSpec?: { languages: Array<'c' | 'cpp' | 'java' | 'python'>; samples?: Array<{ input: string; expected: string }>; timeLimitMs?: number; memoryMb?: number; sampleRunsAllowed?: number; starter?: Record<string, string> };
 }
 
 export interface PaperSection {

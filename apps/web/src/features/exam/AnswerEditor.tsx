@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 import { CANVAS_BACKGROUNDS, CANVAS_COLORS, CANVAS_LIMITS, CANVAS_TOOLS, type CanvasColor } from '@examos/contracts';
 import type { AnswerDoc, Block, CanvasContent, Stroke } from '@/lib/answers';
-import { isCanvasContent, paragraphText } from '@/lib/answers';
+import { isCanvasContent, paragraphText, STRUCTURED_KINDS } from '@/lib/answers';
 import { uuid } from '@/lib/ids';
 import { Button, cn } from '@/ui';
 import { DrawingSurface, emptyCanvas, undoLastStroke, type DrawingTool } from '@/features/drawing/DrawingSurface';
@@ -21,7 +21,8 @@ export function newCanvas(): Block {
  * otherwise React remounts the textarea and typing is lost.
  */
 export function normaliseDoc(doc: AnswerDoc, placeholderId: string): AnswerDoc {
-  return doc.blocks.length === 0 ? { blocks: [{ id: placeholderId, kind: 'paragraph', content: '' }] } : doc;
+  // a final answer, a choice or a program sits beside the written working, which always has a first paragraph
+  return doc.blocks.some((b) => !STRUCTURED_KINDS.includes(b.kind)) ? doc : { blocks: [...doc.blocks, { id: placeholderId, kind: 'paragraph', content: '' }] };
 }
 
 export interface AnswerEditorProps {
@@ -41,6 +42,8 @@ export interface AnswerEditorProps {
  */
 export function AnswerEditor({ questionId, doc, placeholderId, onChange, disabled = false, onExternalPaste }: AnswerEditorProps) {
   const blocks = normaliseDoc(doc, placeholderId).blocks;
+  // numbering (labels, "Diagram 2") counts only what the student sees here, not the final answer / choice / program
+  const visibleIndex = new Map(blocks.filter((b) => !STRUCTURED_KINDS.includes(b.kind)).map((b, k) => [b.id, k]));
   const firstRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -71,12 +74,12 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
 
   return (
     <div className="flex flex-col gap-4" onCopy={onCopy} onCut={onCopy} onPaste={onPaste}>
-      {blocks.map((b, i) => (
+      {blocks.map((b) => { const i = visibleIndex.get(b.id) ?? 0; return STRUCTURED_KINDS.includes(b.kind) ? null : (
         <div key={b.id} className="group">
           {b.kind === 'canvas' && isCanvasContent(b.content) ? (
             <DiagramBlock content={b.content} onChange={(c) => update(b.id, c)} onRemove={() => remove(b.id)} disabled={disabled} index={i + 1} />
           ) : (
-            <ParagraphBlock ref={i === 0 ? firstRef : undefined} value={paragraphText(b)} onChange={(t) => update(b.id, t)} disabled={disabled} label={`Answer paragraph ${i + 1}`} onRemove={blocks.length > 1 ? () => remove(b.id) : undefined} />
+            <ParagraphBlock ref={i === 0 ? firstRef : undefined} value={paragraphText(b)} onChange={(t) => update(b.id, t)} disabled={disabled} label={`Answer paragraph ${i + 1}`} onRemove={visibleIndex.size > 1 ? () => remove(b.id) : undefined} />
           )}
           <div className={cn('flex gap-2 mt-2 text-sm', disabled && 'hidden')}>
             <Button size="sm" variant="ghost" onClick={() => insertAfter(b.id, newCanvas())}>
@@ -89,7 +92,7 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
             ) : null}
           </div>
         </div>
-      ))}
+      ); })}
     </div>
   );
 }

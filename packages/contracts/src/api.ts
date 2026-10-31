@@ -11,6 +11,7 @@ import {
   ADMISSION_EXCEPTION_CODES,
   PAPER_STATUSES,
   QUESTION_KINDS,
+  CODE_LANGUAGES,
   EVALUATOR_ROLE_TYPES,
   EVALUATOR_ASSIGNMENT_STATUSES,
   MODERATION_REASONS,
@@ -180,6 +181,8 @@ export const PaperQuestionRubricCriterionSchema = z.object({
   keywords: z.array(z.string().trim().min(1).max(120)).max(30).optional(),
   /** Difficulty of this step, 1 (recall) … 10 (hardest): harder steps need fewer key terms for full credit. Default 5. */
   difficulty: z.number().int().min(1).max(10).optional(),
+  /** "Must not miss" (e.g. a red-flag symptom, a safe dose): when missing, the question gets no proposed marks and goes to the examiner with a warning. */
+  critical: z.boolean().optional(),
 });
 export type PaperQuestionRubricCriterion = z.infer<typeof PaperQuestionRubricCriterionSchema>;
 
@@ -194,6 +197,17 @@ export const PaperQuestionInputSchema = z.object({
   rubric: z.array(PaperQuestionRubricCriterionSchema).optional(),
   expectedAnswer: z.unknown().optional(),
   attachments: z.array(z.record(z.string(), z.unknown())).default([]),
+  /** CODE only, shown to students: allowed languages, starter code, sample tests and limits. Hidden tests live in expectedAnswer. */
+  codeSpec: z
+    .object({
+      languages: z.array(z.enum(CODE_LANGUAGES)).min(1),
+      starter: z.record(z.string(), z.string().max(20_000)).optional(),
+      samples: z.array(z.object({ input: z.string().max(10_000), expected: z.string().max(10_000) })).max(5).default([]),
+      timeLimitMs: z.number().int().min(100).max(10_000).default(2000),
+      memoryMb: z.number().int().min(16).max(512).default(128),
+      sampleRunsAllowed: z.number().int().min(0).max(50).default(10),
+    })
+    .optional(),
 });
 export type PaperQuestionInput = z.infer<typeof PaperQuestionInputSchema>;
 
@@ -218,7 +232,7 @@ export const PaperReviewDecisionSchema = z.object({
 export type PaperReviewDecision = z.infer<typeof PaperReviewDecisionSchema>;
 
 // ---------- attempts / answers ----------
-export const ANSWER_BLOCK_KINDS = ['paragraph', 'equation', 'table', 'canvas', 'choice'] as const;
+export const ANSWER_BLOCK_KINDS = ['paragraph', 'equation', 'table', 'canvas', 'choice', 'final', 'code'] as const;
 export type AnswerBlockKind = (typeof ANSWER_BLOCK_KINDS)[number];
 
 /** Whiteboard colours are named, so every renderer (canvas, SVG, PDF) draws the same ink. */
@@ -258,7 +272,14 @@ export const CanvasContentSchema = z
   });
 export type CanvasContentWire = z.infer<typeof CanvasContentSchema>;
 /** MCQ answer: the selected option key (or null when cleared). */
-export const ChoiceContentSchema = z.object({ selected: z.string().min(1).max(16).nullable() });
+/** One option (MCQ) or several (MCQ_MULTI); null = nothing chosen. */
+export const ChoiceContentSchema = z.object({ selected: z.union([z.string().min(1).max(16), z.array(z.string().min(1).max(16)).max(26)]).nullable() });
+/** NUMERIC / MATH final answer, typed as text ("9.33 ms", "2*(x+1)"); the working goes in paragraphs and drawings. */
+export const FinalContentSchema = z.object({ text: z.string().max(500) });
+/** CODE answer: the language chosen and the program. */
+export const CodeContentSchema = z.object({ language: z.enum(CODE_LANGUAGES), source: z.string().max(100_000) });
+/** A student's sample run during the exam (only the question's visible sample tests). */
+export const CodeRunRequestSchema = z.object({ questionId: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/), language: z.enum(CODE_LANGUAGES), source: z.string().min(1).max(100_000) });
 export const PARAGRAPH_MAX_CHARS = 50_000;
 export const AnswerOpSchema = z.object({
   op: z.enum(['upsert-block', 'delete-block', 'reorder']),

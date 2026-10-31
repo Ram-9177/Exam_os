@@ -47,6 +47,8 @@ export interface AppDeps {
   mailTransports: MailTransportRegistry;
   /** outbound HTTP for webhooks and the Power Automate transport; injectable for tests */
   fetch: typeof fetch;
+  /** sandbox that runs CODE answers; defaults to Judge0 at JUDGE_URL; injectable for tests */
+  judge?: import('./modules/evaluation/judge.js').Judge;
 }
 
 declare module 'express-serve-static-core' {

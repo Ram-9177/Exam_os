@@ -13,6 +13,7 @@ import { formatDateTime, remainingMs } from '@/lib/time';
 import { Button, cn, Dialog, KeyValue, LinkButton, Stamp, StatusChip, useToast, type Tone } from '@/ui';
 import { AnswerEditor } from './AnswerEditor';
 import { useLockdown } from './lockdown';
+import { StructuredAnswer, type CodeSpec } from './StructuredAnswer';
 import { SelfView, useCameraPresence } from './presence';
 import { useAttemptSession } from './session';
 import { Timer } from './Timer';
@@ -25,6 +26,7 @@ export interface WorkspaceQuestion {
   kind?: string;
   options?: unknown;
   sectionId?: string;
+  codeSpec?: CodeSpec;
 }
 
 interface StudentPaperResponse {
@@ -86,7 +88,7 @@ export function ExamWorkspace() {
   const paper = useWorkspacePaper(attemptId, ['active', 'paused', 'offline'].includes(session.kind));
   const questions = useMemo<WorkspaceQuestion[]>(() => (paper.data?.questions ?? []).map((q) => ({
     id: q.questionId, label: `Question ${q.number}`, prompt: q.prompt,
-    maxMarks: q.maxMarks, kind: q.kind, options: q.options, sectionId: q.sectionCode,
+    maxMarks: q.maxMarks, kind: q.kind, options: q.options, sectionId: q.sectionCode, codeSpec: (q as { codeSpec?: CodeSpec }).codeSpec,
   })), [paper.data]);
   const policy = useQuery({ queryKey: ['student', 'policy', attemptId], queryFn: () => api.get<{ examTitle: string; durationMinutes: number; cameraPresence?: boolean }>(`/student/attempts/${attemptId}/policy`, { quiet: true }), enabled: !!attemptId, staleTime: Infinity });
 
@@ -413,17 +415,14 @@ export function ExamWorkspace() {
               {current.prompt.blocks.map((b, i) => <div key={i}>{typeof b['text'] === 'string' ? b['text'] : typeof b['content'] === 'string' ? b['content'] : ''}</div>)}
             </div>
           ) : null}
-          {Array.isArray(current.options) && current.options.length > 0 ? (
-            <div className="mb-4 space-y-2">
-              {(current.options as Array<{ key: string; text: string }>).map((opt, idx: number) => (
-                <div key={idx} className="p-3 border border-rule-2 rounded bg-sheet text-sm flex items-start gap-2">
-                  <span className="font-semibold text-ink-2">{String.fromCharCode(65 + idx)}.</span>
-                  <span>{opt.text}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <p className="text-ink-2 mb-6">Write your answer below. Paragraphs and diagrams can be mixed in any order; everything is saved as you go.</p>
+          <StructuredAnswer question={current} doc={doc} onChange={onChange} disabled={disabled} attemptId={attemptId} />
+          <p className="text-ink-2 mb-6">
+            {current.kind === 'MCQ' || current.kind === 'MCQ_MULTI'
+              ? 'Rough work below is not marked.'
+              : current.kind === 'CODE'
+                ? 'Notes below are optional: only the program is graded, then read by the examiner.'
+                : 'Write your answer below. Paragraphs and diagrams can be mixed in any order; everything is saved as you go.'}
+          </p>
           {session.kind === 'connecting' && !sync.isLoaded(current.id) ? <p className="text-ink-2 mb-4">Opening your saved answers…</p> : null}
           <AnswerEditor questionId={current.id} doc={doc} placeholderId={placeholderId} onChange={onChange} disabled={disabled} onExternalPaste={() => {
               // Logged locally, never reported as a signal: pasting is refused, not punished.

@@ -263,7 +263,30 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
     ],
   }), 'paper secure sets');
 
-  for (const examId of [basic.examId, secure.examId]) {
+  // 3. A mixed paper for the new question kinds: several-correct MCQ, maths expression, a dose with its unit, a
+  //    clinical answer with a must-not-miss step, and a program graded on hidden tests (needs JUDGE_URL to run code).
+  const mixed = must(await req().post('/api/v1/exams').set(E).send({ code: 'CS301-LAB', title: 'Mixed paper — maths, health and coding', courseCode: 'CS301', examType: 'MID_2', academicYear: '2026-27', semester: 5, maxMarks: 20, securityProfile: 'BASIC_BROWSER', durationMinutes: 60, windowStartAt: new Date(now + 30 * 60_000).toISOString(), windowEndAt: new Date(now + 8 * 3600_000).toISOString() }), 'create mixed exam');
+  must(await req().put(`/api/v1/exams/${mixed.examId}/paper`).set(S).send({
+    title: 'Mixed paper',
+    sections: [{ code: 'A', title: 'Objective and numeric' }, { code: 'B', title: 'Written and programming' }],
+    questions: [
+      { questionId: 'Q1', sectionCode: 'A', number: 1, kind: 'MCQ_MULTI', maxMarks: 2, attachments: [], prompt: { blocks: [{ id: 'p1', kind: 'paragraph', content: 'Which of these are anticoagulants or antiplatelets? Choose every correct option.' }] }, options: [{ key: 'A', text: 'Aspirin' }, { key: 'B', text: 'Paracetamol' }, { key: 'C', text: 'Heparin' }, { key: 'D', text: 'Amoxicillin' }, { key: 'E', text: 'Clopidogrel' }], expectedAnswer: ['A', 'C', 'E'] },
+      { questionId: 'Q2', sectionCode: 'A', number: 2, kind: 'MATH', maxMarks: 4, attachments: [], prompt: { blocks: [{ id: 'p2', kind: 'paragraph', content: 'Differentiate f(x) = x³ + 2x² − 5x. Give f′(x) as the final answer and show your working.' }] }, expectedAnswer: { expression: '3x^2 + 4x - 5', answerMarks: 2 } },
+      { questionId: 'Q3', sectionCode: 'A', number: 3, kind: 'NUMERIC', maxMarks: 2, attachments: [], prompt: { blocks: [{ id: 'p3', kind: 'paragraph', content: 'A 25 kg child needs paracetamol at 15 mg/kg. What single dose? Give the unit.' }] }, expectedAnswer: { values: [375], tolerance: 0, unit: 'mg' } },
+      { questionId: 'Q4', sectionCode: 'B', number: 4, kind: 'DESCRIPTIVE', maxMarks: 4, attachments: [], prompt: { blocks: [{ id: 'p4', kind: 'paragraph', content: 'A 58-year-old has crushing chest pain for 30 minutes. What is the likely diagnosis and which signs must you check first?' }] },
+        rubric: [
+          { code: 'DX', max: 2, description: 'Likely diagnosis', difficulty: 3, keywords: ['myocardial infarction|heart attack|acute coronary syndrome'] },
+          { code: 'RED', max: 2, description: 'Red flags checked first', difficulty: 5, critical: true, keywords: ['radiating|radiation', 'sweating|diaphoresis', 'blood pressure|BP'] },
+        ] },
+      { questionId: 'Q5', sectionCode: 'B', number: 5, kind: 'CODE', maxMarks: 8, attachments: [], prompt: { blocks: [{ id: 'p5', kind: 'paragraph', content: 'Read an integer n and print the sum 1 + 2 + … + n.' }] },
+        codeSpec: { languages: ['c', 'cpp', 'java', 'python'], samples: [{ input: '3', expected: '6' }], sampleRunsAllowed: 10, timeLimitMs: 2000, memoryMb: 128, starter: { python: 'n = int(input())\n' } },
+        expectedAnswer: { tests: [{ input: '1', expected: '1' }, { input: '10', expected: '55' }, { input: '100000', expected: '5000050000', weight: 2 }] } },
+    ],
+  }), 'paper mixed author');
+  must(await req().post(`/api/v1/exams/${mixed.examId}/paper/submit-for-review`).set(S), 'paper mixed submit');
+  must(await req().post(`/api/v1/exams/${mixed.examId}/paper/approve`).set(R), 'paper mixed approve');
+
+  for (const examId of [basic.examId, secure.examId, mixed.examId]) {
     must(await req().post(`/api/v1/exams/${examId}/allocations`).set(E).send({ studentExternalIds: students.map((s) => s.externalId), provider: 'uos' }), 'allocate');
     must(await req().post(`/api/v1/exams/${examId}/hall-tickets`).set(E).send({}), 'hall tickets');
     for (const step of ['submit-for-review', 'approve', 'schedule']) must(await req().post(`/api/v1/exams/${examId}/${step}`).set(E), step);
@@ -281,6 +304,8 @@ Demo tenant ready on http://${HOST}:${config.PORT} (web app proxies here)
 
   Exam CS301-MID1 (BASIC_BROWSER, ipPolicy REVIEW): readiness check is open; start it as examcell when students are READY.
   Exam CS302-SEM (SECURE_BYOD, ipPolicy LOCK): scheduled in 2 days; requires an approved client build.
+  Exam CS301-LAB (mixed: several-correct MCQ, maths, dose with unit, clinical must-not-miss, coding): open its
+    readiness check as examcell to try it. Coding sample runs and grading need a Judge0 at JUDGE_URL.
   ERP API key (store it): ${key.apiKey}
 `);
   } finally {

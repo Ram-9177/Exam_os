@@ -2,6 +2,7 @@ import { withTenantTx, withWorkerTx, type Knex } from '@examos/db';
 import { CANDIDATE_TRANSITIONS, assertTransition, type CandidateStatus } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { proposeMarksForAttempt, snapshotProposals } from '../evaluation/auto-marks.js';
+import { enqueueCodeGrading } from '../evaluation/judge.js';
 import { AppError } from '../../lib/errors.js';
 import { audit, logAttemptEvent } from '../../lib/audit.js';
 import { canonicalJson, sha256Hex } from '../../lib/crypto.js';
@@ -74,6 +75,7 @@ export async function runForensicChecks(deps: AppDeps, trx: Knex.Transaction, te
   if (next === 'FORENSIC_REVIEW_READY') {
     await setPacketStatus(trx, { ...fresh, status: next }, 'ACADEMIC_MARKING_READY');
     // The system evaluates the script as soon as it reaches marking; a person then reads it and decides.
+    await enqueueCodeGrading(trx, tenantId, fresh.exam_id, attemptId);
     await snapshotProposals(trx, tenantId, fresh.exam_id, attemptId);
   }
   await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'forensics.completed', actor: 'SYSTEM:forensics', metadata: { findings, integrityState } });

@@ -5,6 +5,7 @@ import { runForensicsOnce } from './modules/candidates/service.js';
 import { sweepStaleHeartbeats } from './modules/attempts/service.js';
 import { sweepClosedExams, sweepExpiredAttempts } from './modules/exams/service.js';
 import { withTenantTx, withWorkerTx } from '@examos/db';
+import { runCodeJudgeOnce } from './modules/evaluation/judge.js';
 
 /**
  * Background worker: outbox fan-out, webhook delivery, mail (two lanes),
@@ -40,6 +41,7 @@ await Promise.all([
   loop('mail-transactional', () => runMailWorkerOnce(deps, 'TRANSACTIONAL'), 1000),
   loop('mail-bulk', () => runMailWorkerOnce(deps, 'BULK'), 5000),
   loop('forensics', () => runForensicsOnce(deps), 5000),
+  loop('code-judge', () => runCodeJudgeOnce(deps), 3000),
   loop('heartbeat-sweep', sweepAllTenants, 30_000),
   loop('seal-closed-exams', () => sweepClosedExams(deps), 5000),
   loop('deadline-sweep', () => sweepExpiredAttempts(deps), 15_000),
