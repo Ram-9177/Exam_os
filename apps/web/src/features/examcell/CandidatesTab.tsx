@@ -7,7 +7,7 @@ import { uuid } from '@/lib/ids';
 import { formatDateTime } from '@/lib/time';
 import { numberOf } from '@/features/student/api';
 import { Badge, Button, CheckIcon, CopyIcon, CrossIcon, Dialog, EmptyState, Field, humanize, KeyValue, Select, Skeleton, StatusChip, Table, TextArea, TextInput, toneForCandidate, useToast, type Column, type Tone } from '@/ui';
-import { useCandidates, useChecklist, type CandidateRow } from './api';
+import { useCandidates, useChecklist, useExam, type CandidateRow } from './api';
 
 const HOLD_STATUSES = ['INTEGRITY_HOLD', 'TECHNICAL_REVIEW_REQUIRED', 'IDENTITY_REVIEW_REQUIRED', 'MARKING_MODERATION_REQUIRED'] as const;
 const HOLD_LABEL: Record<(typeof HOLD_STATUSES)[number], string> = {
@@ -67,6 +67,7 @@ export function CandidatesTab({ examId, tz, active }: { examId: string; tz: stri
 
   return (
     <div>
+      <ReleasePanel examId={examId} tz={tz} candidates={list.data.candidates} />
       <div className="flex flex-wrap gap-2 mb-5">
         <Sum label="Ready for review" n={summary.ready} tone="ready" />
         <Sum label="Approved" n={summary.approved} tone="accent" />
@@ -99,7 +100,86 @@ function Sum({ label, n, tone = 'neutral' }: { label: string; n: number; tone?: 
   );
 }
 
+const HELD = ['INTEGRITY_HOLD', 'TECHNICAL_REVIEW_REQUIRED', 'IDENTITY_REVIEW_REQUIRED'];
+
+/**
+ * Results of an exam are released together by the Controller of Examinations: only when every script is marked and
+ * approved (held candidates are withheld and published once their hold is released). After the release a result can
+ * change only through a revaluation the student applies for and the COE approves.
+ */
+function ReleasePanel({ examId, tz, candidates }: { examId: string; tz: string; candidates: CandidateRow[] }) {
+  const { hasRole } = useAuth();
+  const exam = useExam(examId);
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const releasedAt = exam.data?.exam.results_published_at ?? null;
+  const approved = candidates.filter((c) => c.status === 'CANDIDATE_APPROVED').length;
+  const held = candidates.filter((c) => HELD.includes(c.status)).length;
+  const notReady = candidates.filter((c) => !['CANDIDATE_APPROVED', 'PUBLISHED', ...HELD].includes(c.status)).length;
+  if (releasedAt) {
+    return (
+      <p className="mb-5 text-sm text-ink-2" role="status">
+        Results released together on {formatDateTime(releasedAt, tz)}. A published result now changes only through a revaluation approved by the Controller of Examinations.
+      </p>
+    );
+  }
+  const release = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await api.post<{ published: number; withheld: Array<{ attemptId: string }> }>(`/exams/${examId}/publish-results`, { idempotencyKey: uuid() }, { quiet: ['RESULTS_NOT_READY', 'EXAM_NOT_CLOSED', 'NOTHING_TO_PUBLISH'] });
+      toast({ tone: 'success', title: `${out.published} results released`, description: out.withheld.length ? `${out.withheld.length} on hold, withheld until released.` : 'Every student can see their result now.' });
+      setConfirm(false);
+      void qc.invalidateQueries({ queryKey: ['exam', examId] });
+      void qc.invalidateQueries({ queryKey: ['candidates', examId] });
+    } catch (e) {
+      setError(isApiError(e) ? e.problem.title : 'Could not release the results');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="sheet p-4 mb-5 flex flex-wrap items-center justify-between gap-3" aria-label="Result release">
+      <div className="text-sm">
+        <p className="font-medium">Results are released together</p>
+        <p className="text-ink-2">
+          {approved} approved · {notReady} not ready yet · {held} on hold. {notReady ? 'Every script must be marked and approved before the release.' : 'Ready for the Controller of Examinations.'}
+        </p>
+      </div>
+      {hasRole('CONTROLLER') ? (
+        <Button variant="primary" disabled={notReady > 0 || approved === 0} onClick={() => setConfirm(true)}>
+          Release all results
+        </Button>
+      ) : null}
+      <Dialog
+        open={confirm}
+        onClose={() => (busy ? undefined : setConfirm(false))}
+        title="Release all results?"
+        description={`${approved} students see their result at once${held ? `; ${held} on hold are withheld` : ''}. After this, marks change only through revaluation.`}
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirm(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="primary" loading={busy} onClick={() => void release()}>
+              Release results
+            </Button>
+          </>
+        }
+      >
+        {error ? <p className="text-stop text-sm" role="alert">{error}</p> : <p className="text-sm text-ink-2">Each student is notified; the ERP receives every result.</p>}
+      </Dialog>
+    </section>
+  );
+}
+
 function CandidateDrawer({ examId, candidate, tz, onClose }: { examId: string; candidate: CandidateRow; tz: string; onClose: () => void }) {
+  const examQ = useExam(examId);
+  const released = !!examQ.data?.exam.results_published_at;
   const { hasRole } = useAuth();
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -254,11 +334,12 @@ function CandidateDrawer({ examId, candidate, tz, onClose }: { examId: string; c
               </Button>
             ) : null}
             {hasRole('EXAM_CELL_OPERATOR') && isHeld ? <Button onClick={() => setMode('release')}>Release hold</Button> : null}
-            {hasRole('CONTROLLER') && candidate.status === 'CANDIDATE_APPROVED' ? (
+            {hasRole('CONTROLLER') && candidate.status === 'CANDIDATE_APPROVED' && released ? (
               <Button variant="primary" onClick={() => setMode('authorize')}>
                 Authorize publication
               </Button>
             ) : null}
+            {hasRole('CONTROLLER') && candidate.status === 'CANDIDATE_APPROVED' && !released ? <p className="text-sm text-ink-2">Released with everyone else's results from the candidates list.</p> : null}
           </div>
 
           {mode === 'approve' ? (

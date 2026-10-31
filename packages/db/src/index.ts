@@ -143,6 +143,7 @@ export const TENANT_TABLES = [
   // created after 0099 by 0101, which applies RLS itself
   'attempt_network_observations',
   'device_scans',
+  'mark_proposals',
 ] as const;
 
 /** Tables the application role may only INSERT into (append-only evidence and audit). */

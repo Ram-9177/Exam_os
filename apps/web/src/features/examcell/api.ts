@@ -25,6 +25,8 @@ export interface ExamListItem {
 /** Raw exam row as returned by GET /exams/:id (database column names). */
 export interface ExamRow {
   id: string;
+  /** Set when the Controller of Examinations released this exam's results (all at once). */
+  results_published_at?: string | null;
   code: string;
   title: string;
   status: ExamStatus;
@@ -108,7 +110,7 @@ export interface PaperQuestion {
   prompt: { blocks: Array<{ id?: string; kind: string; content: unknown }> };
   options?: Array<{ key: string; text: string }>;
   maxMarks: number;
-  rubric?: Array<{ code: string; max: number; description: string }>;
+  rubric?: Array<{ code: string; max: number; description: string; difficulty?: number; keywords?: string[] }>;
   expectedAnswer?: unknown;
   attachments?: unknown[];
 }

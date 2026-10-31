@@ -1,7 +1,7 @@
 import { withTenantTx, withWorkerTx, type Knex } from '@examos/db';
 import { CANDIDATE_TRANSITIONS, assertTransition, type CandidateStatus } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
-import { proposeMarksForAttempt } from '../evaluation/auto-marks.js';
+import { proposeMarksForAttempt, snapshotProposals } from '../evaluation/auto-marks.js';
 import { AppError } from '../../lib/errors.js';
 import { audit, logAttemptEvent } from '../../lib/audit.js';
 import { canonicalJson, sha256Hex } from '../../lib/crypto.js';
@@ -71,7 +71,11 @@ export async function runForensicChecks(deps: AppDeps, trx: Knex.Transaction, te
   const fresh = await trx('candidate_review_packets').where('id', packet.id).first();
   const next: CandidateStatus = high ? 'TECHNICAL_REVIEW_REQUIRED' : 'FORENSIC_REVIEW_READY';
   await setPacketStatus(trx, fresh, next);
-  if (next === 'FORENSIC_REVIEW_READY') await setPacketStatus(trx, { ...fresh, status: next }, 'ACADEMIC_MARKING_READY');
+  if (next === 'FORENSIC_REVIEW_READY') {
+    await setPacketStatus(trx, { ...fresh, status: next }, 'ACADEMIC_MARKING_READY');
+    // The system evaluates the script as soon as it reaches marking; a person then reads it and decides.
+    await snapshotProposals(trx, tenantId, fresh.exam_id, attemptId);
+  }
   await logAttemptEvent(trx, { tenantId, attemptId, eventType: 'forensics.completed', actor: 'SYSTEM:forensics', metadata: { findings, integrityState } });
   return { ...fresh, status: next === 'FORENSIC_REVIEW_READY' ? 'ACADEMIC_MARKING_READY' : next, findings };
 }
@@ -119,6 +123,8 @@ export interface ResultItem {
   overrideReason?: string;
   proposedMarks?: number | null;
   proposalMethod?: string;
+  /** Set on a revaluation version: the mark that was published before. */
+  publishedMarks?: number;
 }
 
 export async function recordResultVersion(trx: Knex.Transaction, tenantId: string, examinerId: string, attemptId: string, items: ResultItem[]) {
@@ -173,7 +179,23 @@ export async function recordResultVersion(trx: Knex.Transaction, tenantId: strin
         throw AppError.unprocessable('OVERRIDE_REASON_REQUIRED', `question ${it.questionId}: the proposed mark is ${p.proposedMarks}; give a reason (at least 10 characters) for ${it.marks}`);
       }
       const { overrideReason, ...rest } = it;
-      return { ...rest, proposedMarks: p.proposedMarks, proposalMethod: p.method, ...(differs ? { overrideReason: overrideReason!.trim() } : {}) };
+      // a reason is kept whenever one is needed — here, or below for a change from the published mark
+      return { ...rest, proposedMarks: p.proposedMarks, proposalMethod: p.method, ...(overrideReason?.trim() ? { overrideReason: overrideReason.trim() } : {}) };
+    });
+  }
+
+  // After publication marks change only through an approved revaluation; every change from the published mark is
+  // explained (the reason goes back to the student with the outcome).
+  const live = await trx('student_exam_records').where({ tenant_id: tenantId, attempt_id: attemptId }).whereNull('superseded_at').first('result_version_id');
+  if (live) {
+    const pub = await trx('result_versions').where('id', live.result_version_id).first('items');
+    const pubMarks = new Map(((pub?.items ?? []) as ResultItem[]).map((i) => [i.questionId, Number(i.marks)]));
+    items = items.map((it) => {
+      const before = pubMarks.get(it.questionId);
+      if (before === undefined || Math.abs(before - it.marks) < 0.001) return it;
+      const reason = it.overrideReason;
+      if (!(reason && reason.trim().length >= 10)) throw AppError.unprocessable('REVALUATION_REASON_REQUIRED', `question ${it.questionId}: the published mark was ${before}; give a reason (at least 10 characters) for ${it.marks}`);
+      return { ...it, publishedMarks: before, overrideReason: reason.trim() };
     });
   }
 
@@ -289,9 +311,10 @@ export async function evaluatorQueue(trx: Knex.Transaction, tenantId: string, ex
       this.on('h.exam_id', '=', 'p.exam_id').andOn('h.user_id', '=', 'p.user_id');
     })
     .leftJoin('result_versions as rv', 'rv.id', 'p.result_version_id')
+    .leftJoin('mark_proposals as mp', 'mp.attempt_id', 'p.attempt_id')
     .where({ 'p.tenant_id': tenantId, 'p.exam_id': examId })
     .whereIn('p.status', ['ACADEMIC_MARKING_READY', 'MARKING_MODERATION_REQUIRED', 'REVALUATION_PENDING', 'EXAM_CELL_REVIEW', 'CANDIDATE_APPROVED', 'CONTROLLER_AUTHORIZED', 'PUBLISHED'])
-    .select('p.attempt_id as attemptId', 'p.status', 'u.full_name as fullName', 'sp.register_number as registerNumber', 'h.number as hallTicket', 'rv.version as resultVersion', 'rv.total_marks as totalMarks', 'rv.max_marks as maxMarks', 'rv.approved_at as markedAt')
+    .select('p.attempt_id as attemptId', 'p.status', 'u.full_name as fullName', 'sp.register_number as registerNumber', 'h.number as hallTicket', 'rv.version as resultVersion', 'rv.total_marks as totalMarks', 'rv.max_marks as maxMarks', 'rv.approved_at as markedAt', 'mp.proposed_total as proposedTotal', 'mp.max_total as proposedMax', 'mp.needs_examiner as needsExaminer', 'mp.check_carefully as checkCarefully')
     .orderBy('sp.register_number');
   return {
     summary: { total: rows.length, awaitingMarks: rows.filter((r) => ['ACADEMIC_MARKING_READY', 'MARKING_MODERATION_REQUIRED', 'REVALUATION_PENDING'].includes(r.status)).length, marked: rows.filter((r) => r.resultVersion != null).length },
@@ -352,11 +375,17 @@ export async function releaseHold(trx: Knex.Transaction, tenantId: string, actor
 // ---------------------------------------------------------------------------
 // Controller lane: authorize + publish → permanent ledger, ERP event, mail
 // ---------------------------------------------------------------------------
-export async function controllerAuthorizeAndPublish(trx: Knex.Transaction, tenantId: string, controllerId: string, attemptId: string, input: { candidateApprovalId: string; idempotencyKey: string }) {
+export async function controllerAuthorizeAndPublish(trx: Knex.Transaction, tenantId: string, controllerId: string, attemptId: string, input: { candidateApprovalId: string; idempotencyKey: string }, opts: { mass?: boolean } = {}) {
   const prior = await trx('controller_publication_grants').where({ tenant_id: tenantId, idempotency_key: input.idempotencyKey }).first();
   if (prior) return { publicationGrantId: prior.id, status: 'PUBLISHED', replayed: true };
   const packet = await trx('candidate_review_packets').where({ tenant_id: tenantId, attempt_id: attemptId }).forUpdate().first();
   if (!packet) throw AppError.notFound('PACKET_NOT_FOUND');
+  if (!opts.mass) {
+    // Results of an exam go out together. One result alone is published only after that release: a hold the
+    // Exam Cell has since released, or the outcome of a revaluation the Controller of Examinations approved.
+    const ex = await trx('exams').where({ tenant_id: tenantId, id: packet.exam_id }).first('results_published_at');
+    if (!ex?.results_published_at) throw AppError.conflict('MASS_PUBLICATION_REQUIRED', 'Results of this exam are released together: publish all approved results from the exam page first');
+  }
   if (packet.status !== 'CANDIDATE_APPROVED') throw AppError.conflict('PACKET_STATE', `candidate is ${packet.status}, not CANDIDATE_APPROVED`);
   const approval = await trx('candidate_approvals').where({ id: input.candidateApprovalId, packet_id: packet.id, decision: 'APPROVED' }).whereNull('invalidated_at').first();
   if (!approval) throw AppError.conflict('APPROVAL_INVALID', 'No live Exam Cell approval with that id');
@@ -407,6 +436,48 @@ export async function controllerAuthorizeAndPublish(trx: Knex.Transaction, tenan
   });
   await enqueueMail(trx, { tenantId, category: 'RESULT_PUBLISHED', to: { address: user.email, name: user.full_name }, dedupeKey: `result:${attemptId}:${rv.version}`, vars: { fullName: user.full_name, examTitle: exam.title, portalUrl: `https://${host}` } });
   return { publicationGrantId: grant.id, status: 'PUBLISHED', replayed: false };
+}
+
+/** A stable UUID derived from text (the per-candidate idempotency key of a mass release). */
+function derivedUuid(text: string): string {
+  const h = sha256Hex(text);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${((parseInt(h.slice(16, 18), 16) & 0x3f) | 0x80).toString(16)}${h.slice(18, 20)}-${h.slice(20, 32)}`;
+}
+
+/** Candidates in these states are withheld from the mass release (published later, once released). */
+const HELD_STATUSES = ['INTEGRITY_HOLD', 'TECHNICAL_REVIEW_REQUIRED', 'IDENTITY_REVIEW_REQUIRED'];
+
+/**
+ * The Controller of Examinations releases every approved result of an exam at once, so no student learns a result
+ * before the others. Refused while any script still waits for marks or Exam Cell approval; held candidates are
+ * withheld and listed. After the release a published result changes only through a revaluation the COE approves.
+ */
+export async function publishExamResults(trx: Knex.Transaction, tenantId: string, controllerId: string, examId: string, idempotencyKey: string) {
+  const exam = await trx('exams').where({ tenant_id: tenantId, id: examId }).forNoKeyUpdate().first();
+  if (!exam) throw AppError.notFound('EXAM_NOT_FOUND');
+  if (exam.results_published_at) {
+    const published = await trx('candidate_review_packets').where({ tenant_id: tenantId, exam_id: examId, status: 'PUBLISHED' }).count<{ count: string }[]>('id as count');
+    return { publishedAt: new Date(exam.results_published_at).toISOString(), published: Number(published[0]?.count ?? 0), withheld: [], replayed: true };
+  }
+  if (!['CLOSED', 'ARCHIVED'].includes(exam.status)) throw AppError.conflict('EXAM_NOT_CLOSED', `Results are released after the exam is closed (it is ${exam.status})`);
+  const packets = await trx('candidate_review_packets').where({ tenant_id: tenantId, exam_id: examId }).select('id', 'attempt_id', 'status', 'result_version_id');
+  const pending = packets.filter((p) => !['CANDIDATE_APPROVED', 'PUBLISHED', ...HELD_STATUSES].includes(p.status));
+  if (pending.length) {
+    const byStatus = pending.reduce<Record<string, number>>((a, p) => ({ ...a, [p.status]: (a[p.status] ?? 0) + 1 }), {});
+    throw AppError.conflict('RESULTS_NOT_READY', `${pending.length} of ${packets.length} candidates are not approved yet (${Object.entries(byStatus).map(([k, v]) => `${v} ${k}`).join(', ')}); every script must be marked and approved before results are released`);
+  }
+  const approved = packets.filter((p) => p.status === 'CANDIDATE_APPROVED');
+  if (!approved.length) throw AppError.conflict('NOTHING_TO_PUBLISH', 'No approved results to release');
+  const now = new Date();
+  await trx('exams').where('id', examId).update({ results_published_at: now, results_published_by: controllerId, updated_at: trx.fn.now() });
+  for (const p of approved) {
+    const approval = await trx('candidate_approvals').where({ packet_id: p.id, decision: 'APPROVED', result_version_id: p.result_version_id }).whereNull('invalidated_at').orderBy('created_at', 'desc').first('id');
+    if (!approval) throw AppError.conflict('APPROVAL_INVALID', `candidate ${p.attempt_id} has no live approval`);
+    await controllerAuthorizeAndPublish(trx, tenantId, controllerId, p.attempt_id, { candidateApprovalId: approval.id, idempotencyKey: derivedUuid(`${idempotencyKey}:${p.attempt_id}`) }, { mass: true });
+  }
+  const withheld = packets.filter((p) => HELD_STATUSES.includes(p.status)).map((p) => ({ attemptId: p.attempt_id, status: p.status }));
+  await audit(trx, { tenantId, actorType: 'USER', actorId: controllerId, action: 'results.released', entityType: 'exam', entityId: examId, metadata: { published: approved.length, withheld: withheld.length, idempotencyKey } });
+  return { publishedAt: now.toISOString(), published: approved.length, withheld, replayed: false };
 }
 
 /** Tenant grading rule from exam policy (`grading.bands: [{min, grade}]`); percentage fallback when absent. */

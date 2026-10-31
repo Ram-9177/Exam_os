@@ -8,7 +8,7 @@ import {
   type RevaluationDecideInput,
   type ResultItem,
 } from '@examos/contracts';
-import { proposeMarksForAttempt } from './auto-marks.js';
+import { proposeMarksForAttempt, snapshotProposals } from './auto-marks.js';
 import { AppError } from '../../lib/errors.js';
 import { audit, logAttemptEvent } from '../../lib/audit.js';
 import { sha256Hex } from '../../lib/crypto.js';
@@ -158,6 +158,7 @@ export async function getEvaluatorQueue(
     .leftJoin('hall_tickets as ht', function () {
       this.on('ht.exam_id', '=', 'a.exam_id').andOn('ht.user_id', '=', 'p.user_id');
     })
+    .leftJoin('mark_proposals as mp', 'mp.attempt_id', 'a.attempt_id')
     .where('a.tenant_id', tenantId)
     .andWhere('a.evaluator_user_id', evaluatorUserId)
     .select(
@@ -175,6 +176,10 @@ export async function getEvaluatorQueue(
       'u.full_name as fullName',
       'u.email as email',
       'ht.number as hallTicketNumber',
+      'mp.proposed_total as proposedTotal',
+      'mp.max_total as proposedMax',
+      'mp.needs_examiner as needsExaminer',
+      'mp.check_carefully as checkCarefully',
     );
 
   if (examId) {
@@ -204,6 +209,8 @@ export async function getEvaluatorQueue(
       candidateName: isAnonymized ? null : r.fullName,
       candidateEmail: isAnonymized ? null : r.email,
       hallTicketNumber: isAnonymized ? null : r.hallTicketNumber,
+      // the system's evaluation, waiting for this examiner to read the script and decide
+      systemEvaluation: r.proposedTotal == null ? null : { proposedTotal: Number(r.proposedTotal), max: Number(r.proposedMax), needsExaminer: Number(r.needsExaminer), checkCarefully: Number(r.checkCarefully) },
     };
   });
 }
@@ -633,6 +640,24 @@ export async function generateRubricProposals(trx: Knex.Transaction, tenantId: s
   if (!proposals) throw AppError.notFound('APPROVED_PAPER_NOT_FOUND', 'No approved question paper for this exam');
   const proposedTotal = proposals.reduce((a, p) => a + (p.proposedMarks ?? 0), 0);
   return { attemptId, proposals, proposedTotal: Math.round(proposedTotal * 100) / 100, needsExaminer: proposals.filter((p) => p.proposedMarks === null).map((p) => p.questionId) };
+}
+
+/** Re-run the system's evaluation for every script of the exam that is still waiting for, or in, marking. */
+export async function autoEvaluateExam(trx: Knex.Transaction, tenantId: string, examId: string) {
+  const exam = await trx('exams').where({ tenant_id: tenantId, id: examId }).first('id');
+  if (!exam) throw AppError.notFound('EXAM_NOT_FOUND');
+  const packets = await trx('candidate_review_packets').where({ tenant_id: tenantId, exam_id: examId }).whereIn('status', ['ACADEMIC_MARKING_READY', 'MARKING_MODERATION_REQUIRED', 'REVALUATION_PENDING', 'EXAM_CELL_REVIEW']).select('attempt_id');
+  let evaluated = 0;
+  let checkCarefully = 0;
+  let needsExaminer = 0;
+  for (const p of packets) {
+    const s = await snapshotProposals(trx, tenantId, examId, p.attempt_id);
+    if (!s) throw AppError.notFound('APPROVED_PAPER_NOT_FOUND', 'No approved question paper for this exam');
+    evaluated++;
+    if (s.checkCarefully) checkCarefully++;
+    if (s.needsExaminer) needsExaminer++;
+  }
+  return { evaluated, scriptsToReadCarefully: checkCarefully, scriptsWithQuestionsForTheExaminer: needsExaminer };
 }
 
 export async function analyzeExamSimilarity(

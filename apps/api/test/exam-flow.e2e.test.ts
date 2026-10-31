@@ -501,6 +501,18 @@ describe('end-to-end exam flow', () => {
     expect(noAnswer.body.code).toBe('MARKS_WITHOUT_ANSWER');
     const criteriaMismatch = await req().post(`/api/v1/candidates/${A.attemptId}/result-versions`).set(H(evaluator.token)).send({ items: [{ questionId: 'Q1', maxMarks: 10, marks: 8, explanation: 'x', criteria: [{ code: 'CONCEPT', max: 5, awarded: 5 }, { code: 'EXAMPLE', max: 5, awarded: 2 }] }] });
     expect(criteriaMismatch.body.code).toBe('CRITERIA_SUM_MISMATCH');
+    // the system evaluated the script when forensics handed it to marking; the queue shows it before anyone opens it
+    const snap = await ctx.admin('mark_proposals').where({ attempt_id: A.attemptId }).first();
+    expect(snap).toMatchObject({ needs_examiner: 1 });
+    const queue = await req().get('/api/v1/candidates/queue').query({ examId }).set(H(evaluator.token));
+    const row = queue.body.candidates.find((c: { attemptId: string }) => c.attemptId === A.attemptId);
+    expect(row).toMatchObject({ needsExaminer: 1 });
+    expect(Number(row.proposedTotal)).toBe(Number(snap.proposed_total));
+    // the Examination Section can re-run it for the whole exam; nothing already decided is touched
+    const rerun = await req().post(`/api/v1/exams/${examId}/auto-evaluate`).set(H(examCell.token));
+    expect(rerun.status).toBe(200);
+    expect(rerun.body.evaluated).toBeGreaterThanOrEqual(1);
+    expect((await req().post(`/api/v1/exams/${examId}/auto-evaluate`).set(H(A.token))).status).toBe(403);
     // automatic proposals: Q1's rubric has no key terms (the examiner judges it), Q2's has — a proposal with its basis
     const prop = await req().get(`/api/v1/candidates/${A.attemptId}/rubric-proposals`).set(H(evaluator.token));
     expect(prop.status).toBe(200);
@@ -557,12 +569,27 @@ describe('end-to-end exam flow', () => {
     expect(staleCtrl.status).toBe(409);
     const ap2 = await req().post(`/api/v1/candidates/${A.attemptId}/approvals`).set(H(examCell.token)).send({ reviewedResultVersionId: p2.result_version_id, reason: 'Re-reviewed after moderation', idempotencyKey: randomUUID() });
     expect(ap2.status).toBe(201);
+    // results of an exam go out together: no single result before the mass release
+    const early = await req().post(`/api/v1/candidates/${A.attemptId}/authorize-publication`).set(H(controller.token)).send({ candidateApprovalId: ap2.body.approvalId, idempotencyKey: randomUUID() });
+    expect(early.status).toBe(409);
+    expect(early.body.code).toBe('MASS_PUBLICATION_REQUIRED');
+    const release = (token: string, key = randomUUID()) => req().post(`/api/v1/exams/${examId}/publish-results`).set(H(token)).send({ idempotencyKey: key });
+    expect((await release(examCell.token)).status).toBe(403); // only the Controller of Examinations releases results
+    const notReady = await release(controller.token);
+    expect(notReady.status).toBe(409);
+    expect(notReady.body.code).toBe('RESULTS_NOT_READY'); // B's script still waits for marks
+    // B is held for review: withheld from the release, everyone else's results go out together
+    expect((await req().post(`/api/v1/candidates/${B.attemptId}/holds`).set(H(examCell.token)).send({ status: 'TECHNICAL_REVIEW_REQUIRED', reason: 'Attendance register mismatch for seat 14' })).status).toBe(200);
     const pubKey = randomUUID();
-    const pub = await req().post(`/api/v1/candidates/${A.attemptId}/authorize-publication`).set(H(controller.token)).send({ candidateApprovalId: ap2.body.approvalId, idempotencyKey: pubKey });
+    const pub = await release(controller.token, pubKey);
     expect(pub.status).toBe(200);
-    expect(pub.body.status).toBe('PUBLISHED');
-    const pubReplay = await req().post(`/api/v1/candidates/${A.attemptId}/authorize-publication`).set(H(controller.token)).send({ candidateApprovalId: ap2.body.approvalId, idempotencyKey: pubKey });
-    expect(pubReplay.body.publicationGrantId).toBe(pub.body.publicationGrantId);
+    expect(pub.body).toMatchObject({ published: 1, withheld: [{ attemptId: B.attemptId, status: 'TECHNICAL_REVIEW_REQUIRED' }], replayed: false });
+    expect((await ctx.admin('candidate_review_packets').where('attempt_id', A.attemptId).first()).status).toBe('PUBLISHED');
+    const pubReplay = await release(controller.token, pubKey);
+    expect(pubReplay.body).toMatchObject({ published: 1, replayed: true });
+    // once out, a result cannot be re-marked; only a revaluation the COE approves reopens it
+    const reMark = await req().post(`/api/v1/candidates/${A.attemptId}/result-versions`).set(H(evaluator.token)).send({ items: [{ questionId: 'Q1', maxMarks: 10, marks: 10, explanation: 'x' }] });
+    expect(reMark.status).toBe(409);
   });
 
   it('publication writes the lifelong ledger, notifies the ERP with a signed event and the student by mail, and the booklet verifies', async () => {
@@ -605,8 +632,7 @@ describe('end-to-end exam flow', () => {
   });
 
   it('a hold notifies the student and the ERP and blocks publication until released', async () => {
-    const hold = await req().post(`/api/v1/candidates/${B.attemptId}/holds`).set(H(examCell.token)).send({ status: 'TECHNICAL_REVIEW_REQUIRED', reason: 'Attendance register mismatch for seat 14' });
-    expect(hold.status).toBe(200);
+    // B was held before the release (previous test)
     const notice = await ctx.admin('mail_dispatches').where({ tenant_id: t.tenantId, category: 'CANDIDATE_HOLD_NOTICE', to_address: B.email }).first();
     expect(notice.body_text).toContain('seat 14');
     const marksWhileHeld = await req().post(`/api/v1/candidates/${B.attemptId}/result-versions`).set(H(evaluator.token)).send({ items: [{ questionId: 'Q1', maxMarks: 10, marks: 0, explanation: 'No answer submitted.' }] });
@@ -619,5 +645,12 @@ describe('end-to-end exam flow', () => {
     expect(list.body.summary).toMatchObject({ total: 2, published: 1, ready: 1 });
     await runWorkers(ctx);
     expect(erpEvents.some((e) => e.type === 'candidate.held')).toBe(true);
+    // after the mass release, a released hold is published on its own
+    const pb = await ctx.admin('candidate_review_packets').where('attempt_id', B.attemptId).first();
+    const apB = await req().post(`/api/v1/candidates/${B.attemptId}/approvals`).set(H(examCell.token)).send({ reviewedResultVersionId: pb.result_version_id, reason: 'Hold released; marks checked', idempotencyKey: randomUUID() });
+    expect(apB.status).toBe(201);
+    const pubB = await req().post(`/api/v1/candidates/${B.attemptId}/authorize-publication`).set(H(controller.token)).send({ candidateApprovalId: apB.body.approvalId, idempotencyKey: randomUUID() });
+    expect(pubB.status).toBe(200);
+    expect(pubB.body.status).toBe('PUBLISHED');
   });
 });

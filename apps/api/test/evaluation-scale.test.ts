@@ -428,7 +428,7 @@ describe('Phase 6 — Evaluation at Scale, Moderation, and Revaluation', () => {
     expect(packetRow.status).toBe('EXAM_CELL_REVIEW');
   });
 
-  it('walks full revaluation lifecycle: student request, exam cell approval, re-marking, and ledger publication correction', async () => {
+  it('walks full revaluation lifecycle: student request, COE approval, re-marking, and ledger publication correction', async () => {
     const { exam, attempts } = await createSealedExamWithCandidates('MID_1', false);
     const target = attempts[0]!;
 
@@ -457,7 +457,8 @@ describe('Phase 6 — Evaluation at Scale, Moderation, and Revaluation', () => {
     expect(appRes.status).toBe(201);
     const approvalId = appRes.body.approvalId;
 
-    // 3. Controller authorizes & publishes initial result
+    // 3. Controller authorizes & publishes initial result (the exam's mass release is covered in exam-flow.e2e)
+    await ctx.admin('exams').where({ id: exam.id }).update({ results_published_at: new Date() });
     const pubRes = await req()
       .post(`/api/v1/candidates/${target.attemptId}/authorize-publication`)
       .set(H(controller.token))
@@ -498,16 +499,18 @@ describe('Phase 6 — Evaluation at Scale, Moderation, and Revaluation', () => {
     expect(dupRes.status).toBe(409);
     expect(dupRes.body.code).toBe('REVALUATION_ALREADY_REQUESTED');
 
-    // 5. Exam Cell lists requests & approves
+    // 5. The Controller of Examinations lists requests & approves
     const listReqs = await req()
       .get(`/api/v1/exams/${exam.id}/revaluation-requests`)
-      .set(H(examCell.token));
+      .set(H(controller.token));
     expect(listReqs.status).toBe(200);
     expect(listReqs.body.length).toBe(1);
 
+    // only the Controller of Examinations decides a revaluation
+    expect((await req().post(`/api/v1/revaluation-requests/${requestId}/decide`).set(H(examCell.token)).send({ decision: 'APPROVED' })).status).toBe(403);
     const decideRes = await req()
       .post(`/api/v1/revaluation-requests/${requestId}/decide`)
-      .set(H(examCell.token))
+      .set(H(controller.token))
       .send({
         decision: 'APPROVED',
         note: 'Approved for re-evaluation by Department Chair.',
@@ -531,7 +534,22 @@ describe('Phase 6 — Evaluation at Scale, Moderation, and Revaluation', () => {
           { questionId: 'Q2', maxMarks: 50, marks: 35, explanation: 'Re-evaluated Q2: full derivation acknowledged.' },
         ],
       });
-    expect(remarkRes.status).toBe(201);
+    // a change from the published mark must be explained
+    expect(remarkRes.status).toBe(422);
+    expect(remarkRes.body.code).toBe('REVALUATION_REASON_REQUIRED');
+    const remarkRes2 = await req()
+      .post(`/api/v1/evaluator/me/attempts/${target.attemptId}/marks`)
+      .set(H(evaluator2.token))
+      .send({
+        items: [
+          { questionId: 'Q1', maxMarks: 50, marks: 35, explanation: 'Re-evaluated Q1: partial credit added for timer safety.', overrideReason: 'Timer-safety argument was correct and missed in the first marking.' },
+          { questionId: 'Q2', maxMarks: 50, marks: 35, explanation: 'Re-evaluated Q2: full derivation acknowledged.', overrideReason: 'Full derivation is on the second page, overlooked at first.' },
+        ],
+      });
+    expect(remarkRes2.status).toBe(201);
+    Object.assign(remarkRes, { body: remarkRes2.body });
+    const rv2 = await ctx.admin('result_versions').where('id', remarkRes2.body.resultVersionId).first();
+    expect((rv2.items as Array<Record<string, unknown>>).map((i) => [i['publishedMarks'], i['marks']])).toEqual([[30, 35], [25, 35]]);
     expect(remarkRes.body.version).toBe(2);
     expect(Number(remarkRes.body.total)).toBe(70);
 

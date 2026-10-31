@@ -117,8 +117,10 @@ POST /moderation/samples/:sampleId/resolve {resolutionNote, items:[...]} (evalua
 POST /student/attempts/:attemptId/revaluation {reason, feeRef?} (attempts:own) → 201 {requestId, status:'REQUESTED'}
 GET  /student/attempts/:attemptId/revaluation (attempts:own) → {revaluation:{id,reason,feeRef,status,decisionNote}}
 GET  /exams/:id/revaluation-requests (revaluation:decide) → [{id,attemptId,studentName,studentEmail,reason,feeRef,status,decisionNote,currentMarks,maxMarks,packetStatus}]
-POST /revaluation-requests/:requestId/decide {decision:'APPROVED'|'REJECTED', note?} (revaluation:decide) → {requestId, status}
+POST /revaluation-requests/:requestId/decide {decision:'APPROVED'|'REJECTED', note?} (revaluation:decide) → {requestId, status}   (the Controller of Examinations only; re-marking afterwards must give a reason for every change from the published mark: 422 REVALUATION_REASON_REQUIRED)
 GET  /candidates/:attemptId/rubric-proposals (marks:approve) → {attemptId, proposedTotal, needsExaminer:[questionId], proposals:[{questionId,maxMarks,proposedMarks|null,method:'NO_ANSWER'|'ANSWER_KEY'|'NUMERIC_KEY'|'RUBRIC_TERMS'|'EXAMINER',basis,criteria?:[{code,max,awarded,evidence}]}]} — deterministic: MCQ/NUMERIC answer key (expectedAnswer), rubric criteria `keywords`; null = the examiner judges (drawings, no key)
+POST /exams/:id/auto-evaluate (evaluation:assign) → {evaluated,scriptsToReadCarefully,scriptsWithQuestionsForTheExaminer}   (re-runs the system's evaluation for every script still in marking; it also runs automatically when forensics hand a script to marking; marks already recorded are never touched)
+POST /exams/:id/publish-results {idempotencyKey} (controller:publish — the COE) → {publishedAt,published,withheld:[{attemptId,status}],replayed}   (releases every approved result of a CLOSED exam at once; 409 RESULTS_NOT_READY while any script awaits marks or approval; held candidates are withheld. Before this, POST /candidates/:attemptId/authorize-publication answers 409 MASS_PUBLICATION_REQUIRED; after it, only released holds and revaluation outcomes are published one by one)
 POST /exams/:id/similarity-analysis {threshold?} (exams:write) → {examId, threshold, comparisonsCount, flaggedPairs:[{attemptId1,attemptId2,questionId,similarity}]}
 
 ## Proctor (PROCTOR, CHIEF_PROCTOR)

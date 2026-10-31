@@ -329,19 +329,7 @@ export function PaperTab({ exam }: { exam: ExamRow }) {
                   )}
                 </Field>
 
-                {/* Rubric Criteria if any */}
-                {q.rubric && q.rubric.length > 0 ? (
-                  <div className="text-xs text-ink-2 space-y-1">
-                    <span className="font-semibold text-ink">Evaluation Rubric:</span>
-                    <ul className="list-disc pl-4 space-y-0.5">
-                      {q.rubric.map((rc, rci) => (
-                        <li key={rci}>
-                          <span className="font-mono font-bold">{rc.code}</span> ({rc.max} marks): {rc.description}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
+                <RubricEditor question={q} disabled={!canEdit} onChange={(patch) => updateQuestion(idx, patch)} />
               </div>
             ))}
           </div>
@@ -415,4 +403,102 @@ export function PaperTab({ exam }: { exam: ExamRow }) {
       </Dialog>
     </div>
   );
+}
+
+type Rubric = NonNullable<PaperQuestion['rubric']>;
+const DIFFICULTY_HINT: Record<number, string> = { 1: 'recall', 3: 'explain', 5: 'apply', 7: 'analyse', 10: 'hardest' };
+
+/**
+ * The marking scheme of one question, step by step. Each step has its marks, a difficulty 1–10 and the key terms a
+ * full answer mentions; the system proposes marks from them and the examiner decides. Harder steps need fewer of
+ * their key terms for full credit (every term at 1, 80 % at 5, 55 % at 10). MCQ and numeric questions take an answer key.
+ */
+export function RubricEditor({ question, disabled, onChange }: { question: PaperQuestion; disabled: boolean; onChange: (patch: Partial<PaperQuestion>) => void }) {
+  const rubric: Rubric = question.rubric ?? [];
+  const setStep = (i: number, patch: Partial<Rubric[number]>) => onChange({ rubric: rubric.map((r, k) => (k === i ? { ...r, ...patch } : r)) });
+  const sum = rubric.reduce((a, r) => a + (Number(r.max) || 0), 0);
+  const ea = question.expectedAnswer as unknown;
+  const keyText = question.kind === 'MCQ' ? (Array.isArray(ea) ? ea.join(', ') : typeof ea === 'string' ? ea : '') : question.kind === 'NUMERIC' ? (ea && typeof ea === 'object' && Array.isArray((ea as { values?: number[] }).values) ? (ea as { values: number[] }).values.join(', ') : typeof ea === 'number' ? String(ea) : '') : '';
+  const tolerance = ea && typeof ea === 'object' && typeof (ea as { tolerance?: number }).tolerance === 'number' ? String((ea as { tolerance: number }).tolerance) : '';
+  return (
+    <section className="space-y-3 border-t border-rule pt-3" aria-label={`Marking scheme for ${question.questionId}`}>
+      {question.kind === 'MCQ' || question.kind === 'NUMERIC' ? (
+        <div className="flex flex-wrap gap-3">
+          <Field label={question.kind === 'MCQ' ? 'Answer key (option)' : 'Expected values'} hint={question.kind === 'MCQ' ? 'e.g. B, or B, D when either is correct' : 'e.g. 9.33, 5.33'} className="w-56">
+            {({ id, describedBy }) => (
+              <RawListInput
+                id={id}
+                describedBy={describedBy}
+                initial={keyText}
+                separator=","
+                disabled={disabled}
+                onList={(parts) => {
+                  if (question.kind === 'MCQ') onChange({ expectedAnswer: parts.length > 1 ? parts.map((x) => x.toUpperCase()) : (parts[0] ?? '').toUpperCase() || undefined });
+                  else {
+                    const values = parts.map(Number).filter((n) => Number.isFinite(n));
+                    onChange({ expectedAnswer: values.length ? { values, ...(tolerance ? { tolerance: Number(tolerance) } : {}) } : undefined });
+                  }
+                }}
+              />
+            )}
+          </Field>
+          {question.kind === 'NUMERIC' ? (
+            <Field label="Tolerance" hint="± per value; default 1 %" className="w-32">
+              {({ id, describedBy }) => <TextInput id={id} aria-describedby={describedBy} type="number" step="0.01" min={0} value={tolerance} disabled={disabled} onChange={(e) => onChange({ expectedAnswer: { values: keyText.split(',').map((x) => x.trim()).filter(Boolean).map(Number).filter((n) => Number.isFinite(n)), ...(e.target.value ? { tolerance: Number(e.target.value) } : {}) } })} />}
+            </Field>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="flex items-baseline justify-between gap-3">
+        <h4 className="text-sm font-semibold">Marking steps</h4>
+        {rubric.length ? <span className={sum === Number(question.maxMarks) ? 'text-xs text-ink-2' : 'text-xs text-fix'} role="status">{sum === Number(question.maxMarks) ? `Steps add up to ${sum} marks` : `Steps add up to ${sum}; the question is worth ${question.maxMarks}`}</span> : null}
+      </div>
+      {rubric.map((r, i) => (
+        <fieldset key={i} className="grid gap-2 sm:grid-cols-[6rem_5rem_1fr_9rem] items-start border border-rule rounded-sm p-3">
+          <legend className="px-1 text-xs text-ink-2">Step {i + 1}</legend>
+          <Field label="Code">{({ id }) => <TextInput id={id} value={r.code} disabled={disabled} onChange={(e) => setStep(i, { code: e.target.value })} className="font-mono" />}</Field>
+          <Field label="Marks">{({ id }) => <TextInput id={id} type="number" min={0.5} step="0.5" value={r.max} disabled={disabled} onChange={(e) => setStep(i, { max: Number(e.target.value) })} />}</Field>
+          <Field label="What this step rewards">{({ id }) => <TextInput id={id} value={r.description} disabled={disabled} onChange={(e) => setStep(i, { description: e.target.value })} />}</Field>
+          <Field label="Difficulty (1–10)">
+            {({ id }) => (
+              <select id={id} value={r.difficulty ?? 5} disabled={disabled} onChange={(e) => setStep(i, { difficulty: Number(e.target.value) })} className="h-10 rounded-md border border-rule-2 bg-sheet px-2">
+                {Array.from({ length: 10 }, (_, k) => k + 1).map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                    {DIFFICULTY_HINT[d] ? ` · ${DIFFICULTY_HINT[d]}` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field label="Key terms a full answer mentions" hint="One per line; use | for alternatives (hold and wait|hold-and-wait)" className="sm:col-span-4">
+            {({ id, describedBy }) => <RawListInput id={id} describedBy={describedBy} rows={2} initial={(r.keywords ?? []).join('\n')} separator={'\n'} disabled={disabled} onList={(xs) => setStep(i, { keywords: xs })} />}
+          </Field>
+          {!disabled ? (
+            <div className="sm:col-span-4">
+              <Button size="sm" variant="ghost" onClick={() => onChange({ rubric: rubric.filter((_, k) => k !== i) })}>
+                Remove step {i + 1}
+              </Button>
+            </div>
+          ) : null}
+        </fieldset>
+      ))}
+      {!disabled ? (
+        <Button size="sm" onClick={() => onChange({ rubric: [...rubric, { code: `S${rubric.length + 1}`, max: 1, description: 'Step', difficulty: 5, keywords: [] }] })}>
+          Add marking step
+        </Button>
+      ) : null}
+      {rubric.length && rubric.some((r) => !r.keywords?.length) ? <p className="text-xs text-ink-2">Steps without key terms are marked by the examiner without a system proposal.</p> : null}
+    </section>
+  );
+}
+
+/** A list typed as text: the text stays exactly as typed (new lines, "9." mid-number); the parsed list goes up. */
+function RawListInput({ id, describedBy, initial, separator, disabled, onList, rows }: { id: string; describedBy?: string; initial: string; separator: string; disabled: boolean; onList: (xs: string[]) => void; rows?: number }) {
+  const [raw, setRaw] = useState(initial);
+  const change = (v: string) => {
+    setRaw(v);
+    onList(v.split(separator).map((x) => x.trim()).filter(Boolean));
+  };
+  return rows ? <TextArea id={id} aria-describedby={describedBy} rows={rows} value={raw} disabled={disabled} onChange={(e) => change(e.target.value)} /> : <TextInput id={id} aria-describedby={describedBy} value={raw} disabled={disabled} onChange={(e) => change(e.target.value)} />;
 }

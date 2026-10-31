@@ -484,19 +484,22 @@ const Q2 = `Deadlock needs all four Coffman conditions at once: mutual exclusion
       await sleep(1000);
     });
 
-    await step('Controller publishes', async () => {
-      admin = await login(await staff(), 'admin@demo.local', 'Demo-Admin!2026', 'Controller');
+    await step('Controller of Examinations releases all results together', async () => {
+      admin = await login(await staff(), 'admin@demo.local', 'Demo-Admin!2026', 'Controller of Examinations');
       await admin.goto(`${BASE}/examcell/exams/${examId}`);
       await admin.getByRole('tab', { name: 'Candidates' }).click();
-      await admin.getByRole('row', { name: /Student 01/ }).getByRole('button', { name: 'Open' }).click();
-      const d = admin.getByRole('dialog');
-      await caption(admin, 'Controller: authorizes publication — results are never published automatically');
-      await d.getByRole('button', { name: 'Authorize publication' }).click();
-      const resp = admin.waitForResponse((r) => r.url().includes('/authorize-publication') && r.request().method() === 'POST');
-      await d.getByRole('button', { name: 'Publish result' }).click();
-      if ((await resp).status() >= 300) throw new Error('publication refused');
-      await sleep(1000);
-      await shot(admin, 'controller-published', { fullPage: true });
+      const panel = admin.getByRole('region', { name: 'Result release' });
+      await panel.waitFor({ timeout: 20000 });
+      await caption(admin, 'COE: results go out together, only when every script is approved — never one student early');
+      await shot(admin, 'controller-release-panel', { fullPage: true });
+      await panel.getByRole('button', { name: 'Release all results' }).click();
+      const resp = admin.waitForResponse((r) => r.url().includes('/publish-results') && r.request().method() === 'POST');
+      await admin.getByRole('dialog', { name: 'Release all results?' }).getByRole('button', { name: 'Release results' }).click();
+      const r = await resp;
+      if (r.status() >= 300) throw new Error(`release refused: ${r.status()} ${await r.text()}`);
+      await admin.getByText(/Results released together on/).waitFor({ timeout: 20000 });
+      await caption(admin, 'Released. From now on a mark changes only through a revaluation the COE approves');
+      await shot(admin, 'controller-released', { fullPage: true });
     });
 
     await step('student sees the published result and the answer booklet', async () => {

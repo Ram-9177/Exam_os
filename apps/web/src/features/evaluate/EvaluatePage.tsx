@@ -32,6 +32,7 @@ export interface MarkProposal {
   method: 'NO_ANSWER' | 'ANSWER_KEY' | 'NUMERIC_KEY' | 'RUBRIC_TERMS' | 'EXAMINER';
   basis: string;
   criteria?: Array<{ code: string; max: number; awarded: number; evidence: string }>;
+  review?: 'ROUTINE' | 'CHECK_CAREFULLY';
 }
 const METHOD_LABEL: Record<MarkProposal['method'], string> = {
   NO_ANSWER: 'no answer written',
@@ -62,6 +63,7 @@ export function useEvaluatorAssignments(examId?: string) {
           candidateName: string | null;
           candidateEmail: string | null;
           hallTicketNumber: string | null;
+          systemEvaluation: { proposedTotal: number; max: number; needsExaminer: number; checkCarefully: number } | null;
         }>
       >(`/evaluator/me/assignments${examId ? `?examId=${examId}` : ''}`),
   });
@@ -81,7 +83,7 @@ export function EvaluateHomePage() {
       <div>
         <PageTitle
           title="Marking & Evaluation"
-          lede="Enter marks question by question with one explanation each. External evaluations are strictly anonymized."
+          lede="The system has already evaluated each script against the paper's marking steps. Open each one, read the answers, keep or change the proposed marks (every change needs a reason) and record them. Nothing reaches a student until the Exam Cell approves and the Controller of Examinations releases the results."
         />
       </div>
 
@@ -127,6 +129,23 @@ export function EvaluateHomePage() {
                     <p className="text-xs font-mono text-ink-2">{a.examCode}</p>
                   </div>
                 ),
+              },
+              {
+                key: 'system',
+                header: 'System evaluation',
+                render: (a) =>
+                  a.systemEvaluation ? (
+                    <div className="text-sm">
+                      <p className="font-mono tabular">
+                        {a.systemEvaluation.proposedTotal} / {a.systemEvaluation.max}
+                      </p>
+                      <p className="text-xs text-ink-2">
+                        {[a.systemEvaluation.checkCarefully ? `${a.systemEvaluation.checkCarefully} to read carefully` : null, a.systemEvaluation.needsExaminer ? `${a.systemEvaluation.needsExaminer} for you to mark` : null].filter(Boolean).join(' · ') || 'routine'}
+                      </p>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-ink-2">not yet</span>
+                  ),
               },
               {
                 key: 'role',
@@ -422,6 +441,7 @@ export function EvaluatePage() {
                   <p className="font-medium">
                     {proposals.get(q.questionId)!.proposedMarks === null ? 'No proposal' : `Proposed: ${proposals.get(q.questionId)!.proposedMarks} / ${proposals.get(q.questionId)!.maxMarks}`}
                     <span className="text-ink-2 font-normal"> · {METHOD_LABEL[proposals.get(q.questionId)!.method]}</span>
+                    {proposals.get(q.questionId)!.review === 'CHECK_CAREFULLY' ? <span className="ml-2 text-fix font-normal">· partial credit: read this answer carefully</span> : null}
                   </p>
                   <p className="text-ink-2">{proposals.get(q.questionId)!.basis}</p>
                   {proposals.get(q.questionId)!.criteria?.map((c) => (

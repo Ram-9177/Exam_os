@@ -28,6 +28,8 @@ export interface MarkProposal {
   method: ProposalMethod;
   basis: string;
   criteria?: ProposedCriterion[];
+  /** CHECK_CAREFULLY when the system gave partial credit somewhere: the examiner should read that part closely. */
+  review?: 'ROUTINE' | 'CHECK_CAREFULLY';
 }
 
 interface PaperQuestionRow {
@@ -40,6 +42,19 @@ interface PaperQuestionRow {
 }
 
 const half = (x: number) => Math.floor(x * 2 + 1e-9) / 2;
+/** Nearest half mark, ties up: rounding never works against the student. */
+const nearestHalf = (x: number) => Math.round(x * 2 + 1e-9) / 2;
+
+/**
+ * Difficulty of a rubric step, 1 (recall a definition) … 10 (hardest synthesis). It decides how much of the step's key
+ * terms an answer must cover for full credit: every term at 1, 80 % at the default 5, 55 % at 10 — a demanding step
+ * is not failed for missing a phrase, a basic one must be complete. Partial coverage earns proportionally.
+ */
+export const DEFAULT_DIFFICULTY = 5;
+export function fullCreditCoverage(difficulty: number): number {
+  const d = Math.min(10, Math.max(1, Math.round(difficulty)));
+  return Math.round((1 - (d - 1) * 0.05) * 100) / 100;
+}
 const norm = (s: string) => s.toLowerCase().replace(/[\u2010-\u2015]/g, '-').replace(/\s+/g, ' ');
 
 /** Everything the student wrote: paragraphs and the text placed on diagrams. */
@@ -114,22 +129,42 @@ function numeric(q: PaperQuestionRow, text: string, max: number): MarkProposal |
     maxMarks: max,
     proposedMarks: marks,
     method: 'NUMERIC_KEY',
+    review: n > 0 && n < values.length ? 'CHECK_CAREFULLY' : 'ROUTINE',
     basis: `${n} of ${values.length} expected ${values.length === 1 ? 'value' : 'values'} found (${values.map((v, i) => `${v}${hits[i] ? ' ✓' : ' ✗'}`).join(', ')}; tolerance ${tolerance ?? '1 %'}). Working is not checked automatically.`,
   };
 }
 
 function rubricTerms(q: PaperQuestionRow, text: string, max: number): MarkProposal | null {
-  const rubric = (Array.isArray(q.rubric) ? q.rubric : []) as Array<{ code: string; max: number; description: string; keywords?: string[] }>;
+  const rubric = (Array.isArray(q.rubric) ? q.rubric : []) as Array<{ code: string; max: number; description: string; keywords?: string[]; difficulty?: number }>;
   if (!rubric.length || rubric.some((c) => !Array.isArray(c.keywords) || c.keywords.length === 0)) return null;
+  let partial = false;
   const criteria: ProposedCriterion[] = rubric.map((c) => {
     const kws = c.keywords!;
     const got = kws.filter((k) => termFound(text, k));
     const missing = kws.filter((k) => !got.includes(k));
-    const awarded = Math.min(Number(c.max), half((Number(c.max) * got.length) / kws.length));
-    return { code: c.code, max: Number(c.max), awarded, evidence: `${c.description}: ${got.length}/${kws.length} key terms${got.length ? ` (found: ${got.map((k) => k.split('|')[0]).join(', ')})` : ''}${missing.length ? ` (missing: ${missing.map((k) => k.split('|')[0]).join(', ')})` : ''}` };
+    const difficulty = typeof c.difficulty === 'number' ? Math.min(10, Math.max(1, Math.round(c.difficulty))) : DEFAULT_DIFFICULTY;
+    const needed = fullCreditCoverage(difficulty);
+    const credit = Math.min(1, got.length / kws.length / needed);
+    if (credit > 0 && credit < 1) partial = true;
+    const awarded = Math.min(Number(c.max), nearestHalf(Number(c.max) * credit));
+    const names = (xs: string[]) => xs.map((k) => k.split('|')[0]).join(', ');
+    return {
+      code: c.code,
+      max: Number(c.max),
+      awarded,
+      evidence: `${c.description} · difficulty ${difficulty}/10, full credit at ${Math.round(needed * 100)} % of key terms: ${got.length}/${kws.length} found${got.length ? ` (${names(got)})` : ''}${missing.length ? `; missing: ${names(missing)}` : ''}`,
+    };
   });
   const total = Math.min(max, criteria.reduce((a, c) => a + c.awarded, 0));
-  return { questionId: q.question_id, maxMarks: max, proposedMarks: total, method: 'RUBRIC_TERMS', basis: `Key terms of the rubric found in the answer, per criterion. Correctness of reasoning is the examiner's judgement.`, criteria };
+  return {
+    questionId: q.question_id,
+    maxMarks: max,
+    proposedMarks: total,
+    method: 'RUBRIC_TERMS',
+    basis: `Each rubric step checked for its key terms; harder steps need fewer of them for full credit. Rounded to the nearest half mark in the student's favour. Correctness of reasoning is the examiner's judgement.`,
+    criteria,
+    review: partial ? 'CHECK_CAREFULLY' : 'ROUTINE',
+  };
 }
 
 export function proposeMark(q: PaperQuestionRow, content: unknown): MarkProposal {
@@ -148,4 +183,22 @@ export async function proposeMarksForAttempt(trx: Knex.Transaction, tenantId: st
   const docs = await trx('answer_documents').where({ tenant_id: tenantId, attempt_id: attemptId }).select('question_id', 'content');
   const byQ = new Map(docs.map((d) => [d.question_id as string, typeof d.content === 'string' ? JSON.parse(d.content) : d.content]));
   return questions.map((q) => proposeMark(q, byQ.get(q.question_id) ?? { blocks: [] }));
+}
+
+/**
+ * The system's evaluation of one sealed script, stored for the marking queue. Upserted: one current snapshot per
+ * attempt. What counts at recording time is recomputed from the same paper and answers (deterministic).
+ */
+export async function snapshotProposals(trx: Knex.Transaction, tenantId: string, examId: string, attemptId: string): Promise<{ proposedTotal: number; maxTotal: number; needsExaminer: number; checkCarefully: number } | null> {
+  const proposals = await proposeMarksForAttempt(trx, tenantId, examId, attemptId);
+  if (!proposals) return null;
+  const proposedTotal = Math.round(proposals.reduce((a, p) => a + (p.proposedMarks ?? 0), 0) * 100) / 100;
+  const maxTotal = Math.round(proposals.reduce((a, p) => a + p.maxMarks, 0) * 100) / 100;
+  const needsExaminer = proposals.filter((p) => p.proposedMarks === null).length;
+  const checkCarefully = proposals.filter((p) => p.review === 'CHECK_CAREFULLY').length;
+  await trx('mark_proposals')
+    .insert({ tenant_id: tenantId, exam_id: examId, attempt_id: attemptId, proposals: JSON.stringify(proposals), proposed_total: proposedTotal, max_total: maxTotal, needs_examiner: needsExaminer, check_carefully: checkCarefully, computed_at: trx.fn.now() })
+    .onConflict('attempt_id')
+    .merge(['proposals', 'proposed_total', 'max_total', 'needs_examiner', 'check_carefully', 'computed_at']);
+  return { proposedTotal, maxTotal, needsExaminer, checkCarefully };
 }

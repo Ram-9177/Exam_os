@@ -44,10 +44,12 @@ describe('automatic mark proposals', () => {
     const full = proposeMark(r, doc('Mutual exclusion, hold-and-wait, non-preemption and circular wait. Prevention: request all resources at once, or release what you hold.'));
     expect(full).toMatchObject({ proposedMarks: 5, method: 'RUBRIC_TERMS' });
     const part = proposeMark(r, doc('Mutual exclusion and circular wait are needed.'));
-    expect(part.proposedMarks).toBe(1.5);
+    // default difficulty 5: full credit at 80 % of the terms; 2/4 = 62.5 % of that → 1.875 → nearest half 2
+    expect(part.proposedMarks).toBe(2);
+    expect(part.review).toBe('CHECK_CAREFULLY');
     expect(part.criteria).toEqual([
-      { code: 'COND', max: 3, awarded: 1.5, evidence: 'Four Coffman conditions: 2/4 key terms (found: mutual exclusion, circular wait) (missing: hold and wait, no preemption)' },
-      { code: 'PREV', max: 2, awarded: 0, evidence: 'Prevention: 0/2 key terms (missing: request all, release)' },
+      { code: 'COND', max: 3, awarded: 2, evidence: 'Four Coffman conditions · difficulty 5/10, full credit at 80 % of key terms: 2/4 found (mutual exclusion, circular wait); missing: hold and wait, no preemption' },
+      { code: 'PREV', max: 2, awarded: 0, evidence: 'Prevention · difficulty 5/10, full credit at 80 % of key terms: 0/2 found; missing: request all, release' },
     ]);
     // length earns nothing: a long answer without the terms gets 0
     expect(proposeMark(r, doc('word '.repeat(400))).proposedMarks).toBe(0);
@@ -55,5 +57,21 @@ describe('automatic mark proposals', () => {
 
   it('reads the text a student placed on a diagram too', () => {
     expect(answerText({ blocks: [{ id: 'c', kind: 'canvas', content: { strokes: [{ tool: 'text', text: 'circular wait' }] } }] })).toEqual({ text: 'circular wait', hasDrawing: true });
+  });
+
+  it('difficulty per rubric step (1–10) sets how much of the step must be covered for full credit', () => {
+    const terms = ['page table', 'frame', 'TLB', 'page fault'];
+    const step = (difficulty?: number) => q({ max_marks: 4, rubric: [{ code: 'S', max: 4, description: 'Paging', keywords: terms, ...(difficulty ? { difficulty } : {}) }] });
+    const answer = doc('The page table maps each page to a frame; the TLB caches translations.'); // 3 of 4 terms
+    expect(proposeMark(step(1), answer).proposedMarks).toBe(3); // basic step: every term needed → 3/4 × 4
+    expect(proposeMark(step(), answer).proposedMarks).toBe(4); // difficulty 5: 75 % of 80 % → 3.75 → 4
+    expect(proposeMark(step(10), answer).proposedMarks).toBe(4); // hardest: 55 % is full credit
+    expect(proposeMark(step(10), answer).review).toBe('ROUTINE');
+    expect(proposeMark(step(1), answer).criteria![0]!.evidence).toContain('difficulty 1/10, full credit at 100 % of key terms: 3/4 found');
+    const one = doc('Only the page table.');
+    expect(proposeMark(step(1), one).proposedMarks).toBe(1);
+    expect(proposeMark(step(10), one).proposedMarks).toBe(2); // 25 % / 55 % × 4 = 1.82 → 2
+    // nothing relevant earns nothing at any difficulty
+    expect(proposeMark(step(10), doc('I do not know.')).proposedMarks).toBe(0);
   });
 });

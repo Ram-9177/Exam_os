@@ -193,6 +193,15 @@ export function BookletView({ booklet, tz, marks, headerActions }: { booklet: Bo
             <dd>{formatDateTime(b.validation.publishedAt, tz)}</dd>
           </dl>
         </div>
+        {b.validation.publishedAt ? (
+          <section className="mt-6 text-sm text-ink-2 max-w-[68ch]" aria-label="How these marks were decided">
+            <p className="font-medium text-ink">How these marks were decided</p>
+            <p className="mt-1">
+              The system checked each answer against the paper's published marking steps and proposed marks. A named examiner then read every answer and decided each mark; any change from the proposal was explained in writing. The Exam Cell checked the script, and the Controller of Examinations released all results of this exam together. No mark was given by the system alone.
+            </p>
+            <p className="mt-1">If you believe a mark is wrong, you can apply for revaluation within 7 days of publication from your results page. The Controller of Examinations decides, and any change is explained to you.</p>
+          </section>
+        ) : null}
         <div className="mt-8 pt-4 border-t border-rule text-xs text-ink-2">
           <p>
             Verification hash <span className="font-mono break-all text-ink">{b.verificationHash}</span>

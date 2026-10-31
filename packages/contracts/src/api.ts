@@ -178,6 +178,8 @@ export const PaperQuestionRubricCriterionSchema = z.object({
   description: z.string().trim().min(1).max(500),
   /** Key terms a full answer mentions (`a|b` = alternatives); with them the system proposes marks for this criterion. */
   keywords: z.array(z.string().trim().min(1).max(120)).max(30).optional(),
+  /** Difficulty of this step, 1 (recall) … 10 (hardest): harder steps need fewer key terms for full credit. Default 5. */
+  difficulty: z.number().int().min(1).max(10).optional(),
 });
 export type PaperQuestionRubricCriterion = z.infer<typeof PaperQuestionRubricCriterionSchema>;
 

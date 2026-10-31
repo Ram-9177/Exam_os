@@ -138,6 +138,11 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Double evaluation with divergence threshold (15%) and moderator resolution | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
 | Revaluation lifecycle (student request, window check, exam cell decision, re-marking, ledger supersede, and result.corrected event) | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
 | Automatic mark proposals (replaces the word-count "AI" draft): MCQ answer key read from explicit choices only, NUMERIC expected values with tolerance, rubric key terms per criterion with found/missing evidence, no answer → 0, drawings and unkeyed questions left to the examiner; length never earns marks. Proposals load with the script and pre-fill unmarked questions; a mark that differs needs the examiner's reason (server-enforced, recomputed server-side) and proposal, method and reason are kept in the result version | Tested | auto-marks.test.ts, exam-flow.e2e.test.ts, evaluation-scale.test.ts; apps/web/test/evaluate-marks.test.tsx |
+| Rubric steps with difficulty 1–10 (full credit at 100 % of key terms for 1, 80 % for 5, 55 % for 10; nearest half mark, ties up); paper editor for steps, difficulty, key terms and answer keys; "read carefully" on partial credit | Tested | auto-marks.test.ts; apps/web/test/rubric-editor.test.tsx, evaluate-marks.test.tsx |
+| System evaluates each script when it reaches marking (`mark_proposals`), shown in the examiner's queue; Exam Section can re-run it for an exam | Tested | exam-flow.e2e.test.ts |
+| One release of all results by the COE (`POST /exams/:id/publish-results`): CLOSED exam, every script approved, holds withheld, idempotent; no single publication before it; published results cannot be re-marked | Tested | exam-flow.e2e.test.ts; apps/web/test/candidates-drawer.test.tsx |
+| Revaluation decided only by the COE; every change from the published mark needs a reason; ledger supersedes | Tested | evaluation-scale.test.ts |
+| Booklet tells the student how the marks were decided and how to apply for revaluation | Tested | browser rehearsal (apps/web/e2e) |
 | Answer similarity analysis and adjudication (MinHash/shingles, integrity hold) | Tested | evaluation-scale.test.ts |
 
 ## Web application (apps/web) — React 19, Vite, Tailwind 4, TanStack Query, React Router 7, custom components

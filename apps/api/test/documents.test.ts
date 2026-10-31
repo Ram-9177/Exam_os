@@ -338,6 +338,8 @@ describe('Server-side PDF and QR verification (hall ticket, booklet, evidence, e
       });
     expect(appRes.status).toBe(201);
 
+    // The exam's mass release is covered in exam-flow.e2e; here the release is recorded so this one result may go out.
+    await ctx.admin('exams').where({ id: (await ctx.admin('exam_attempts').where('id', attemptId).first('exam_id')).exam_id }).update({ results_published_at: new Date() });
     // Controller authorizes and publishes
     const pubRes = await req()
       .post(`/api/v1/candidates/${attemptId}/authorize-publication`)

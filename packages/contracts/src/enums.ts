@@ -266,7 +266,6 @@ export const ROLE_PERMISSIONS: Record<RoleCode, readonly Permission[]> = {
     'analytics:read',
     'evaluation:assign',
     'evaluation:moderate',
-    'revaluation:decide',
   ],
   CONTROLLER: [
     'exams:read',

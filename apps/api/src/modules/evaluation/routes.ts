@@ -12,6 +12,10 @@ import { asyncHandler, validateBody, body, validateQuery, query, uuidParam } fro
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
 import { requireUser, requirePermission, userPrincipal } from '../../middleware/auth.js';
 import type { JwtService } from '../auth/jwt.js';
+import { publishExamResults } from '../candidates/service.js';
+import { autoEvaluateExam } from './service.js';
+
+const PublishResultsBody = z.object({ idempotencyKey: z.string().uuid() });
 import {
   assignEvaluators,
   listEvaluatorAssignments,
@@ -231,6 +235,32 @@ export function evaluationRoutes(deps: AppDeps, jwt: JwtService): Router {
         generateRubricProposals(trx, t.id, attemptId),
       );
       res.json(result);
+    }),
+  );
+
+  // The system evaluates every sealed script of the exam again (e.g. after the rubric's key terms were corrected
+  // before marking began). Scripts already marked keep their marks; proposals never overwrite a decision.
+  r.post(
+    '/exams/:id/auto-evaluate',
+    user,
+    requirePermission('evaluation:assign', (req) => ({ examId: req.params['id'] })),
+    asyncHandler(async (req: Request, res: Response) => {
+      const t = requireTenant(req);
+      const examId = uuidParam(req, 'id');
+      res.json(await tenantTx(deps, req, (trx) => autoEvaluateExam(trx, t.id, examId)));
+    }),
+  );
+
+  // The Controller of Examinations releases every approved result of the exam at once.
+  r.post(
+    '/exams/:id/publish-results',
+    user,
+    requirePermission('controller:publish', (req) => ({ examId: req.params['id'] })),
+    validateBody(PublishResultsBody),
+    asyncHandler(async (req: Request, res: Response) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      res.json(await tenantTx(deps, req, (trx) => publishExamResults(trx, t.id, p.userId, uuidParam(req, 'id'), body<typeof PublishResultsBody>(req).idempotencyKey)));
     }),
   );
 
