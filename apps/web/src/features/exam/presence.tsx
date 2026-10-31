@@ -55,14 +55,30 @@ export function useCameraPresence({ enabled, active, reporter, loadAnalyser = de
       await video.play().catch(() => undefined);
       const tracker = new PresenceTracker();
       setStatus('on');
+      let failures = 0;
+      let started = false;
+      let waits = 0;
       timer = setInterval(() => {
-        if (video.readyState < 2 || !analyser) return;
+        if (!analyser) return;
+        if (video.readyState < 2) {
+          if (++waits === 15) console.warn('[examos] camera presence: no video frames yet', video.readyState, video.paused);
+          return;
+        }
         const at = performance.now();
         try {
           const o = analyser.analyse(video, at);
+          if (!started) {
+            started = true;
+            console.info('[examos] camera presence check running on this device');
+          }
+          failures = 0;
           for (const e of tracker.observe({ at, ...o })) reporter.report(e.signal, e.metadata, { force: e.force });
-        } catch {
-          /* one bad frame is not a signal */
+        } catch (err) {
+          // One bad frame is not a signal; a detector that keeps failing is a technical gap the proctor must know about.
+          if (++failures === 10) {
+            console.warn('[examos] camera presence check failed repeatedly', err);
+            unavailable('detector-error');
+          }
         }
       }, SAMPLE_MS);
     })();

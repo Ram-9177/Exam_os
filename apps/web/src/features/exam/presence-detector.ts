@@ -7,6 +7,7 @@
 import { FaceDetector } from '@mediapipe/tasks-vision';
 import wasmLoaderPath from '@mediapipe/tasks-vision/vision_wasm_internal.js?url';
 import wasmBinaryPath from '@mediapipe/tasks-vision/vision_wasm_internal.wasm?url';
+import { installSameOriginFetchGuard } from '@/lib/same-origin-guard';
 
 export const MODEL_URL = '/models/blaze_face_short_range.tflite';
 
@@ -16,6 +17,8 @@ export interface FrameAnalyser {
 }
 
 export async function createFrameAnalyser(): Promise<FrameAnalyser> {
+  // MediaPipe sends usage telemetry to a Google endpoint every minute; nothing leaves a student's device during an exam.
+  installSameOriginFetchGuard();
   const detector = await FaceDetector.createFromOptions({ wasmLoaderPath, wasmBinaryPath }, { baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' }, runningMode: 'VIDEO', minDetectionConfidence: 0.6 });
   const canvas = document.createElement('canvas');
   canvas.width = 32;

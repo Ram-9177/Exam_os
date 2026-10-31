@@ -244,8 +244,12 @@ export function useLockdown({ attemptId, active, reporter, onDisplayChange, onRe
       seen(m.tab);
     };
     ch.postMessage({ type: 'hello', tab: me });
+    // Closing a tab never unmounts React: say goodbye on pagehide too, or the other tab keeps warning forever.
+    const bye = () => ch.postMessage({ type: 'bye', tab: me });
+    window.addEventListener('pagehide', bye);
     return () => {
-      ch.postMessage({ type: 'bye', tab: me });
+      window.removeEventListener('pagehide', bye);
+      bye();
       ch.close();
       setOtherTabs(0);
     };

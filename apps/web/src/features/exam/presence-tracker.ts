@@ -21,11 +21,15 @@ export interface PresenceEmission {
 export const ABSENT_AFTER_MS = 8_000;
 export const MULTIPLE_AFTER_MS = 3_000;
 export const COVERED_LUMINANCE = 0.06;
+/** Detectors flicker: a poster or a shadow is a "face" for one frame. An absence ends only after this many face frames in a row. */
+export const PRESENT_CONFIRM_SAMPLES = 3;
 
 export class PresenceTracker {
   private absentSince: number | null = null;
   private absentReason: 'no-face' | 'covered' = 'no-face';
   private absentReported = false;
+  private presentStreak = 0;
+  private presentSince: number | null = null;
   private multiSince: number | null = null;
   private multiReported = false;
   private maxFaces = 0;
@@ -36,6 +40,8 @@ export class PresenceTracker {
     const absent = covered || o.faces === 0;
 
     if (absent) {
+      this.presentStreak = 0;
+      this.presentSince = null;
       if (this.absentSince === null) {
         this.absentSince = o.at;
         this.absentReason = covered ? 'covered' : 'no-face';
@@ -46,9 +52,15 @@ export class PresenceTracker {
         out.push({ signal: 'FACE_NOT_VISIBLE', metadata: { phase: 'started', reason: this.absentReason, seconds: Math.round(ms / 1000) } });
       }
     } else if (this.absentSince !== null) {
-      if (this.absentReported) out.push({ signal: 'FACE_NOT_VISIBLE', metadata: { phase: 'returned', reason: this.absentReason, seconds: Math.round((o.at - this.absentSince) / 1000) }, force: true });
-      this.absentSince = null;
-      this.absentReported = false;
+      this.presentSince ??= o.at;
+      if (++this.presentStreak >= PRESENT_CONFIRM_SAMPLES) {
+        // The absence lasted until the first of the confirming face frames.
+        if (this.absentReported) out.push({ signal: 'FACE_NOT_VISIBLE', metadata: { phase: 'returned', reason: this.absentReason, seconds: Math.round((this.presentSince - this.absentSince) / 1000) }, force: true });
+        this.absentSince = null;
+        this.absentReported = false;
+        this.presentStreak = 0;
+        this.presentSince = null;
+      }
     }
 
     if (!covered && o.faces >= 2) {

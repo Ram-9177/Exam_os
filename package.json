@@ -22,7 +22,8 @@
     "demo": "npm run demo -w @examos/api",
     "package": "bash scripts/package.sh",
     "security:audit": "npm audit --omit=dev",
-    "security:probes": "npm run security:probes -w @examos/api"
+    "security:probes": "npm run security:probes -w @examos/api",
+    "smoke": "npm run smoke -w @examos/api"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

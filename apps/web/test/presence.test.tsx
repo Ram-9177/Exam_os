@@ -12,13 +12,22 @@ const seq = (tracker: PresenceTracker, frames: Array<[number, number, number?]>)
 describe('presence tracker (on-device, per-second samples)', () => {
   it('a glance away is nothing; eight seconds without a face is a signal, and the return carries the total', () => {
     const t = new PresenceTracker();
-    expect(seq(t, [[0, 1], [1000, 0], [3000, 0], [4000, 1]])).toEqual([]);
-    const out = seq(t, [[10_000, 0], [14_000, 0], [18_000, 0], [25_000, 0], [31_000, 1]]);
+    expect(seq(t, [[0, 1], [1000, 0], [3000, 0], [4000, 1], [5000, 1], [6000, 1]])).toEqual([]);
+    const out = seq(t, [[10_000, 0], [14_000, 0], [18_000, 0], [25_000, 0], [31_000, 1], [32_000, 1], [33_000, 1]]);
     expect(out).toEqual([
       { signal: 'FACE_NOT_VISIBLE', metadata: { phase: 'started', reason: 'no-face', seconds: 8 } },
       { signal: 'FACE_NOT_VISIBLE', metadata: { phase: 'returned', reason: 'no-face', seconds: 21 }, force: true },
     ]);
     expect(describeSignal({ signal_class: 'FACE_NOT_VISIBLE', metadata: out[1]!.metadata, source_id: 'CLIENT:u' })).toBe('Reported by the student’s browser: no face was in view for 21 s. Detected on the student’s device; no image was sent.');
+  });
+
+  it('a single stray detection (poster, shadow) does not end an absence; three face frames in a row do', () => {
+    const t = new PresenceTracker();
+    const out = seq(t, [[0, 0], [2000, 1], [3000, 0], [5000, 1], [6000, 0], [8000, 0], [9000, 1], [10_000, 1], [11_000, 0], [12_000, 1], [13_000, 1], [14_000, 1]]);
+    expect(out).toEqual([
+      { signal: 'FACE_NOT_VISIBLE', metadata: { phase: 'started', reason: 'no-face', seconds: 8 } },
+      { signal: 'FACE_NOT_VISIBLE', metadata: { phase: 'returned', reason: 'no-face', seconds: 12 }, force: true },
+    ]);
   });
 
   it('a covered or blacked-out camera is reported as covered, even if the detector still guesses a face', () => {

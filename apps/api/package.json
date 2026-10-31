@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "demo": "tsx scripts/demo-seed.ts",
     "platform:create-admin": "tsx scripts/create-platform-admin.ts",
-    "security:probes": "node scripts/security-probes.mjs"
+    "security:probes": "node scripts/security-probes.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@examos/contracts": "*",
