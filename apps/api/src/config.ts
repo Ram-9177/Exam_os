@@ -29,6 +29,19 @@ const EnvSchema = z.object({
   /** Self-hosted Judge0 (isolated sandbox) that runs CODE answers; without it code is marked by examiners only. */
   JUDGE_URL: z.string().url().optional(),
   JUDGE_TOKEN: z.string().optional(),
+  /** Optional remap of catalogue languages to this Judge0 build's ids, as JSON: {"python":92,"java":91}. */
+  JUDGE_LANGUAGE_IDS: z
+    .string()
+    .optional()
+    .refine((v) => {
+      if (!v) return true;
+      try {
+        const o = JSON.parse(v) as unknown;
+        return !!o && typeof o === 'object' && Object.values(o).every((n) => Number.isInteger(n) && (n as number) > 0);
+      } catch {
+        return false;
+      }
+    }, 'JUDGE_LANGUAGE_IDS must be a JSON object of positive integers'),
   EXAMOS_ALLOW_HTTP_WEBHOOKS: z.string().optional(),
 });
 

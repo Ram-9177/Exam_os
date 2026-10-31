@@ -18,6 +18,7 @@ import {
   useToast,
   type Tone,
 } from '@/ui';
+import { CodeQuestionEditor } from './CodeQuestionEditor';
 import { useExamPaper, type ExamRow, type PaperQuestion, type PaperSection } from './api';
 
 const STATUS_TONE: Record<string, Tone> = {
@@ -162,7 +163,8 @@ export function PaperTab({ exam }: { exam: ExamRow }) {
   };
 
   const updateQuestion = (index: number, patch: Partial<PaperQuestion>) => {
-    setQuestions(questions.map((q, i) => (i === index ? { ...q, ...patch } : q)));
+    // functional: an editor may send two patches in one event (e.g. the toolchain and the reference's language)
+    setQuestions((cur) => cur.map((q, i) => (i === index ? { ...q, ...patch } : q)));
   };
 
   const removeQuestion = (index: number) => {
@@ -333,7 +335,7 @@ export function PaperTab({ exam }: { exam: ExamRow }) {
                   )}
                 </Field>
 
-                <RubricEditor question={q} disabled={!canEdit} onChange={(patch) => updateQuestion(idx, patch)} />
+                <RubricEditor examId={exam.id} question={q} disabled={!canEdit} onChange={(patch) => updateQuestion(idx, patch)} />
               </div>
             ))}
           </div>
@@ -417,13 +419,13 @@ const DIFFICULTY_HINT: Record<number, string> = { 1: 'recall', 3: 'explain', 5: 
  * full answer mentions; the system proposes marks from them and the examiner decides. Harder steps need fewer of
  * their key terms for full credit (every term at 1, 80 % at 5, 55 % at 10). MCQ and numeric questions take an answer key.
  */
-export function RubricEditor({ question, disabled, onChange }: { question: PaperQuestion; disabled: boolean; onChange: (patch: Partial<PaperQuestion>) => void }) {
+export function RubricEditor({ examId, question, disabled, onChange }: { examId?: string; question: PaperQuestion; disabled: boolean; onChange: (patch: Partial<PaperQuestion>) => void }) {
   const rubric: Rubric = question.rubric ?? [];
   const setStep = (i: number, patch: Partial<Rubric[number]>) => onChange({ rubric: rubric.map((r, k) => (k === i ? { ...r, ...patch } : r)) });
   const sum = rubric.reduce((a, r) => a + (Number(r.max) || 0), 0);
   return (
     <section className="space-y-3 border-t border-rule pt-3" aria-label={`Marking scheme for ${question.questionId}`}>
-      <AnswerKeyEditor question={question} disabled={disabled} onChange={onChange} />
+      <AnswerKeyEditor examId={examId} question={question} disabled={disabled} onChange={onChange} />
       <div className="flex items-baseline justify-between gap-3">
         <h4 className="text-sm font-semibold">Marking steps</h4>
         {rubric.length ? <span className={sum === Number(question.maxMarks) ? 'text-xs text-ink-2' : 'text-xs text-fix'} role="status">{sum === Number(question.maxMarks) ? `Steps add up to ${sum} marks` : `Steps add up to ${sum}; the question is worth ${question.maxMarks}`}</span> : null}
@@ -482,11 +484,10 @@ function RawListInput({ id, describedBy, initial, separator, disabled, onList, r
   return rows ? <TextArea id={id} aria-describedby={describedBy} rows={rows} value={raw} disabled={disabled} onChange={(e) => change(e.target.value)} /> : <TextInput id={id} aria-describedby={describedBy} value={raw} disabled={disabled} onChange={(e) => change(e.target.value)} />;
 }
 
-const LANGS: Array<['c' | 'cpp' | 'java' | 'python', string]> = [['c', 'C'], ['cpp', 'C++'], ['java', 'Java'], ['python', 'Python 3']];
 type Obj = Record<string, unknown>;
 
 /** The key the system marks against: options and correct ones, expected values/expression, or tests for a program. */
-function AnswerKeyEditor({ question, disabled, onChange }: { question: PaperQuestion; disabled: boolean; onChange: (patch: Partial<PaperQuestion>) => void }) {
+function AnswerKeyEditor({ examId, question, disabled, onChange }: { examId?: string; question: PaperQuestion; disabled: boolean; onChange: (patch: Partial<PaperQuestion>) => void }) {
   const ea = (question.expectedAnswer ?? null) as unknown;
   const obj = (ea && typeof ea === 'object' && !Array.isArray(ea) ? ea : {}) as Obj;
   const setKey = (patch: Obj) => onChange({ expectedAnswer: { ...obj, ...patch } });
@@ -536,49 +537,6 @@ function AnswerKeyEditor({ question, disabled, onChange }: { question: PaperQues
       </div>
     );
   }
-  if (question.kind === 'CODE') {
-    const spec = question.codeSpec ?? { languages: ['python'] as Array<'c' | 'cpp' | 'java' | 'python'>, samples: [], sampleRunsAllowed: 10, timeLimitMs: 2000, memoryMb: 128 };
-    const setSpec = (patch: Partial<NonNullable<PaperQuestion['codeSpec']>>) => onChange({ codeSpec: { ...spec, ...patch } });
-    const tests = (Array.isArray(obj['tests']) ? obj['tests'] : []) as Array<{ input: string; expected: string; weight?: number }>;
-    const pairs = (list: Array<{ input: string; expected: string; weight?: number }>, setList: (l: Array<{ input: string; expected: string; weight?: number }>) => void, label: string, weights: boolean) => (
-      <div className="space-y-2">
-        {list.map((t, i) => (
-          <div key={i} className={weights ? 'grid gap-2 sm:grid-cols-[1fr_1fr_5rem_auto]' : 'grid gap-2 sm:grid-cols-[1fr_1fr_auto]'}>
-            <TextArea aria-label={`${label} ${i + 1} input`} rows={2} className="font-mono text-xs" value={t.input} disabled={disabled} onChange={(e) => setList(list.map((x, k) => (k === i ? { ...x, input: e.target.value } : x)))} />
-            <TextArea aria-label={`${label} ${i + 1} expected output`} rows={2} className="font-mono text-xs" value={t.expected} disabled={disabled} onChange={(e) => setList(list.map((x, k) => (k === i ? { ...x, expected: e.target.value } : x)))} />
-            {weights ? <TextInput aria-label={`${label} ${i + 1} weight`} type="number" min={1} placeholder="1" value={t.weight ?? ''} disabled={disabled} onChange={(e) => setList(list.map((x, k) => (k === i ? { ...x, weight: e.target.value === '' ? undefined : Math.max(1, Number(e.target.value) || 1) } : x)))} /> : null}
-            {!disabled ? <Button size="sm" variant="ghost" onClick={() => setList(list.filter((_, k) => k !== i))}>Remove</Button> : null}
-          </div>
-        ))}
-        {!disabled ? <Button size="sm" onClick={() => setList([...list, { input: '', expected: '' }])}>Add {label.toLowerCase()}</Button> : null}
-      </div>
-    );
-    return (
-      <div className="space-y-3">
-        <fieldset className="flex flex-wrap gap-3">
-          <legend className="text-sm font-semibold mb-1">Languages allowed</legend>
-          {LANGS.map(([id, label]) => (
-            <label key={id} className="flex items-center gap-1 text-sm">
-              <input type="checkbox" checked={spec.languages.includes(id)} disabled={disabled} onChange={(e) => setSpec({ languages: e.target.checked ? [...spec.languages, id] : spec.languages.filter((l) => l !== id) })} />
-              {label}
-            </label>
-          ))}
-        </fieldset>
-        <div className="flex flex-wrap gap-3">
-          <Field label="Time limit (ms)" className="w-32">{({ id }) => <TextInput id={id} type="number" min={100} max={10000} value={spec.timeLimitMs ?? 2000} disabled={disabled} onChange={(e) => setSpec({ timeLimitMs: Number(e.target.value) })} />}</Field>
-          <Field label="Memory (MB)" className="w-28">{({ id }) => <TextInput id={id} type="number" min={16} max={512} value={spec.memoryMb ?? 128} disabled={disabled} onChange={(e) => setSpec({ memoryMb: Number(e.target.value) })} />}</Field>
-          <Field label="Sample runs per student" className="w-44">{({ id }) => <TextInput id={id} type="number" min={0} max={50} value={spec.sampleRunsAllowed ?? 10} disabled={disabled} onChange={(e) => setSpec({ sampleRunsAllowed: Number(e.target.value) })} />}</Field>
-        </div>
-        <div>
-          <p className="text-sm font-semibold">Sample tests (students see these and may run them)</p>
-          {pairs(spec.samples ?? [], (l) => setSpec({ samples: l.map(({ input, expected }) => ({ input, expected })) }), 'Sample', false)}
-        </div>
-        <div>
-          <p className="text-sm font-semibold">Hidden tests (grade the program after the exam; never shown to students)</p>
-          {pairs(tests, (l) => setKey({ tests: l }), 'Hidden test', true)}
-        </div>
-      </div>
-    );
-  }
+  if (question.kind === 'CODE') return <CodeQuestionEditor examId={examId} question={question} disabled={disabled} onChange={onChange} />;
   return null;
 }

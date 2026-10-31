@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { api, isApiError } from '@/lib/api';
 import type { AnswerDoc, Block, CodeLanguageId } from '@/lib/answers';
 import { uuid } from '@/lib/ids';
+import { codeLanguage } from '@examos/contracts';
 import { Button, cn } from '@/ui';
 
 export interface CodeSpec {
@@ -11,6 +12,8 @@ export interface CodeSpec {
   timeLimitMs?: number;
   memoryMb?: number;
   sampleRunsAllowed?: number;
+  /** build-level question: the files (some read-only) and the setter's build/run commands */
+  project?: { files: Array<{ path: string; content: string; editable: boolean }>; build: string | null; run: string };
 }
 export interface StructuredQuestion {
   id: string;
@@ -19,7 +22,10 @@ export interface StructuredQuestion {
   codeSpec?: CodeSpec;
 }
 
-const LANGUAGE_LABEL: Record<CodeLanguageId, string> = { c: 'C', cpp: 'C++', java: 'Java', python: 'Python 3' };
+const languageLabel = (id: string) => {
+  const l = codeLanguage(id);
+  return l ? `${l.label} (${l.version})` : id;
+};
 
 function blockOf(doc: AnswerDoc, kind: Block['kind']): Block | undefined {
   return doc.blocks.find((b) => b.kind === kind);
@@ -90,18 +96,28 @@ function FinalAnswer({ doc, onChange, disabled, math }: { doc: AnswerDoc; onChan
   );
 }
 
-type RunResult = { runId: string; remaining: number; error: string | null; results: Array<{ test: number; passed: boolean; verdict: string; output: string; expected: string }> };
+type RunResult = { runId: string; remaining: number; error: string | null; results: Array<{ test: number; passed: boolean; verdict: string; output: string; expected: string; compileOutput?: string }> };
+type CodeContent = { language?: CodeLanguageId; source?: string; files?: Record<string, string> };
 
 function CodeAnswer({ question, doc, onChange, disabled, attemptId }: { question: StructuredQuestion & { codeSpec: CodeSpec }; doc: AnswerDoc; onChange: (d: AnswerDoc) => void; disabled: boolean; attemptId: string }) {
   const spec = question.codeSpec;
-  const current = blockOf(doc, 'code')?.content as { language?: CodeLanguageId; source?: string } | undefined;
-  // start in the language the examiner gave starter code for, else the first allowed one
-  const language = current?.language ?? spec.languages.find((l) => spec.starter?.[l]) ?? spec.languages[0]!;
-  const source = current?.source ?? spec.starter?.[language] ?? '';
+  const project = spec.project;
+  const current = blockOf(doc, 'code')?.content as CodeContent | undefined;
+  // start in the language the examiner gave starter code for, else the first allowed one (a project has one toolchain)
+  const language = project ? spec.languages[0]! : (current?.language ?? spec.languages.find((l) => spec.starter?.[l]) ?? spec.languages[0]!);
+  const source = project ? '' : (current?.source ?? spec.starter?.[language] ?? '');
+  // a project answer holds only the editable files; each starts from the setter's version
+  const files: Record<string, string> = project ? Object.fromEntries(project.files.filter((f) => f.editable).map((f) => [f.path, current?.files?.[f.path] ?? f.content])) : {};
+  const [activePath, setActivePath] = useState<string>(() => project?.files.find((f) => f.editable)?.path ?? project?.files[0]?.path ?? '');
+  const active = project?.files.find((f) => f.path === activePath) ?? project?.files[0];
+  const activeEditable = !project || !!active?.editable;
+  const text = project ? (active?.editable ? (files[active.path] ?? '') : (active?.content ?? '')) : source;
+
   const [run, setRun] = useState<RunResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const set = (patch: { language?: CodeLanguageId; source?: string }) => onChange(withBlock(doc, 'code', { language, source, ...patch }));
+  const set = (patch: CodeContent) => onChange(withBlock(doc, 'code', project ? { language, source: '', files, ...patch } : { language, source, ...patch }));
+  const setText = (value: string) => (project ? set({ files: { ...files, [active!.path]: value } }) : set({ source: value }));
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const pendingCaret = useRef<number | null>(null);
   // place the caret in the same commit as the new text, so the next keystroke lands after the indent
@@ -113,20 +129,21 @@ function CodeAnswer({ question, doc, onChange, disabled, attemptId }: { question
   });
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Tab indents (four spaces) instead of leaving the editor
-    if (e.key !== 'Tab' || e.shiftKey) return;
+    if (e.key !== 'Tab' || e.shiftKey || !activeEditable) return;
     e.preventDefault();
     const el = e.currentTarget;
     const at = el.selectionStart;
     pendingCaret.current = at + 4;
-    set({ source: `${source.slice(0, at)}    ${source.slice(el.selectionEnd)}` });
+    setText(`${text.slice(0, at)}    ${text.slice(el.selectionEnd)}`);
   };
+  const hasCode = project ? Object.values(files).some((f) => f.trim()) : !!source.trim();
   const runSamples = async () => {
     setBusy(true);
     setProblem(null);
     try {
-      setRun(await api.post<RunResult>(`/student/attempts/${attemptId}/code-runs`, { questionId: question.id, language, source }, { quiet: ['SAMPLE_RUNS_EXHAUSTED', 'JUDGE_UNAVAILABLE', 'LANGUAGE_NOT_ALLOWED'] }));
+      setRun(await api.post<RunResult>(`/student/attempts/${attemptId}/code-runs`, project ? { questionId: question.id, language, source: '', files } : { questionId: question.id, language, source }, { quiet: ['SAMPLE_RUNS_EXHAUSTED', 'JUDGE_UNAVAILABLE', 'LANGUAGE_NOT_ALLOWED', 'NOTHING_TO_RUN'] }));
     } catch (e) {
-      setProblem(isApiError(e) ? e.problem.title : 'The sample run did not complete. Your program is saved and will still be graded.');
+      setProblem(isApiError(e) ? (e.problem.detail ?? e.problem.title) : 'The sample run did not complete. Your program is saved and will still be graded.');
     } finally {
       setBusy(false);
     }
@@ -135,27 +152,49 @@ function CodeAnswer({ question, doc, onChange, disabled, attemptId }: { question
   return (
     <section className="mb-6 flex flex-col gap-3" aria-label="Program answer">
       <div className="flex flex-wrap items-center gap-3">
-        <label className="text-sm font-medium" htmlFor="code-language">
-          Language
-        </label>
-        <select id="code-language" value={language} disabled={disabled} onChange={(e) => set({ language: e.target.value as CodeLanguageId, source: source || spec.starter?.[e.target.value as CodeLanguageId] || '' })} className="h-10 rounded-md border border-rule-2 bg-sheet px-2">
-          {spec.languages.map((l) => (
-            <option key={l} value={l}>
-              {LANGUAGE_LABEL[l]}
-            </option>
-          ))}
-        </select>
+        {project ? (
+          <span className="text-sm">
+            <span className="font-medium">Language:</span> {languageLabel(language)}
+          </span>
+        ) : (
+          <>
+            <label className="text-sm font-medium" htmlFor="code-language">
+              Language
+            </label>
+            <select id="code-language" value={language} disabled={disabled} onChange={(e) => set({ language: e.target.value as CodeLanguageId, source: source || spec.starter?.[e.target.value as CodeLanguageId] || '' })} className="h-10 rounded-md border border-rule-2 bg-sheet px-2">
+              {spec.languages.map((l) => (
+                <option key={l} value={l}>
+                  {languageLabel(l)}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <span className="text-xs text-ink-2">
           Limits: {(spec.timeLimitMs ?? 2000) / 1000} s, {spec.memoryMb ?? 128} MB. Graded after the exam on hidden tests.
         </span>
       </div>
+      {project ? (
+        <>
+          <p className="text-xs text-ink-2">
+            This is a project: change the files marked <em>yours</em>. It is built with <code className="font-mono">{project.build ?? '(no build step)'}</code> and run with <code className="font-mono">{project.run}</code>.
+          </p>
+          <div role="tablist" aria-label="Project files" className="flex flex-wrap gap-1 border-b border-rule">
+            {project.files.map((f) => (
+              <button key={f.path} type="button" role="tab" aria-selected={f.path === active?.path} onClick={() => setActivePath(f.path)} className={cn('px-3 py-1.5 text-sm font-mono rounded-t-md border border-b-0', f.path === active?.path ? 'border-rule-2 bg-sheet font-semibold' : 'border-transparent text-ink-2')}>
+                {f.path} <span className="font-sans text-xs">{f.editable ? '· yours' : '· read-only'}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
       <label className="sr-only" htmlFor="code-source">
-        Program
+        {project ? `File ${active?.path ?? ''}` : 'Program'}
       </label>
-      <textarea ref={editorRef} id="code-source" value={source} disabled={disabled} onChange={(e) => set({ source: e.target.value })} onKeyDown={onKeyDown} spellCheck={false} autoCorrect="off" autoCapitalize="off" rows={18} className="w-full rounded-md border border-rule-2 bg-sheet p-3 font-mono text-[14px] leading-relaxed" />
+      <textarea ref={editorRef} id="code-source" value={text} disabled={disabled} readOnly={!activeEditable} onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} spellCheck={false} autoCorrect="off" autoCapitalize="off" rows={18} className={cn('w-full rounded-md border border-rule-2 p-3 font-mono text-[14px] leading-relaxed', activeEditable ? 'bg-sheet' : 'bg-sheet-2 text-ink-2')} />
       {spec.samples?.length ? (
         <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={() => void runSamples()} loading={busy} disabled={disabled || !source.trim() || (run ? run.remaining <= 0 : false)}>
+          <Button onClick={() => void runSamples()} loading={busy} disabled={disabled || !hasCode || (run ? run.remaining <= 0 : false)}>
             Run sample tests
           </Button>
           <span className="text-sm text-ink-2" role="status">
@@ -176,11 +215,12 @@ function CodeAnswer({ question, doc, onChange, disabled, attemptId }: { question
               <span className={r.passed ? 'text-ready font-medium' : 'text-stop font-medium'}>
                 Sample {r.test}: {r.passed ? 'passed' : r.verdict}
               </span>
-              {!r.passed ? (
+              {!r.passed && !r.compileOutput ? (
                 <span className="font-mono text-xs text-ink-2 whitespace-pre-wrap">
                   expected {JSON.stringify(r.expected)} · got {JSON.stringify(r.output)}
                 </span>
               ) : null}
+              {r.compileOutput ? <pre className="font-mono text-xs text-ink-2 whitespace-pre-wrap">{r.compileOutput}</pre> : null}
             </li>
           ))}
         </ol>
@@ -200,9 +240,24 @@ export function StructuredRender({ block }: { block: Block }) {
   }
   if (block.kind === 'final') return <p className="font-medium">Final answer: <span className="font-mono">{String(c['text'] ?? '')}</span></p>;
   if (block.kind === 'code') {
+    const files = c['files'] && typeof c['files'] === 'object' ? Object.entries(c['files'] as Record<string, string>) : [];
+    if (files.length) {
+      return (
+        <div className="grid gap-2">
+          {files.map(([path, body]) => (
+            <figure key={path} className="border border-rule-2 rounded-sm bg-sheet p-2">
+              <figcaption className="text-xs text-ink-2 mb-1">
+                <span className="font-mono">{path}</span> ({languageLabel(String(c['language']))})
+              </figcaption>
+              <pre className="font-mono text-[13px] whitespace-pre overflow-x-auto">{String(body ?? '')}</pre>
+            </figure>
+          ))}
+        </div>
+      );
+    }
     return (
       <figure className="border border-rule-2 rounded-sm bg-sheet p-2">
-        <figcaption className="text-xs text-ink-2 mb-1">Program ({LANGUAGE_LABEL[c['language'] as CodeLanguageId] ?? String(c['language'])})</figcaption>
+        <figcaption className="text-xs text-ink-2 mb-1">Program ({languageLabel(String(c['language']))})</figcaption>
         <pre className="font-mono text-[13px] whitespace-pre overflow-x-auto">{String(c['source'] ?? '')}</pre>
       </figure>
     );

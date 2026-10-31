@@ -1,22 +1,28 @@
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { RubricEditor } from '@/features/examcell/PaperTab';
 import type { PaperQuestion } from '@/features/examcell/api';
 
 function Harness({ initial, onState }: { initial: PaperQuestion; onState: (q: PaperQuestion) => void }) {
   const [q, setQ] = useState(initial);
+  const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }));
   return (
-    <RubricEditor
-      question={q}
-      disabled={false}
-      onChange={(patch) => {
-        const next = { ...q, ...patch };
-        setQ(next);
-        onState(next);
-      }}
-    />
+    <QueryClientProvider client={client}>
+      <RubricEditor
+        question={q}
+        disabled={false}
+        onChange={(patch) => {
+          setQ((cur) => {
+            const next = { ...cur, ...patch };
+            onState(next);
+            return next;
+          });
+        }}
+      />
+    </QueryClientProvider>
   );
 }
 const base = (over: Partial<PaperQuestion>): PaperQuestion => ({ questionId: 'Q1', sectionCode: 'A', number: 1, kind: 'DESCRIPTIVE', prompt: { blocks: [] }, maxMarks: 5, rubric: [], attachments: [], ...over }) as PaperQuestion;
@@ -87,5 +93,29 @@ describe('marking steps editor', () => {
     await user.click(screen.getByRole('button', { name: 'Add marking step' }));
     await user.click(screen.getByLabelText(/Must not miss/));
     expect(last!.rubric![0]!.critical).toBe(true);
+  });
+
+  it('a build-level coding question: project files, editable flags, build and run commands, and the reference per editable file', async () => {
+    const user = userEvent.setup();
+    let last: PaperQuestion | null = null;
+    render(<Harness initial={base({ kind: 'CODE' })} onState={(q) => (last = q)} />);
+    // every catalogue language is offered when no subject list applies, grouped
+    expect(screen.getByLabelText('Rust')).toBeInTheDocument();
+    expect(screen.getByLabelText('Octave (MATLAB-compatible)')).toBeInTheDocument();
+    await user.click(screen.getByLabelText(/^Project:/));
+    await waitFor(() => expect(last!.codeSpec?.project).toBeTruthy());
+    expect(last!.codeSpec).toMatchObject({ languages: ['python'], project: { build: null, run: 'python3 main.py', files: [{ path: 'main.py', editable: false }, { path: 'solution.py', editable: true }] } });
+    expect((last!.expectedAnswer as { reference: unknown }).reference).toEqual({ language: 'python', source: '', files: { 'solution.py': 'def solve(n):\n    return 0\n' } });
+    // switch the toolchain to Java: same files stay, the setter adjusts commands and marks a second editable file
+    await user.selectOptions(screen.getByLabelText('Toolchain'), 'java');
+    await user.clear(screen.getByLabelText('Run command'));
+    await user.type(screen.getByLabelText('Run command'), 'java Main');
+    await user.click(screen.getAllByLabelText('Students edit this file')[0]!);
+    expect(last!.codeSpec).toMatchObject({ languages: ['java'], project: { run: 'java Main', files: [{ path: 'main.py', editable: true }, { path: 'solution.py', editable: true }] } });
+    await user.clear(screen.getByLabelText('Reference solution.py'));
+    await user.type(screen.getByLabelText('Reference solution.py'), 'def solve(n): return 2 * n');
+    expect((last!.expectedAnswer as { reference: { language: string; files: Record<string, string> } }).reference).toMatchObject({ language: 'java', files: { 'solution.py': 'def solve(n): return 2 * n' } });
+    // without an exam (a template) there is nothing to check against yet
+    expect(screen.queryByRole('button', { name: 'Check with reference' })).toBeNull();
   });
 });

@@ -42,7 +42,7 @@ export function validateAnswerOps(ops: AnswerSave['ops'], current: { blocks: Arr
         break;
       }
       case 'code': {
-        if (!CodeContentSchema.safeParse(content).success) throw AppError.unprocessable('ANSWER_INVALID', `ops[${i}]: code is {language: c|cpp|java|python, source} of at most 100,000 characters`);
+        if (!CodeContentSchema.safeParse(content).success) throw AppError.unprocessable('ANSWER_INVALID', `ops[${i}]: code is {language, source, files?} in a supported language, at most 100,000 characters per file`);
         break;
       }
       default:

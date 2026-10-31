@@ -6,7 +6,10 @@ import {
   type PaperUpsert,
   type PaperReviewDecision,
   type PaperSetCreate,
+  CodeReferenceSchema,
+  codeLanguage,
 } from '@examos/contracts';
+import { uncheckedCodeQuestions, questionFingerprint, type CodeQuestionRow } from '../evaluation/judge.js';
 import type { AppDeps } from '../../types.js';
 import { AppError } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
@@ -82,6 +85,8 @@ export async function getExamPaper(
       expectedAnswer: q.expected_answer,
       attachments: q.attachments,
       codeSpec: q.code_spec ?? undefined,
+      // staff only: the latest reference check and whether it still matches the question as it stands
+      ...(q.kind === 'CODE' && q.code_check ? { codeCheck: { ...(q.code_check as Record<string, unknown>), current: (q.code_check as { fingerprint?: string }).fingerprint === questionFingerprint(q) } } : {}),
     })),
     sets: sets.map((s) => ({
       setCode: s.set_code,
@@ -122,6 +127,27 @@ export async function upsertExamPaper(
     .orderBy('version', 'desc')
     .forUpdate()
     .first();
+
+  // Coding questions: only the subject's languages; the setter's reference solution must be well formed.
+  const course = exam.course_id ? await trx('courses').where({ tenant_id: tenantId, id: exam.course_id }).first('code', 'code_profile') : null;
+  const subjectLanguages = (course?.code_profile as { languages?: string[] } | null)?.languages ?? null;
+  for (const q of input.questions) {
+    if (q.kind !== 'CODE') continue;
+    if (!q.codeSpec) throw AppError.unprocessable('CODE_SPEC_REQUIRED', `${q.questionId}: a coding question needs its languages and limits`);
+    const outside = subjectLanguages ? q.codeSpec.languages.filter((l) => !subjectLanguages.includes(l)) : [];
+    if (outside.length) throw AppError.unprocessable('LANGUAGE_NOT_IN_SUBJECT', `${q.questionId}: ${outside.map((l) => codeLanguage(l)?.label ?? l).join(', ')} is not a language of ${course?.code} (allowed: ${subjectLanguages!.map((l) => codeLanguage(l)?.label ?? l).join(', ')})`);
+    const ref = (q.expectedAnswer as { reference?: unknown } | undefined)?.reference;
+    if (ref !== undefined) {
+      const parsed = CodeReferenceSchema.safeParse(ref);
+      if (!parsed.success) throw AppError.unprocessable('REFERENCE_INVALID', `${q.questionId}: the reference solution is {language, source} or {language, files}`);
+      if (!q.codeSpec.languages.includes(parsed.data.language)) throw AppError.unprocessable('LANGUAGE_NOT_ALLOWED', `${q.questionId}: the reference must be in one of the question's languages`);
+    }
+  }
+  // a passing reference check survives saving an unchanged question (it is tied to the question's fingerprint)
+  const priorChecks = new Map<string, unknown>();
+  if (existing) {
+    for (const r of await trx('paper_questions').where({ tenant_id: tenantId, paper_id: existing.id, kind: 'CODE' }).whereNotNull('code_check').select('question_id', 'code_check')) priorChecks.set(r.question_id, r.code_check);
+  }
 
   let paperId: string;
   let version = 1;
@@ -191,6 +217,7 @@ export async function upsertExamPaper(
       expected_answer: q.expectedAnswer ? JSON.stringify(q.expectedAnswer) : null,
       attachments: JSON.stringify(q.attachments ?? []),
       code_spec: q.codeSpec ? JSON.stringify(q.codeSpec) : null,
+      code_check: q.kind === 'CODE' && priorChecks.has(q.questionId) ? JSON.stringify(priorChecks.get(q.questionId)) : null,
     });
   }
 
@@ -310,6 +337,12 @@ export async function reviewPaper(
 
   if (questions.length === 0) {
     throw AppError.unprocessable('EMPTY_PAPER', 'Question paper must have at least one question');
+  }
+
+  // a coding question's hidden tests must be proven by the setter's own solution before students are marked on them
+  const unchecked = uncheckedCodeQuestions(deps, questions as CodeQuestionRow[]);
+  if (unchecked.length) {
+    throw AppError.unprocessable('CODE_NOT_CHECKED', `Run the reference solution against the tests first (it must pass all of them): ${unchecked.join(', ')}`);
   }
 
   // Calculate canonical sealed hash over paper structure and questions

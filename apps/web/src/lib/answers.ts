@@ -1,4 +1,4 @@
-import type { CanvasContentWire, CanvasItem } from '@examos/contracts';
+import type { CanvasContentWire, CanvasItem, CodeLanguage } from '@examos/contracts';
 import { canonicalJson, sha256Hex } from './canonical';
 
 /**
@@ -9,7 +9,7 @@ import { canonicalJson, sha256Hex } from './canonical';
 export type BlockKind = 'paragraph' | 'equation' | 'table' | 'canvas' | 'choice' | 'final' | 'code';
 /** Blocks with their own controls (option buttons, final-answer box, code editor), not shown as paragraphs. */
 export const STRUCTURED_KINDS: readonly BlockKind[] = ['choice', 'final', 'code'];
-export type CodeLanguageId = 'c' | 'cpp' | 'java' | 'python';
+export type CodeLanguageId = CodeLanguage;
 
 /** Whether a block holds something the student wrote or chose. */
 export function blockHasContent(b: Block): boolean {
@@ -18,7 +18,10 @@ export function blockHasContent(b: Block): boolean {
   if (!c) return false;
   if (b.kind === 'choice') return Array.isArray(c['selected']) ? (c['selected'] as unknown[]).length > 0 : c['selected'] !== null && c['selected'] !== undefined;
   if (b.kind === 'final') return typeof c['text'] === 'string' && c['text'].trim().length > 0;
-  if (b.kind === 'code') return typeof c['source'] === 'string' && c['source'].trim().length > 0;
+  if (b.kind === 'code') {
+    const files = c['files'] && typeof c['files'] === 'object' ? Object.values(c['files'] as Record<string, unknown>) : [];
+    return (typeof c['source'] === 'string' && c['source'].trim().length > 0) || files.some((f) => typeof f === 'string' && f.trim().length > 0);
+  }
   return true;
 }
 

@@ -57,6 +57,7 @@ export const router = createBrowserRouter([
               { path: '/examcell', lazy: () => import('@/features/examcell/ExamListPage').then((m) => ({ Component: m.ExamListPage })) },
               { path: '/examcell/exams/new', lazy: () => import('@/features/examcell/ExamNewPage').then((m) => ({ Component: m.ExamNewPage })) },
               { path: '/examcell/exams/:id', lazy: () => import('@/features/examcell/ExamDetailPage').then((m) => ({ Component: m.ExamDetailPage })) },
+              { path: '/examcell/coding', lazy: () => import('@/features/examcell/CodingLanguagesPage').then((m) => ({ Component: m.CodingLanguagesPage })) },
             ],
           },
           {

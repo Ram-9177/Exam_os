@@ -126,4 +126,32 @@ describe('Evaluator marking sheet', () => {
     expect(items[1]).toMatchObject({ questionId: 'Q2', overrideReason: 'Explains release-and-retry, which the key terms miss.' });
     expect(items.filter((it) => 'overrideReason' in it)).toHaveLength(1);
   });
+
+  it('a coding answer: the examiner sees every hidden test with its input, expected and actual output', async () => {
+    const me = signInAs(['EVALUATOR'], { id: 'u-ev', email: 'evaluator@demo.local', fullName: 'Examiner', kind: 'STAFF' });
+    const proposals = [
+      {
+        questionId: 'Q1', maxMarks: 5, proposedMarks: 2.5, method: 'CODE_TESTS', review: 'CHECK_CAREFULLY', basis: '1 of 2 hidden tests passed (50 % of the test weight).',
+        tests: [
+          { test: 1, passed: true, verdict: 'passed', weight: 1, input: '1', expected: '2', output: '2' },
+          { test: 2, passed: false, verdict: 'build failed', weight: 1, input: '21', expected: '42', output: '', compileOutput: 'Solution.java:3: error' },
+        ],
+      },
+    ];
+    mockFetch(({ method, path }) => {
+      if (method === 'GET' && path === '/auth/me') return { json: me };
+      if (method === 'GET' && path === '/tenant') return { json: TENANT };
+      if (method === 'GET' && path === `/student/attempts/${ATTEMPT}/booklet`) return { json: booklet };
+      if (method === 'GET' && path === `/candidates/${ATTEMPT}/rubric-proposals`) return { json: { attemptId: ATTEMPT, proposals, proposedTotal: 2.5, needsExaminer: [] } };
+      return undefined;
+    });
+    renderApp([{ path: '/evaluate/:attemptId', element: <EvaluatePage /> }], `/evaluate/${ATTEMPT}`);
+    const panel = await screen.findByLabelText('Proposal for question 1');
+    expect(within(panel).getByText(/hidden tests run in the sandbox/)).toBeInTheDocument();
+    expect(within(panel).getByText('Hidden tests (1 of 2 passed)')).toBeInTheDocument();
+    const list = within(panel).getByRole('list', { name: 'Hidden test results' });
+    expect(within(list).getByText('Test 2: build failed')).toBeInTheDocument();
+    expect(within(list).getByText('input "21" · expected "42" · got ""')).toBeInTheDocument();
+    expect(within(list).getByText('Solution.java:3: error')).toBeInTheDocument();
+  });
 });

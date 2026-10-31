@@ -263,6 +263,10 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
     ],
   }), 'paper secure sets');
 
+  // Coding languages per subject (Examination Section): Operating Systems uses C, C++, Java and Python; Databases SQL and Python.
+  must(await req().put('/api/v1/coding/subjects/CS301').set(E).send({ profile: { languages: ['c', 'cpp', 'java', 'python'], default: 'python' } }), 'subject languages CS301');
+  must(await req().put('/api/v1/coding/subjects/CS302').set(E).send({ profile: { languages: ['sql', 'python'], default: 'sql' } }), 'subject languages CS302');
+
   // 3. A mixed paper for the new question kinds: several-correct MCQ, maths expression, a dose with its unit, a
   //    clinical answer with a must-not-miss step, and a program graded on hidden tests (needs JUDGE_URL to run code).
   const mixed = must(await req().post('/api/v1/exams').set(E).send({ code: 'CS301-LAB', title: 'Mixed paper — maths, health and coding', courseCode: 'CS301', examType: 'MID_2', academicYear: '2026-27', semester: 5, maxMarks: 20, securityProfile: 'BASIC_BROWSER', durationMinutes: 60, windowStartAt: new Date(now + 30 * 60_000).toISOString(), windowEndAt: new Date(now + 8 * 3600_000).toISOString() }), 'create mixed exam');
@@ -278,11 +282,27 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
           { code: 'DX', max: 2, description: 'Likely diagnosis', difficulty: 3, keywords: ['myocardial infarction|heart attack|acute coronary syndrome'] },
           { code: 'RED', max: 2, description: 'Red flags checked first', difficulty: 5, critical: true, keywords: ['radiating|radiation', 'sweating|diaphoresis', 'blood pressure|BP'] },
         ] },
-      { questionId: 'Q5', sectionCode: 'B', number: 5, kind: 'CODE', maxMarks: 8, attachments: [], prompt: { blocks: [{ id: 'p5', kind: 'paragraph', content: 'Read an integer n and print the sum 1 + 2 + … + n.' }] },
+      { questionId: 'Q5', sectionCode: 'B', number: 5, kind: 'CODE', maxMarks: 4, attachments: [], prompt: { blocks: [{ id: 'p5', kind: 'paragraph', content: 'Read an integer n and print the sum 1 + 2 + … + n.' }] },
         codeSpec: { languages: ['c', 'cpp', 'java', 'python'], samples: [{ input: '3', expected: '6' }], sampleRunsAllowed: 10, timeLimitMs: 2000, memoryMb: 128, starter: { python: 'n = int(input())\n' } },
-        expectedAnswer: { tests: [{ input: '1', expected: '1' }, { input: '10', expected: '55' }, { input: '100000', expected: '5000050000', weight: 2 }] } },
+        expectedAnswer: { tests: [{ input: '1', expected: '1' }, { input: '10', expected: '55' }, { input: '100000', expected: '5000050000', weight: 2 }], reference: { language: 'python', source: 'n = int(input())\nprint(n * (n + 1) // 2)\n' } } },
+      // build-level: a two-file Java project; students write Stack.java, the harness Main.java is read-only
+      { questionId: 'Q6', sectionCode: 'B', number: 6, kind: 'CODE', maxMarks: 4, attachments: [], prompt: { blocks: [{ id: 'p6', kind: 'paragraph', content: 'Complete Stack.java (push, pop, isEmpty) so that Main.java prints the input line reversed.' }] },
+        codeSpec: {
+          languages: ['java'], samples: [{ input: 'abc', expected: 'cba' }], sampleRunsAllowed: 10, timeLimitMs: 2000, memoryMb: 256,
+          project: {
+            files: [
+              { path: 'Main.java', editable: false, content: 'public class Main {\n    public static void main(String[] args) {\n        String line = new java.util.Scanner(System.in).nextLine();\n        Stack s = new Stack();\n        for (char c : line.toCharArray()) s.push(c);\n        StringBuilder out = new StringBuilder();\n        while (!s.isEmpty()) out.append(s.pop());\n        System.out.println(out);\n    }\n}\n' },
+              { path: 'Stack.java', editable: true, content: 'class Stack {\n    void push(char c) {\n    }\n\n    char pop() {\n        return 0;\n    }\n\n    boolean isEmpty() {\n        return true;\n    }\n}\n' },
+            ],
+            build: 'javac -d out *.java',
+            run: 'java -cp out Main',
+          },
+        },
+        expectedAnswer: { tests: [{ input: 'hello', expected: 'olleh' }, { input: 'racecar', expected: 'racecar' }, { input: 'ExamOS 2026', expected: '6202 SOmaxE' }], reference: { language: 'java', source: '', files: { 'Stack.java': 'class Stack {\n    private final java.util.ArrayDeque<Character> items = new java.util.ArrayDeque<>();\n    void push(char c) { items.push(c); }\n    char pop() { return items.pop(); }\n    boolean isEmpty() { return items.isEmpty(); }\n}\n' } } } },
     ],
   }), 'paper mixed author');
+  // with a sandbox configured, the setter's reference solutions must pass the tests before approval
+  if (config.JUDGE_URL) for (const q of ['Q5', 'Q6']) must(await req().post(`/api/v1/exams/${mixed.examId}/paper/questions/${q}/check-code`).set(S), `check ${q}`);
   must(await req().post(`/api/v1/exams/${mixed.examId}/paper/submit-for-review`).set(S), 'paper mixed submit');
   must(await req().post(`/api/v1/exams/${mixed.examId}/paper/approve`).set(R), 'paper mixed approve');
 
@@ -304,7 +324,7 @@ Demo tenant ready on http://${HOST}:${config.PORT} (web app proxies here)
 
   Exam CS301-MID1 (BASIC_BROWSER, ipPolicy REVIEW): readiness check is open; start it as examcell when students are READY.
   Exam CS302-SEM (SECURE_BYOD, ipPolicy LOCK): scheduled in 2 days; requires an approved client build.
-  Exam CS301-LAB (mixed: several-correct MCQ, maths, dose with unit, clinical must-not-miss, coding): open its
+  Exam CS301-LAB (mixed: several-correct MCQ, maths, dose with unit, clinical must-not-miss, coding, a two-file Java project): open its
     readiness check as examcell to try it. Coding sample runs and grading need a Judge0 at JUDGE_URL.
   ERP API key (store it): ${key.apiKey}
 `);

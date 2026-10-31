@@ -31,6 +31,8 @@ export interface MarkProposal {
   criteria?: ProposedCriterion[];
   /** CHECK_CAREFULLY when the system gave partial credit somewhere: the examiner should read that part closely. */
   review?: 'ROUTINE' | 'CHECK_CAREFULLY';
+  /** CODE only, staff only: the hidden tests and what the program printed. */
+  tests?: Array<{ test: number; passed: boolean; verdict: string; weight: number; input: string; expected: string; output: string; compileOutput?: string }>;
 }
 
 interface PaperQuestionRow {
@@ -87,7 +89,12 @@ export function answerParts(content: unknown): { selected: string[] | null; fina
       const v = c['selected'];
       selected = v === null || v === undefined ? [] : (Array.isArray(v) ? v : [v]).map((x) => String(x).toUpperCase());
     } else if (b.kind === 'final' && c && typeof c['text'] === 'string' && c['text'].trim()) final = c['text'].trim();
-    else if (b.kind === 'code' && c && typeof c['source'] === 'string' && c['source'].trim()) code = { language: String(c['language']), source: c['source'] };
+    else if (b.kind === 'code' && c) {
+      // a program, or (build-level question) at least one non-empty project file
+      const files = c['files'] && typeof c['files'] === 'object' ? (c['files'] as Record<string, unknown>) : null;
+      const hasFiles = !!files && Object.values(files).some((v) => typeof v === 'string' && v.trim() !== '');
+      if ((typeof c['source'] === 'string' && c['source'].trim()) || hasFiles) code = { language: String(c['language']), source: typeof c['source'] === 'string' ? c['source'] : '' };
+    }
   }
   return { selected, final, code };
 }
@@ -282,6 +289,7 @@ function codeGraded(q: PaperQuestionRow, max: number, run: CodeRunSummary | unde
     proposedMarks: Math.min(max, nearestHalf(max * share)),
     method: 'CODE_TESTS',
     review: share > 0 && share < 1 ? 'CHECK_CAREFULLY' : 'ROUTINE',
+    tests: testDetail(q, run),
     basis: `${run.results.length - failed.length} of ${run.results.length} hidden tests passed (${Math.round(share * 100)} % of the test weight).${failed.length ? ` Failed: ${failed.slice(0, 5).map((r) => `test ${r.index + 1} (${r.verdict})`).join(', ')}${failed.length > 5 ? ', …' : ''}.` : ''} Code quality and approach are the examiner's judgement.`,
   };
 }
@@ -290,8 +298,24 @@ export interface CodeRunSummary {
   status: 'QUEUED' | 'DONE' | 'ERROR';
   passedWeight: number;
   totalWeight: number;
-  results: Array<{ index: number; passed: boolean; verdict: string }>;
+  results: Array<{ index: number; passed: boolean; verdict: string; stdout?: string; compileOutput?: string }>;
   error?: string | null;
+}
+
+/** For the examiner (never the student): each hidden test with its input, expected and actual output. */
+function testDetail(q: PaperQuestionRow, run: CodeRunSummary): NonNullable<MarkProposal['tests']> {
+  const ea = (q.expected_answer ?? {}) as { tests?: Array<{ input?: string; expected?: string; weight?: number }> };
+  const tests = Array.isArray(ea.tests) ? ea.tests : [];
+  return run.results.map((r) => ({
+    test: r.index + 1,
+    passed: r.passed,
+    verdict: r.verdict,
+    weight: tests[r.index]?.weight ?? 1,
+    input: String(tests[r.index]?.input ?? '').slice(0, 300),
+    expected: String(tests[r.index]?.expected ?? '').slice(0, 300),
+    output: String(r.stdout ?? '').slice(0, 300),
+    ...(r.compileOutput ? { compileOutput: r.compileOutput.slice(0, 2000) } : {}),
+  }));
 }
 
 export function proposeMark(q: PaperQuestionRow, content: unknown, codeRun?: CodeRunSummary): MarkProposal {

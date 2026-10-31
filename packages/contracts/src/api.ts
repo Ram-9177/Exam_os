@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PROJECT_PATH_RE, PROJECT_RESERVED_PATHS, PROJECT_LIMITS } from './code-languages.js';
 import {
   PROCTOR_DECISION_ACTIONS,
   PROCTOR_SIGNAL_CLASSES,
@@ -186,6 +187,33 @@ export const PaperQuestionRubricCriterionSchema = z.object({
 });
 export type PaperQuestionRubricCriterion = z.infer<typeof PaperQuestionRubricCriterionSchema>;
 
+const ProjectPath = z.string().regex(PROJECT_PATH_RE, 'a relative path such as src/Main.java (no "..", no hidden files)').refine((p) => !(PROJECT_RESERVED_PATHS as readonly string[]).includes(p), 'compile and run are the build scripts, not files');
+/**
+ * A build-level CODE question: the files students start from (some read-only, e.g. a test harness or a header, some
+ * editable), and the setter's `build` and `run` shell commands. The sandbox has no network, so build tools work only
+ * with what is already installed in the judge image (make, javac, gcc, python …); third-party packages must be
+ * vendored into the files. Students never write commands: they only change the editable files.
+ */
+export const CodeProjectSchema = z
+  .object({
+    files: z.array(z.object({ path: ProjectPath, content: z.string().max(PROJECT_LIMITS.maxFileChars), editable: z.boolean().default(false) })).min(1).max(PROJECT_LIMITS.maxFiles),
+    build: z.string().trim().max(PROJECT_LIMITS.maxScriptChars).nullable().default(null),
+    run: z.string().trim().min(1).max(PROJECT_LIMITS.maxScriptChars),
+  })
+  .superRefine((p, ctx) => {
+    const seen = new Set<string>();
+    for (const [i, f] of p.files.entries()) {
+      if (seen.has(f.path)) ctx.addIssue({ code: 'custom', path: ['files', i, 'path'], message: 'duplicate path' });
+      seen.add(f.path);
+    }
+    if (!p.files.some((f) => f.editable)) ctx.addIssue({ code: 'custom', path: ['files'], message: 'at least one file must be editable by the student' });
+    if (p.files.reduce((a, f) => a + f.content.length, 0) > PROJECT_LIMITS.maxTotalChars) ctx.addIssue({ code: 'custom', path: ['files'], message: 'project too large' });
+  });
+export type CodeProject = z.infer<typeof CodeProjectSchema>;
+
+/** The setter's own solution: run against the samples and hidden tests before the paper can be approved. Never shown to students. */
+export const CodeReferenceSchema = z.object({ language: z.enum(CODE_LANGUAGES), source: z.string().max(100_000).default(''), files: z.record(ProjectPath, z.string().max(PROJECT_LIMITS.maxFileChars)).optional() });
+
 export const PaperQuestionInputSchema = z.object({
   questionId: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/),
   sectionCode: z.string().trim().min(1).max(32),
@@ -206,6 +234,11 @@ export const PaperQuestionInputSchema = z.object({
       timeLimitMs: z.number().int().min(100).max(10_000).default(2000),
       memoryMb: z.number().int().min(16).max(512).default(128),
       sampleRunsAllowed: z.number().int().min(0).max(50).default(10),
+      /** Build-level question: a multi-file project built and run by the setter's own scripts (see CodeProjectSchema). */
+      project: CodeProjectSchema.optional(),
+    })
+    .superRefine((s, ctx) => {
+      if (s.project && s.languages.length !== 1) ctx.addIssue({ code: 'custom', path: ['languages'], message: 'a project question names exactly one toolchain language' });
     })
     .optional(),
 });
@@ -277,9 +310,20 @@ export const ChoiceContentSchema = z.object({ selected: z.union([z.string().min(
 /** NUMERIC / MATH final answer, typed as text ("9.33 ms", "2*(x+1)"); the working goes in paragraphs and drawings. */
 export const FinalContentSchema = z.object({ text: z.string().max(500) });
 /** CODE answer: the language chosen and the program. */
-export const CodeContentSchema = z.object({ language: z.enum(CODE_LANGUAGES), source: z.string().max(100_000) });
+const ProjectFilesSchema = z
+  .record(ProjectPath, z.string().max(PROJECT_LIMITS.maxFileChars))
+  .refine((f) => Object.keys(f).length <= PROJECT_LIMITS.maxFiles, 'too many files')
+  .refine((f) => Object.values(f).reduce((a, c) => a + c.length, 0) <= PROJECT_LIMITS.maxTotalChars, 'project too large');
+/** CODE answer: the language chosen and the program — or, for a project question, the editable files by path. */
+export const CodeContentSchema = z.object({ language: z.enum(CODE_LANGUAGES), source: z.string().max(100_000), files: ProjectFilesSchema.optional() });
 /** A student's sample run during the exam (only the question's visible sample tests). */
-export const CodeRunRequestSchema = z.object({ questionId: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/), language: z.enum(CODE_LANGUAGES), source: z.string().min(1).max(100_000) });
+export const CodeRunRequestSchema = z
+  .object({ questionId: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/), language: z.enum(CODE_LANGUAGES), source: z.string().max(100_000).default(''), files: ProjectFilesSchema.optional() })
+  .refine((r) => r.source.trim() !== '' || (r.files && Object.keys(r.files).length > 0), 'nothing to run');
+
+/** Subject (course) coding profile, set by the Examination Section. null clears it (every catalogue language allowed). */
+export const SubjectCodeProfileSchema = z.object({ languages: z.array(z.enum(CODE_LANGUAGES)).min(1).max(40), default: z.enum(CODE_LANGUAGES).optional() }).refine((p) => !p.default || p.languages.includes(p.default), 'the default must be one of the languages');
+export type SubjectCodeProfile = z.infer<typeof SubjectCodeProfileSchema>;
 export const PARAGRAPH_MAX_CHARS = 50_000;
 export const AnswerOpSchema = z.object({
   op: z.enum(['upsert-block', 'delete-block', 'reorder']),

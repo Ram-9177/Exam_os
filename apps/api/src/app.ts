@@ -12,6 +12,7 @@ import { tenantAdminRoutes } from './modules/tenants/routes.js';
 import { platformRoutes } from './modules/platform/routes.js';
 import { integrationRoutes } from './modules/integration/routes.js';
 import { examRoutes } from './modules/exams/routes.js';
+import { codingRoutes } from './modules/coding/routes.js';
 import { attemptRoutes } from './modules/attempts/routes.js';
 import { proctorRoutes } from './modules/proctoring/routes.js';
 import { candidateRoutes } from './modules/candidates/routes.js';
@@ -72,6 +73,7 @@ export async function createApp(deps: AppDeps): Promise<App> {
   tenantScoped.use(resolveTenantByHost(deps));
   tenantScoped.use('/auth', authRoutes(deps, auth, oidc, jwt));
   tenantScoped.use('/tenant', tenantAdminRoutes(deps, jwt));
+  tenantScoped.use('/', codingRoutes(deps, jwt));
   tenantScoped.use('/exams', examRoutes(deps, jwt));
   tenantScoped.use('/student', attemptRoutes(deps, jwt));
   tenantScoped.use('/student', profileRoutes(deps, jwt));

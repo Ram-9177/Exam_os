@@ -29,9 +29,8 @@ export type PaperStatus = (typeof PAPER_STATUSES)[number];
  * diagram (examiner) · CODE a program run against the examiner's tests in a sandbox.
  */
 export const QUESTION_KINDS = ['DESCRIPTIVE', 'MCQ', 'MCQ_MULTI', 'NUMERIC', 'MATH', 'DRAWING', 'CODE'] as const;
-/** Languages a CODE question may allow (the judge maps each to its compiler/runtime). */
-export const CODE_LANGUAGES = ['c', 'cpp', 'java', 'python'] as const;
-export type CodeLanguage = (typeof CODE_LANGUAGES)[number];
+/** Languages a CODE question may allow: the full catalogue (with Judge0 ids) lives in code-languages.ts. */
+export { CODE_LANGUAGES, type CodeLanguage } from './code-languages.js';
 export type QuestionKind = (typeof QUESTION_KINDS)[number];
 
 export const DOC_KINDS = ['BOOKLET_PDF', 'HALL_TICKET_PDF', 'EVIDENCE_PDF'] as const;

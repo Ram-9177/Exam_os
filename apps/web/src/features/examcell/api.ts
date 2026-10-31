@@ -113,7 +113,55 @@ export interface PaperQuestion {
   rubric?: Array<{ code: string; max: number; description: string; difficulty?: number; keywords?: string[]; critical?: boolean }>;
   expectedAnswer?: unknown;
   attachments?: unknown[];
-  codeSpec?: { languages: Array<'c' | 'cpp' | 'java' | 'python'>; samples?: Array<{ input: string; expected: string }>; timeLimitMs?: number; memoryMb?: number; sampleRunsAllowed?: number; starter?: Record<string, string> };
+  codeSpec?: CodeSpecInput;
+  /** staff only: the latest run of the setter's reference solution, and whether it matches the question as saved */
+  codeCheck?: CodeCheck;
+}
+
+export interface CodeProjectInput {
+  files: Array<{ path: string; content: string; editable?: boolean }>;
+  build: string | null;
+  run: string;
+}
+export interface CodeSpecInput {
+  languages: string[];
+  samples?: Array<{ input: string; expected: string }>;
+  timeLimitMs?: number;
+  memoryMb?: number;
+  sampleRunsAllowed?: number;
+  starter?: Record<string, string>;
+  project?: CodeProjectInput;
+}
+export interface CodeCheckRow {
+  test: number;
+  kind: 'sample' | 'hidden';
+  passed: boolean;
+  verdict: string;
+  input: string;
+  expected: string;
+  output: string;
+  compileOutput?: string;
+}
+export interface CodeCheck {
+  passed: number;
+  total: number;
+  results: CodeCheckRow[];
+  checkedAt?: string;
+  current?: boolean;
+}
+export interface LanguageOption {
+  id: string;
+  label: string;
+  version: string;
+  group: string;
+}
+export interface ExamCodeLanguages {
+  subject: { code: string; name: string; restricted: boolean } | null;
+  languages: LanguageOption[];
+  default: string;
+}
+export function useExamCodeLanguages(examId: string | undefined) {
+  return useQuery({ queryKey: ['exam', examId, 'code-languages'], queryFn: () => api.get<ExamCodeLanguages>(`/exams/${examId}/code-languages`), enabled: !!examId, staleTime: 60_000 });
 }
 
 export interface PaperSection {

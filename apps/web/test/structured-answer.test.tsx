@@ -73,6 +73,48 @@ describe('structured answers in the workspace', () => {
     renderApp([{ path: '/', element: <div><StructuredRender block={{ id: '1', kind: 'choice', content: { selected: ['A', 'C'] } }} /><StructuredRender block={{ id: '2', kind: 'final', content: { text: '9.33 ms' } }} /><StructuredRender block={{ id: '3', kind: 'code', content: { language: 'cpp', source: 'int main(){}' } }} /></div> }], '/');
     expect(screen.getByText('Chosen: A, C')).toBeInTheDocument();
     expect(screen.getByText('9.33 ms')).toBeInTheDocument();
-    expect(screen.getByText('Program (C++)')).toBeInTheDocument();
+    expect(screen.getByText('Program (C++ (GCC 9.2.0))')).toBeInTheDocument();
+  });
+
+  it('a project question: file tabs, read-only harness, only the editable files are the answer and are sent to run', async () => {
+    const posts: unknown[] = [];
+    setup(({ method, path, body }) => {
+      if (method === 'POST' && path === '/student/attempts/a1/code-runs') {
+        posts.push(body);
+        return { json: { runId: 'r1', remaining: 2, error: null, results: [{ test: 1, passed: false, verdict: 'build failed', output: '', expected: '6', compileOutput: 'Solution.java:3: error: missing return' }] } };
+      }
+      return undefined;
+    });
+    let doc: AnswerDoc | null = null;
+    const user = userEvent.setup();
+    const project = { files: [{ path: 'Main.java', content: 'class Main {}', editable: false }, { path: 'Solution.java', content: 'class Solution {', editable: true }], build: 'javac -d out *.java', run: 'java -cp out Main' };
+    renderApp([{ path: '/', element: <Harness q={{ id: 'Q5', kind: 'CODE', codeSpec: { languages: ['java'], samples: [{ input: '3', expected: '6' }], sampleRunsAllowed: 3, project } }} onDoc={(d) => (doc = d)} /> }], '/');
+    // opens on the student's file; the toolchain is fixed and shown with its version
+    expect(await screen.findByRole('tab', { name: /Solution\.java · yours/, selected: true })).toBeInTheDocument();
+    expect(screen.getByText('Java (OpenJDK 13.0.1)')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Language')).toBeNull();
+    expect(screen.getByText('javac -d out *.java')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('File Solution.java'), '{Enter}{Tab}int x;');
+    expect(block(doc, 'code')).toEqual({ language: 'java', source: '', files: { 'Solution.java': 'class Solution {\n    int x;' } });
+    // the harness is visible but cannot be changed
+    await user.click(screen.getByRole('tab', { name: /Main\.java · read-only/ }));
+    const harness = screen.getByLabelText('File Main.java');
+    expect(harness).toHaveValue('class Main {}');
+    expect(harness).toHaveAttribute('readonly');
+    await user.type(harness, 'x');
+    expect(harness).toHaveValue('class Main {}');
+    await user.click(screen.getByRole('button', { name: 'Run sample tests' }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toEqual({ questionId: 'Q5', language: 'java', source: '', files: { 'Solution.java': 'class Solution {\n    int x;' } });
+    expect(await screen.findByText('Sample 1: build failed')).toBeInTheDocument();
+    expect(screen.getByText('Solution.java:3: error: missing return')).toBeInTheDocument();
+  });
+
+  it('the booklet shows each file of a project answer', () => {
+    setup();
+    renderApp([{ path: '/', element: <StructuredRender block={{ id: '3', kind: 'code', content: { language: 'java', source: '', files: { 'Solution.java': 'class Solution {}', 'util/Helper.java': 'class Helper {}' } } }} /> }], '/');
+    expect(screen.getByText('Solution.java')).toBeInTheDocument();
+    expect(screen.getByText('util/Helper.java')).toBeInTheDocument();
+    expect(screen.getByText('class Helper {}')).toBeInTheDocument();
   });
 });

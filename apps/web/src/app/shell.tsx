@@ -15,6 +15,7 @@ const NAV: NavItem[] = [
   { to: '/student/ledger', label: 'Results', roles: ['STUDENT'] },
   { to: '/student/profile', label: 'Profile & ID', roles: ['STUDENT'] },
   { to: '/examcell', label: 'Exams', roles: ['EXAM_CELL_OPERATOR', 'CONTROLLER'] },
+  { to: '/examcell/coding', label: 'Coding languages', roles: ['EXAM_CELL_OPERATOR', 'CONTROLLER'] },
   { to: '/evaluate', label: 'Marking', roles: ['EVALUATOR', 'MODERATOR'] },
   { to: '/proctor', label: 'Invigilation', roles: ['PROCTOR', 'CHIEF_PROCTOR'] },
   { to: '/analytics', label: 'Academic Analytics', roles: ['HOD', 'REPORT_VIEWER', 'EXAM_CELL_OPERATOR', 'CONTROLLER'] },

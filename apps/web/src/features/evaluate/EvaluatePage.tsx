@@ -29,16 +29,19 @@ export interface MarkProposal {
   questionId: string;
   maxMarks: number;
   proposedMarks: number | null;
-  method: 'NO_ANSWER' | 'ANSWER_KEY' | 'NUMERIC_KEY' | 'RUBRIC_TERMS' | 'EXAMINER';
+  method: 'NO_ANSWER' | 'ANSWER_KEY' | 'NUMERIC_KEY' | 'RUBRIC_TERMS' | 'CODE_TESTS' | 'EXAMINER';
   basis: string;
   criteria?: Array<{ code: string; max: number; awarded: number; evidence: string }>;
   review?: 'ROUTINE' | 'CHECK_CAREFULLY';
+  /** CODE: every hidden test, what was expected and what the program printed */
+  tests?: Array<{ test: number; passed: boolean; verdict: string; weight: number; input: string; expected: string; output: string; compileOutput?: string }>;
 }
 const METHOD_LABEL: Record<MarkProposal['method'], string> = {
   NO_ANSWER: 'no answer written',
   ANSWER_KEY: 'answer key',
   NUMERIC_KEY: 'expected values',
   RUBRIC_TERMS: 'rubric key terms',
+  CODE_TESTS: 'hidden tests run in the sandbox',
   EXAMINER: 'needs your judgement',
 };
 const differs = (marks: string, p: MarkProposal | undefined) => !!p && p.proposedMarks !== null && marks !== '' && Math.abs(Number(marks) - p.proposedMarks) > 0.001;
@@ -449,6 +452,22 @@ export function EvaluatePage() {
                       <span className="font-mono">{c.code}</span> {c.awarded}/{c.max} — {c.evidence}
                     </p>
                   ))}
+                  {proposals.get(q.questionId)!.tests?.length ? (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer">Hidden tests ({proposals.get(q.questionId)!.tests!.filter((t) => t.passed).length} of {proposals.get(q.questionId)!.tests!.length} passed)</summary>
+                      <ol className="mt-1 text-xs divide-y divide-rule" aria-label="Hidden test results">
+                        {proposals.get(q.questionId)!.tests!.map((t) => (
+                          <li key={t.test} className="py-1 grid gap-0.5">
+                            <span className={t.passed ? 'text-ready' : 'text-stop'}>
+                              Test {t.test}{t.weight !== 1 ? ` (weight ${t.weight})` : ''}: {t.passed ? 'passed' : t.verdict}
+                            </span>
+                            <span className="font-mono text-ink-2 whitespace-pre-wrap">input {JSON.stringify(t.input)} · expected {JSON.stringify(t.expected)} · got {JSON.stringify(t.output)}</span>
+                            {t.compileOutput ? <pre className="font-mono text-ink-2 whitespace-pre-wrap">{t.compileOutput}</pre> : null}
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  ) : null}
                 </div>
               ) : null}
               <div className="grid grid-cols-2 gap-3 max-w-xs">

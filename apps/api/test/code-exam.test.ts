@@ -12,8 +12,9 @@ import { runCodeJudgeOnce, judge0, sameOutput, type Judge } from '../src/modules
  */
 const fakeJudge: Judge & { calls: Array<{ tests: number }> } = {
   calls: [],
-  async run(_language, source, tests) {
+  async run(program, tests) {
     this.calls.push({ tests: tests.length });
+    const source = program.kind === 'single' ? program.source : Object.values(program.files).join('\n');
     if (source.includes('syntax error')) return tests.map((_, index) => ({ index, passed: false, verdict: 'compilation error' }));
     return tests.map((t, index) => {
       const n = Number(t.input.trim());
@@ -68,7 +69,7 @@ describe('coding, maths and multiple-answer questions', () => {
             questionId: 'Q1', sectionCode: 'A', number: 1, kind: 'CODE', maxMarks: 10, attachments: [],
             prompt: { blocks: [{ id: 'p', kind: 'paragraph', content: 'Read n and print 2n.' }] },
             codeSpec: { languages: ['python', 'c'], samples: [{ input: '3', expected: '6' }], sampleRunsAllowed: 2, timeLimitMs: 1000, memoryMb: 64 },
-            expectedAnswer: { tests: [{ input: '1', expected: '2' }, { input: '50', expected: '100' }, { input: '1000', expected: '2000', weight: 2 }] },
+            expectedAnswer: { tests: [{ input: '1', expected: '2' }, { input: '50', expected: '100' }, { input: '1000', expected: '2000', weight: 2 }], reference: { language: 'python', source: 'print(int(input()) * 2)' } },
           },
           { questionId: 'Q2', sectionCode: 'A', number: 2, kind: 'MATH', maxMarks: 4, attachments: [], prompt: { blocks: [{ id: 'p', kind: 'paragraph', content: 'Expand (x+1)^2.' }] }, expectedAnswer: { expression: 'x^2+2x+1' } },
           { questionId: 'Q3', sectionCode: 'A', number: 3, kind: 'MCQ_MULTI', maxMarks: 2, attachments: [], prompt: { blocks: [{ id: 'p', kind: 'paragraph', content: 'Which are compiled languages?' }] }, options: [{ key: 'A', text: 'C' }, { key: 'B', text: 'Python' }, { key: 'C', text: 'C++' }, { key: 'D', text: 'Bash' }], expectedAnswer: ['A', 'C'] },
@@ -76,7 +77,14 @@ describe('coding, maths and multiple-answer questions', () => {
       });
     expect(paper.status).toBeLessThan(300);
     await req().post(`/api/v1/exams/${examId}/paper/submit-for-review`).set(H(examCell.token));
-    await req().post(`/api/v1/exams/${examId}/paper/approve`).set(H(examCell.token));
+    // the hidden tests must be proven by the setter's own solution first
+    const early = await req().post(`/api/v1/exams/${examId}/paper/approve`).set(H(examCell.token));
+    expect(early.status).toBe(422);
+    expect(early.body.code).toBe('CODE_NOT_CHECKED');
+    const check = await req().post(`/api/v1/exams/${examId}/paper/questions/Q1/check-code`).set(H(examCell.token));
+    expect(check.status).toBe(200);
+    expect(check.body).toMatchObject({ ok: true, passed: 4, total: 4 });
+    expect((await req().post(`/api/v1/exams/${examId}/paper/approve`).set(H(examCell.token))).status).toBe(200);
     await req().post(`/api/v1/exams/${examId}/allocations`).set(H(examCell.token)).send({ studentExternalIds: ['UOS-9001'], provider: 'uos' });
     for (const step of ['submit-for-review', 'approve', 'schedule', 'open-precheck']) await req().post(`/api/v1/exams/${examId}/${step}`).set(H(examCell.token));
     S.attemptId = (await req().get('/api/v1/student/me/exams').set(H(S.token))).body.exams[0].attemptId;
@@ -145,6 +153,12 @@ describe('coding, maths and multiple-answer questions', () => {
     prop = await req().get(`/api/v1/candidates/${S.attemptId}/rubric-proposals`).set(H(evaluator.token));
     const byQ = Object.fromEntries(prop.body.proposals.map((p: { questionId: string }) => [p.questionId, p]));
     expect(byQ['Q1']).toMatchObject({ proposedMarks: 5, method: 'CODE_TESTS', review: 'CHECK_CAREFULLY' });
+    // the examiner sees each hidden test: input, expected and what the program printed
+    expect(byQ['Q1'].tests).toEqual([
+      expect.objectContaining({ test: 1, passed: true, input: '1', expected: '2' }),
+      expect.objectContaining({ test: 2, passed: true }),
+      expect.objectContaining({ test: 3, passed: false, weight: 2, input: '1000', expected: '2000', output: '1000' }),
+    ]);
     expect(byQ['Q2']).toMatchObject({ proposedMarks: 4, method: 'ANSWER_KEY' });
     expect(byQ['Q3']).toMatchObject({ proposedMarks: 2 });
     const snap = await ctx.admin('mark_proposals').where({ attempt_id: S.attemptId }).first();
@@ -168,10 +182,10 @@ describe('coding, maths and multiple-answer questions', () => {
     });
     try {
       const judge = judge0(server.url, 'secret-token');
-      const r1 = await judge.run('cpp', 'int main(){}', [{ input: '3', expected: '6' }, { input: '3', expected: '6' }], { timeLimitMs: 1000, memoryMb: 64 });
+      const r1 = await judge.run({ kind: 'single', language: 'cpp', source: 'int main(){}' }, [{ input: '3', expected: '6' }, { input: '3', expected: '6' }], { timeLimitMs: 1000, memoryMb: 64 });
       expect(r1).toEqual([{ index: 0, passed: true, verdict: 'passed', stdout: '6\n', timeMs: 12 }, { index: 1, passed: false, verdict: 'wrong answer', stdout: '7', timeMs: 10 }]);
       expect(seen[0]).toMatchObject({ language_id: 54, source_code: 'int main(){}', stdin: '3', cpu_time_limit: 1, memory_limit: 65536, enable_network: false });
-      const r2 = await judge.run('c', 'oops', [{ input: '1', expected: '1' }, { input: '2', expected: '2' }, { input: '3', expected: '3' }], { timeLimitMs: 1000, memoryMb: 64 });
+      const r2 = await judge.run({ kind: 'single', language: 'c', source: 'oops' }, [{ input: '1', expected: '1' }, { input: '2', expected: '2' }, { input: '3', expected: '3' }], { timeLimitMs: 1000, memoryMb: 64 });
       expect(r2.map((r) => r.verdict)).toEqual(['compilation error', 'compilation error', 'compilation error']);
       expect(n).toBe(3); // the remaining tests are not sent after a compilation error
     } finally {
