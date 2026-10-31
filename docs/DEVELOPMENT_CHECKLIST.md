@@ -45,7 +45,8 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Outbox with dedupe, two lanes, SKIP LOCKED claiming, backoff, callback timeout | Tested | mail.test.ts |
 | Power Automate transport + callback endpoint (bearer secret) | Tested | mail.test.ts (emulated flow) |
 | Graph transport (app permission, scoped mailbox) | In Progress | code present, not exercised against Graph |
-| SMTP OAuth2 / relay transports (Nodemailer) | In Progress | code present, not exercised against a server |
+| SMTP relay transport (Nodemailer) against a live SMTP responder: delivery, 451 retry with back-off, 550 permanent failure | Tested | apps/api/test/mail-smtp.test.ts |
+| SMTP OAuth2 transport | In Progress | code present, not exercised against a server |
 | Versioned templates, HTML escaping, per-tenant override | Tested | mail.test.ts |
 | Bounce reconciliation from the shared mailbox and NDR webhooks | Tested | erp-adapters.test.ts, erp-import.test.tsx |
 
@@ -71,8 +72,9 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Precheck runs/items with sources; server-measured identity/eligibility/consent | Tested | exam-flow, recovery |
 | Clock sync, keyboard functional test (no WPM), optional canvas/stylus test, practice save round-trip | Tested | exam-flow |
 | System scan (SYSTEM_SCAN): server-derived findings from the raw client scan (displays, automation, VM/remote-desktop hints, screen sharing, full-screen/cookies, window/viewport, time zone compared by UTC offset so aliases such as Asia/Calcutta = Asia/Kolkata never flag, battery); blocking findings remediate; clean scans stay CLIENT_DECLARED | Tested | exam-flow (dual display → REMEDIATE, clean → PASS), network-and-scans.test.ts, device-scan.test.ts |
-| Secure client verification via SEB Config Key hash; allowed client builds | Tested | recovery.test.ts, secure-client.test.ts |
-| SEB configuration generator (POST /exams/:id/seb-config), kiosk mode XML plist, download authorization, and audit trail | Tested | secure-client.test.ts, docs/seb-rollout.md |
+| Secure client verification via SEB Config Key hash (header path and JavaScript-API path, page URL bound to the exam host), optional Browser Exam Key allow-list; allowed client builds | Tested | recovery.test.ts, secure-client.test.ts |
+| SEB required at entry grant, admission and reconnect (record `SECURE_CLIENT_MISSING`, then refuse; grant not burned); live heartbeats without the key flagged, saves never refused | Tested | recovery.test.ts |
+| SEB configuration generator: one settings object → `.seb` plist + Config Key per the SEB algorithm (recomputed independently in the test), URL filter to the exam host, force-quit (`strongKill`) list for Windows and macOS plus Exam Section additions, one display/no mirroring/no capture/no VM, kiosk keys, hashed quit password; frozen once LIVE; SECURE_BYOD only; download authorization and audit | Tested (acceptance with real SEB builds pending — rehearsal step in docs/seb-rollout.md) | secure-client.test.ts |
 | MANAGED_ENDPOINT lab network subnet attestation and client policy management | Tested | secure-client.test.ts |
 | Extended client-side signals (DISALLOWED_APP_DETECTED, VIRTUAL_MACHINE_DETECTED) with human-only warning invariant | Tested | secure-client.test.ts |
 | Pre-publication staff booklet download audit (booklet.downloaded) | Tested | secure-client.test.ts |
@@ -101,13 +103,17 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Feature | Status | Evidence |
 | --- | --- | --- |
 | Signal ingest with dedupe and grouping window; technical classes uncountable | Tested | exam-flow |
+| Server-only classes (CONCURRENT_SESSION, NETWORK_ADDRESS_CHANGED, SECURE_CLIENT_MISSING) refused from clients; signal metadata bounded to 2 KB; timeline returns every raw signal with context and server receipt time | Tested | network-and-scans.test.ts |
+| Browser lockdown in the workspace: full-screen gate (refusal never traps), paper hidden while away, Keyboard Lock, leaving the exam (tab hidden vs another app) with time away, display change (second screen, projector/mirroring, resolution, scaling) with before/after + immediate device scan, duplicate tab, split-screen, print/PrintScreen/DevTools, external paste | Tested | apps/web/test/lockdown.test.tsx; network-and-scans.test.ts; browser rehearsal (apps/web/e2e) |
+| Proctor console says what was reported in words (time away, display before/after, faces, SEB route) for the incident and on the timeline | Tested | apps/web/test/proctor.test.tsx |
+| On-device camera presence (opt-in per exam): no face ≥ 8 s / covered camera, second face ≥ 3 s, camera unavailable (technical); hysteresis against single-frame false detections; no image leaves the device; third-party telemetry of the detector refused; CAMERA consent + new policy version; frozen once LIVE | Tested (on real devices: pending the data-protection assessment, plan §11) | apps/web/test/presence.test.tsx, same-origin-guard.test.ts; secure-client.test.ts |
 | Human decisions; one warning per incident per epoch; idempotent decisions | Tested | exam-flow |
 | Fifth-warning atomic suspension under concurrent saves; alert mail | Tested | exam-flow (race) |
 | Resume with new epoch, history retained, deadline extension, device re-bind | Tested | exam-flow, recovery |
 | Technical hold (no epoch change) | Tested | recovery.test.ts |
 | Hash chains (attempt timeline, tenant audit) append under per-chain advisory locks with unique tripwire indexes; incident grouping serialised per attempt; one lock order for signals, saves and decisions (no deadlocks under a 20-request burst on one attempt) | Tested | scale-invariants.test.ts (burst + 20 concurrent logins) |
 | Heartbeat sweep: one MGET per tenant, a missing key opens a fresh grace window (Redis flush never bounces writing students); admission/reconnect seed the window | Tested | scale-invariants.test.ts |
-| Every hold placed before marks releases into the marking queue; the forensics lane routes a failing packet to technical review instead of stalling | Tested (release) / In Progress (poison path has no automated test) | hardening.test.ts |
+| Every hold placed before marks releases into the marking queue; the forensics lane routes a failing packet to technical review instead of stalling | Tested | hardening.test.ts (release; poison packet → TECHNICAL_REVIEW_REQUIRED, next packet still processed) |
 | IP tracking: attempt_network_observations on every readiness/admission/in-exam request, admitted_ip binding, ipPolicy LOG/REVIEW/LOCK (record-then-refuse under LOCK; proctor resume + rebind releases), lab-subnet refusal for managed endpoints; addresses in the proctor timeline and the evidence PDF | Tested | network-and-scans.test.ts |
 | In-exam device scans every 60 s (append-only device_scans); blocking findings → mapped review signals grouped per incident, never a warning or a pause; student told what to fix; scans in the proctor timeline and the evidence PDF | Tested | network-and-scans.test.ts |
 | Rolling media buffer, 5-second clips, 5 snapshots, gap detection, evidence viewer | Not Started | Gate C/D |
@@ -146,10 +152,10 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Exam workspace: server-derived timer, question map, paragraph + whiteboard editor, autosave with baseRevision/clientOperationId/contentSha256, 409 rebase, draft queue, heartbeat, periodic system scan with plain-language notice, paused overlay, device-mismatch screen, signal reporting, submit with receipt | Tested | apps/web/test/exam-workspace.test.tsx, sync.test.ts, answers.test.ts, canonical.test.ts; smoke-tested (typed + drew → 200, hash matched server) |
 | Digital answer booklet with print layout (A4, page per question) | Tested | apps/web/test/booklet.test.tsx; printed to PDF in smoke test |
 | Exam Section: hierarchical exam list, new exam, conduct controls with consequence dialogs, allocations, hall tickets, Readiness Board (10 s), exceptions, Candidates with checklist drawer (approve/hold/release/authorize), export lock message | Tested | apps/web/test/readiness-board.test.tsx; smoke-tested through the full post-exam chain |
-| Safe Exam Browser integration: student .seb download on exam cards, Exam Section SEB generator and policy panel | Tested | apps/web/test/secure-client.test.tsx |
+| Safe Exam Browser integration: student .seb download through the authenticated client (the plain link never carried a token), SEB JavaScript-API headers, Exam Section panel (quit password, extra apps to force-close, Browser Exam Keys), camera presence switch | Tested | apps/web/test/secure-client.test.tsx, seb-js-api.test.ts |
 | Evaluator marks screen (assigned queue, anonymization, one explanation per question, criteria; lists exactly the approved paper's questions) | Tested | apps/web/test/evaluation.test.tsx; smoke-tested; evaluate-marks.test.tsx |
 | Proctor console (5 s queue, decisions, technical hold, resume for Chief Proctor, timeline with network addresses and device scans) | Tested | apps/web/test/proctor.test.tsx (queue, drawer, timeline sections); decisions smoke-tested |
-| Tenant admin (users/roles, mail config, mail log, SSO, API keys, webhooks, deliveries replay, audit) | In Progress | smoke-tested; no render test yet |
+| Tenant admin (users/roles, mail config, mail log, SSO, API keys, webhooks, deliveries replay, audit); opens on the first tab the role may see | Tested | apps/web/test/admin.test.tsx |
 | Question paper rendering in the workspace (released paper, question navigator, prompt per question) | Tested | apps/web/test/exam-workspace.test.tsx (mocked released paper) |
 
 ## Operations
@@ -166,4 +172,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Backups, PITR drills, observability dashboards | Not Started | Gate G |
 | Dependency audit (`npm audit`, prod + dev) | Tested | 0 vulnerabilities after upgrades (docs/security-review.md) |
 | Black-box security probes (26 checks: auth, IDOR, injection, mass assignment, headers, tokens, rate limit, device scans, network policy, platform surface) | Tested | `npm run security:probes` |
+| Route coverage: every registered route documented in the route map and vice versa; anonymous and forged-token calls refused on every non-public route; garbage bodies, params and queries never produce a 5xx; NUL characters refused at the edge | Tested | apps/api/test/route-coverage.test.ts |
+| Deploy smoke test (`npm run smoke`): health, tenant, JWKS, sign-in and home screen per role, refusals, problem objects, security headers, server-only signal refusal, refresh rotation/retry/revocation, latency | Tested (16/16 on the demo stack, 2026-10-31) | apps/api/scripts/smoke.mjs |
+| Exam-day browser rehearsal (every role through the real UI, with lockdown signals and camera presence; optional captioned video) | Tested (15/15 steps, 2026-10-31) | apps/web/e2e/exam-day-rehearsal.cjs |
 | Independent penetration test, DAST/SAST in CI, privacy impact assessment | Not Started | docs/security-review.md lists the required scope |
