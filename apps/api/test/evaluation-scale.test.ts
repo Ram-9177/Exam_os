@@ -584,7 +584,7 @@ describe('Phase 6 — Evaluation at Scale, Moderation, and Revaluation', () => {
     expect(Number(payload.total)).toBe(70);
   });
 
-  it('Gate E: generates AI rubric proposals and detects answer similarity without auto-disqualifying', async () => {
+  it('Gate E: mark proposals never come from answer length; similarity is detected answer similarity without auto-disqualifying', async () => {
     const { exam, attempts } = await createSealedExamWithCandidates('MID_1', false);
 
     // 1. Rubric proposals API
@@ -595,8 +595,13 @@ describe('Phase 6 — Evaluation at Scale, Moderation, and Revaluation', () => {
     expect(proposalsRes.status).toBe(200);
     expect(proposalsRes.body.proposals.length).toBe(2);
     expect(proposalsRes.body.proposals[0].questionId).toBe('Q1');
-    expect(proposalsRes.body.proposals[0].suggestedMarks).toBeGreaterThan(0);
-    expect(proposalsRes.body.proposals[0].suggestionExplanation).toContain('Draft AI proposal');
+    // this paper's rubric has no key terms and no answer key: the system does not invent marks from answer length
+    for (const pr of proposalsRes.body.proposals) {
+      expect(['EXAMINER', 'NO_ANSWER']).toContain(pr.method);
+      expect(typeof pr.basis).toBe('string');
+      if (pr.method === 'EXAMINER') expect(pr.proposedMarks).toBeNull();
+    }
+    expect(JSON.stringify(proposalsRes.body)).not.toMatch(/AI proposal|word count/i);
 
     // 2. Similarity analysis API
     // Attempt 0 and Attempt 1 have identical answers seeded in createSealedExamWithCandidates

@@ -69,4 +69,61 @@ describe('Evaluator marking sheet', () => {
     expect(posted[0]!.items.map((it) => it.marks)).toEqual([4, 4.5, 0, 0]);
     expect(posted[0]!.items.every((it) => it.maxMarks === 5)).toBe(true);
   });
+
+  it('proposes marks automatically; changing a proposal needs a reason, which is sent with the marks', async () => {
+    const me = signInAs(['EVALUATOR'], { id: 'u-ev', email: 'evaluator@demo.local', fullName: 'Examiner', kind: 'STAFF' });
+    const posted: Array<{ items: Array<Record<string, unknown>> }> = [];
+    const proposals = [
+      { questionId: 'Q1', maxMarks: 5, proposedMarks: 4.5, method: 'RUBRIC_TERMS', basis: 'Key terms of the rubric found in the answer, per criterion.', criteria: [{ code: 'DEF', max: 2.5, awarded: 2.5, evidence: 'Process vs thread: 4/4 key terms' }, { code: 'PCB', max: 2.5, awarded: 2, evidence: 'PCB: 4/5 key terms (missing: open files)' }] },
+      { questionId: 'Q2', maxMarks: 5, proposedMarks: 3, method: 'RUBRIC_TERMS', basis: 'Key terms of the rubric found in the answer, per criterion.', criteria: [{ code: 'COND', max: 3, awarded: 3, evidence: '4/4' }, { code: 'PREV', max: 2, awarded: 0, evidence: '0/2' }] },
+      { questionId: 'Q3', maxMarks: 5, proposedMarks: 0, method: 'NO_ANSWER', basis: 'No answer was written.' },
+      { questionId: 'Q4', maxMarks: 5, proposedMarks: null, method: 'EXAMINER', basis: 'Drawings are marked by the examiner.' },
+    ];
+    mockFetch(({ method, path, body }) => {
+      if (method === 'GET' && path === '/auth/me') return { json: me };
+      if (method === 'GET' && path === '/tenant') return { json: TENANT };
+      if (method === 'GET' && path === `/student/attempts/${ATTEMPT}/booklet`) return { json: booklet };
+      if (method === 'GET' && path === `/candidates/${ATTEMPT}/rubric-proposals`) return { json: { attemptId: ATTEMPT, proposals, proposedTotal: 7.5, needsExaminer: ['Q4'] } };
+      if (method === 'POST' && path === `/candidates/${ATTEMPT}/result-versions`) {
+        posted.push(body as (typeof posted)[number]);
+        return { status: 201, json: { resultVersionId: 'rv-1', version: 1, total: 9, max: 20, invalidatedApprovals: 0 } };
+      }
+      return undefined;
+    });
+    renderApp([{ path: '/evaluate/:attemptId', element: <EvaluatePage /> }], `/evaluate/${ATTEMPT}`);
+    const user = userEvent.setup();
+    expect(await screen.findByText(/Proposed total 7.5 · 1 question needs your judgement/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Suggest Rubric Marks/ })).not.toBeInTheDocument();
+    const sheets = [...document.querySelectorAll('fieldset')] as HTMLElement[];
+    const [s1, s2, , s4] = sheets.map((f) => within(f));
+    await waitFor(() => expect(s1!.getByLabelText('Marks', { exact: true })).toHaveValue(4.5));
+    expect(s1!.getByText('Proposed: 4.5 / 5')).toBeInTheDocument();
+    expect(within(s1!.getByLabelText('Proposal for question 1')).getByText(/PCB: 4\/5 key terms \(missing: open files\)/)).toBeInTheDocument();
+    expect(s4!.getByText('No proposal')).toBeInTheDocument();
+    expect(s4!.getByLabelText('Marks', { exact: true })).toHaveValue(null);
+
+    // the examiner disagrees with Q2: a reason becomes mandatory
+    expect(s2!.queryByLabelText(/Reason for changing the proposed mark/)).not.toBeInTheDocument();
+    await user.clear(s2!.getByLabelText('Marks', { exact: true }));
+    await user.type(s2!.getByLabelText('Marks', { exact: true }), '4');
+    const reason = s2!.getByLabelText(/Reason for changing the proposed mark/);
+    // criteria rows came from the proposal; adjust them to the new total so the sheet stays consistent
+    const awarded = s2!.getAllByPlaceholderText('Awarded');
+    await user.clear(awarded[1]!);
+    await user.type(awarded[1]!, '1');
+    await user.type(s4!.getByLabelText('Marks', { exact: true }), '1.5');
+    await user.type(s4!.getByLabelText('Out of'), '5');
+    await user.type(s4!.getByLabelText(/Marks explanation/), 'Diagram shows paging but no TLB.');
+
+    await user.click(screen.getByRole('button', { name: 'Record marks as version 1' }));
+    expect(await s2!.findByText(/You changed the proposed mark: say why/)).toBeInTheDocument();
+    expect(posted).toHaveLength(0);
+    await user.type(reason, 'Explains release-and-retry, which the key terms miss.');
+    await user.click(screen.getByRole('button', { name: 'Record marks as version 1' }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    const items = posted[0]!.items;
+    expect(items.map((it) => it['marks'])).toEqual([4.5, 4, 0, 1.5]);
+    expect(items[1]).toMatchObject({ questionId: 'Q2', overrideReason: 'Explains release-and-retry, which the key terms miss.' });
+    expect(items.filter((it) => 'overrideReason' in it)).toHaveLength(1);
+  });
 });

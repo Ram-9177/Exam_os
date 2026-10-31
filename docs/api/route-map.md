@@ -98,7 +98,7 @@ GET  /analytics/overview (analytics:read) → {overview:{departments:[{id,code,n
 ## Candidates (post-exam)
 GET  /candidates/queue?examId (marks:approve, exam-scoped) → {summary:{total,awaitingMarks,marked}, candidates:[{attemptId,status,fullName,registerNumber,hallTicket,resultVersion,totalMarks,maxMarks,markedAt,marking:'AWAITING_MARKS'|'MARKED'|'PUBLISHED'}]}   (examiner queue; carries no integrity or proctoring fields)
 POST /candidates/:attemptId/forensics/run → packet
-POST /candidates/:attemptId/result-versions {items:[{questionId,maxMarks,marks,explanation,criteria?:[{code,max,awarded,evidence?}]}]} (EVALUATOR) → 201 {resultVersionId,version,total,max,invalidatedApprovals}
+POST /candidates/:attemptId/result-versions {items:[{questionId,maxMarks,marks,explanation,criteria?:[{code,max,awarded,evidence?}],overrideReason?}]} (EVALUATOR) → 201 {resultVersionId,version,total,max,invalidatedApprovals}; 422 OVERRIDE_REASON_REQUIRED when marks differ from the server's automatic proposal without a reason (≥ 10 chars). Each stored item keeps proposedMarks, proposalMethod and overrideReason
 GET  /candidates/:attemptId/checklist → {packet,exam,resultVersion,checks:[{code,ok,detail}],publishable}
 POST /candidates/:attemptId/approvals {reviewedResultVersionId, reason, idempotencyKey} (EXAM_CELL) → 201 {approvalId,status}
 POST /candidates/:attemptId/holds {status:'INTEGRITY_HOLD'|'TECHNICAL_REVIEW_REQUIRED'|'IDENTITY_REVIEW_REQUIRED'|'MARKING_MODERATION_REQUIRED', reason} → {status}
@@ -118,7 +118,7 @@ POST /student/attempts/:attemptId/revaluation {reason, feeRef?} (attempts:own) �
 GET  /student/attempts/:attemptId/revaluation (attempts:own) → {revaluation:{id,reason,feeRef,status,decisionNote}}
 GET  /exams/:id/revaluation-requests (revaluation:decide) → [{id,attemptId,studentName,studentEmail,reason,feeRef,status,decisionNote,currentMarks,maxMarks,packetStatus}]
 POST /revaluation-requests/:requestId/decide {decision:'APPROVED'|'REJECTED', note?} (revaluation:decide) → {requestId, status}
-GET  /candidates/:attemptId/rubric-proposals (marks:approve) → {attemptId, proposals:[{questionId,maxMarks,suggestedMarks,suggestionExplanation,criteriaSuggestions:[{code,max,awarded}]}]}
+GET  /candidates/:attemptId/rubric-proposals (marks:approve) → {attemptId, proposedTotal, needsExaminer:[questionId], proposals:[{questionId,maxMarks,proposedMarks|null,method:'NO_ANSWER'|'ANSWER_KEY'|'NUMERIC_KEY'|'RUBRIC_TERMS'|'EXAMINER',basis,criteria?:[{code,max,awarded,evidence}]}]} — deterministic: MCQ/NUMERIC answer key (expectedAnswer), rubric criteria `keywords`; null = the examiner judges (drawings, no key)
 POST /exams/:id/similarity-analysis {threshold?} (exams:write) → {examId, threshold, comparisonsCount, flaggedPairs:[{attemptId1,attemptId2,questionId,similarity}]}
 
 ## Proctor (PROCTOR, CHIEF_PROCTOR)

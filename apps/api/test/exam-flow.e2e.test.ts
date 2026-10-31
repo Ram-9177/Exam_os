@@ -128,7 +128,7 @@ describe('end-to-end exam flow', () => {
           kind: 'DESCRIPTIVE',
           prompt: { blocks: [{ id: 'p2', kind: 'paragraph', content: 'Explain deadlock prevention methods.' }] },
           maxMarks: 10,
-          rubric: [{ code: 'EXPL', max: 10, description: 'Deadlock explanation' }],
+          rubric: [{ code: 'EXPL', max: 10, description: 'Deadlock explanation', keywords: ['prevention', 'hold and wait|hold-and-wait', 'circular wait', 'line'] }],
           attachments: [],
         },
       ],
@@ -501,17 +501,36 @@ describe('end-to-end exam flow', () => {
     expect(noAnswer.body.code).toBe('MARKS_WITHOUT_ANSWER');
     const criteriaMismatch = await req().post(`/api/v1/candidates/${A.attemptId}/result-versions`).set(H(evaluator.token)).send({ items: [{ questionId: 'Q1', maxMarks: 10, marks: 8, explanation: 'x', criteria: [{ code: 'CONCEPT', max: 5, awarded: 5 }, { code: 'EXAMPLE', max: 5, awarded: 2 }] }] });
     expect(criteriaMismatch.body.code).toBe('CRITERIA_SUM_MISMATCH');
+    // automatic proposals: Q1's rubric has no key terms (the examiner judges it), Q2's has — a proposal with its basis
+    const prop = await req().get(`/api/v1/candidates/${A.attemptId}/rubric-proposals`).set(H(evaluator.token));
+    expect(prop.status).toBe(200);
+    const pq1 = prop.body.proposals.find((x: { questionId: string }) => x.questionId === 'Q1');
+    const pq2 = prop.body.proposals.find((x: { questionId: string }) => x.questionId === 'Q2');
+    expect(pq1).toMatchObject({ proposedMarks: null, method: 'EXAMINER' });
+    expect(pq2).toMatchObject({ method: 'RUBRIC_TERMS', proposedMarks: expect.any(Number), criteria: [expect.objectContaining({ code: 'EXPL', max: 10 })] });
+    expect(prop.body.needsExaminer).toEqual(['Q1']);
+    // students never see proposals
+    expect((await req().get(`/api/v1/candidates/${A.attemptId}/rubric-proposals`).set(H(A.token))).status).toBe(403);
+    const q2Marks = pq2.proposedMarks === 4 ? 4.5 : 4;
+    const noReason = await req().post(`/api/v1/candidates/${A.attemptId}/result-versions`).set(H(evaluator.token)).send({ items: [{ questionId: 'Q1', maxMarks: 10, marks: 8, explanation: 'x' }, { questionId: 'Q2', maxMarks: 10, marks: q2Marks, explanation: 'Partial.' }] });
+    expect(noReason.status).toBe(422);
+    expect(noReason.body.code).toBe('OVERRIDE_REASON_REQUIRED');
     const ok = await req()
       .post(`/api/v1/candidates/${A.attemptId}/result-versions`)
       .set(H(evaluator.token))
       .send({
         items: [
           { questionId: 'Q1', maxMarks: 10, marks: 8, explanation: 'Correct definition and a valid alternative example; diagram labels incomplete.', criteria: [{ code: 'CONCEPT', max: 5, awarded: 5 }, { code: 'DIAGRAM', max: 5, awarded: 3 }] },
-          { questionId: 'Q2', maxMarks: 10, marks: 4, explanation: 'Partial: states the idea, no justification.' },
+          { questionId: 'Q2', maxMarks: 10, marks: q2Marks, explanation: 'Partial: states the idea, no justification.', overrideReason: 'Key terms appear but the prevention methods are not explained.' },
         ],
       });
     expect(ok.status).toBe(201);
-    expect(ok.body).toMatchObject({ version: 1, total: 12, max: 20 });
+    expect(ok.body).toMatchObject({ version: 1, total: 8 + q2Marks, max: 20 });
+    const rv = await ctx.admin('result_versions').where({ attempt_id: A.attemptId, version: 1 }).first();
+    const stored = rv.items as Array<Record<string, unknown>>;
+    expect(stored.find((i) => i['questionId'] === 'Q1')).toMatchObject({ proposedMarks: null, proposalMethod: 'EXAMINER' });
+    expect(stored.find((i) => i['questionId'] === 'Q1')).not.toHaveProperty('overrideReason');
+    expect(stored.find((i) => i['questionId'] === 'Q2')).toMatchObject({ proposedMarks: pq2.proposedMarks, proposalMethod: 'RUBRIC_TERMS', overrideReason: 'Key terms appear but the prevention methods are not explained.' });
     // exam cell cannot record marks
     expect((await req().post(`/api/v1/candidates/${A.attemptId}/result-versions`).set(H(examCell.token)).send({ items: [{ questionId: 'Q1', maxMarks: 10, marks: 8, explanation: 'x' }] })).status).toBe(403);
     const p = await ctx.admin('candidate_review_packets').where('attempt_id', A.attemptId).first();
@@ -529,7 +548,7 @@ describe('end-to-end exam flow', () => {
     // controller cannot publish without approval id; exam cell cannot publish at all
     expect((await req().post(`/api/v1/candidates/${A.attemptId}/authorize-publication`).set(H(examCell.token)).send({ candidateApprovalId: ap1.body.approvalId, idempotencyKey: randomUUID() })).status).toBe(403);
     // moderation changes marks → approval invalidated (spec test 21)
-    const v2 = await req().post(`/api/v1/candidates/${A.attemptId}/result-versions`).set(H(evaluator.token)).send({ items: [{ questionId: 'Q1', maxMarks: 10, marks: 9, explanation: 'Moderation: diagram credit raised.' }, { questionId: 'Q2', maxMarks: 10, marks: 4, explanation: 'Unchanged.' }] });
+    const v2 = await req().post(`/api/v1/candidates/${A.attemptId}/result-versions`).set(H(evaluator.token)).send({ items: [{ questionId: 'Q1', maxMarks: 10, marks: 9, explanation: 'Moderation: diagram credit raised.' }, { questionId: 'Q2', maxMarks: 10, marks: 4, explanation: 'Unchanged.', overrideReason: 'Key terms appear but the prevention methods are not explained.' }] });
     expect(v2.status).toBe(201);
     expect(v2.body.invalidatedApprovals).toBe(1);
     const p2 = await ctx.admin('candidate_review_packets').where('attempt_id', A.attemptId).first();

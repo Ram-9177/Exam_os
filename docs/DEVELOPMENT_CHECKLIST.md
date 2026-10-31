@@ -137,7 +137,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Anonymized candidate marking for external exams (masks student identity) | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
 | Double evaluation with divergence threshold (15%) and moderator resolution | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
 | Revaluation lifecycle (student request, window check, exam cell decision, re-marking, ledger supersede, and result.corrected event) | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
-| AI rubric-based evaluation proposals | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
+| Automatic mark proposals (replaces the word-count "AI" draft): MCQ answer key read from explicit choices only, NUMERIC expected values with tolerance, rubric key terms per criterion with found/missing evidence, no answer → 0, drawings and unkeyed questions left to the examiner; length never earns marks. Proposals load with the script and pre-fill unmarked questions; a mark that differs needs the examiner's reason (server-enforced, recomputed server-side) and proposal, method and reason are kept in the result version | Tested | auto-marks.test.ts, exam-flow.e2e.test.ts, evaluation-scale.test.ts; apps/web/test/evaluate-marks.test.tsx |
 | Answer similarity analysis and adjudication (MinHash/shingles, integrity hold) | Tested | evaluation-scale.test.ts |
 
 ## Web application (apps/web) — React 19, Vite, Tailwind 4, TanStack Query, React Router 7, custom components

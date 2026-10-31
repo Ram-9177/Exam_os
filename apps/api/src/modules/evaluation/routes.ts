@@ -36,6 +36,8 @@ const ResultItemsBody = z.object({
         maxMarks: z.number().min(0).max(1000),
         marks: z.number().min(0).max(1000),
         explanation: z.string().trim().min(1).max(4000),
+        /** Required when the marks differ from the system's proposal: why the examiner decided otherwise. */
+        overrideReason: z.string().trim().min(10).max(2000).optional(),
         criteria: z
           .array(
             z.object({

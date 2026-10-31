@@ -21,7 +21,26 @@ interface Entry {
   maxMarks: string;
   explanation: string;
   criteria: Criterion[];
+  overrideReason?: string;
 }
+
+/** The system's proposal for one answer (server-computed; see apps/api/src/modules/evaluation/auto-marks.ts). */
+export interface MarkProposal {
+  questionId: string;
+  maxMarks: number;
+  proposedMarks: number | null;
+  method: 'NO_ANSWER' | 'ANSWER_KEY' | 'NUMERIC_KEY' | 'RUBRIC_TERMS' | 'EXAMINER';
+  basis: string;
+  criteria?: Array<{ code: string; max: number; awarded: number; evidence: string }>;
+}
+const METHOD_LABEL: Record<MarkProposal['method'], string> = {
+  NO_ANSWER: 'no answer written',
+  ANSWER_KEY: 'answer key',
+  NUMERIC_KEY: 'expected values',
+  RUBRIC_TERMS: 'rubric key terms',
+  EXAMINER: 'needs your judgement',
+};
+const differs = (marks: string, p: MarkProposal | undefined) => !!p && p.proposedMarks !== null && marks !== '' && Math.abs(Number(marks) - p.proposedMarks) > 0.001;
 
 export function useEvaluatorAssignments(examId?: string) {
   return useQuery({
@@ -241,51 +260,16 @@ export function EvaluatePage() {
   const [entries, setEntries] = useState<Record<string, Entry>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  const [proposalsBusy, setProposalsBusy] = useState(false);
   const [done, setDone] = useState<{ resultVersionId: string; version: number; total: number; max: number; invalidatedApprovals: number } | null>(null);
-
-  const fetchRubricProposals = async () => {
-    setProposalsBusy(true);
-    try {
-      const res = await api.get<{
-        attemptId: string;
-        proposals: Array<{
-          questionId: string;
-          maxMarks: number;
-          suggestedMarks: number;
-          suggestionExplanation: string;
-          criteriaSuggestions: Array<{ code: string; max: number; awarded: number }>;
-        }>;
-      }>(`/candidates/${attemptId}/rubric-proposals`);
-
-      for (const p of res.proposals) {
-        update(p.questionId, {
-          marks: String(p.suggestedMarks),
-          maxMarks: String(p.maxMarks),
-          explanation: p.suggestionExplanation,
-          criteria: p.criteriaSuggestions.map((c) => ({
-            code: c.code,
-            max: String(c.max),
-            awarded: String(c.awarded),
-            evidence: '',
-          })),
-        });
-      }
-      toast({
-        tone: 'info',
-        title: 'Rubric Proposals Applied',
-        description: 'Review and adjust suggested marks and explanations before saving.',
-      });
-    } catch {
-      toast({
-        tone: 'error',
-        title: 'Could not load proposals',
-        description: 'No approved paper rubric was available for this attempt.',
-      });
-    } finally {
-      setProposalsBusy(false);
-    }
-  };
+  // Automatic proposals arrive with the script: the examiner starts from them and explains any change.
+  const proposalsQuery = useQuery({
+    queryKey: ['mark-proposals', attemptId],
+    queryFn: () => api.get<{ proposals: MarkProposal[]; proposedTotal: number; needsExaminer: string[] }>(`/candidates/${attemptId}/rubric-proposals`, { quiet: true }),
+    enabled: !!attemptId,
+    retry: false,
+    staleTime: Infinity,
+  });
+  const proposals = useMemo(() => new Map((proposalsQuery.data?.proposals ?? []).map((p) => [p.questionId, p])), [proposalsQuery.data]);
 
   useEffect(() => {
     const data = booklet.data;
@@ -305,6 +289,27 @@ export function EvaluatePage() {
       return next;
     });
   }, [booklet.data]);
+  useEffect(() => {
+    const data = booklet.data;
+    if (!proposalsQuery.data || !data) return;
+    // never over an earlier version's marks: proposals only fill questions nobody has marked yet
+    const markedBefore = new Set(data.questions.filter((q) => q.marks !== null).map((q) => q.questionId));
+    setEntries((prev) => {
+      const next = { ...prev };
+      for (const p of proposalsQuery.data.proposals) {
+        const cur = next[p.questionId];
+        const untouched = !markedBefore.has(p.questionId) && (!cur || (cur.marks === '' && cur.explanation === ''));
+        if (!untouched || p.proposedMarks === null) continue;
+        next[p.questionId] = {
+          marks: String(p.proposedMarks),
+          maxMarks: String(p.maxMarks),
+          explanation: p.criteria?.length ? `${p.basis}\n${p.criteria.map((c) => `${c.code} ${c.awarded}/${c.max}: ${c.evidence}`).join('\n')}` : p.basis,
+          criteria: (p.criteria ?? []).map((c) => ({ code: c.code, max: String(c.max), awarded: String(c.awarded), evidence: c.evidence })),
+        };
+      }
+      return next;
+    });
+  }, [proposalsQuery.data, booklet.data]);
 
   const totals = useMemo(() => {
     let marks = 0;
@@ -329,19 +334,21 @@ export function EvaluatePage() {
       if (en.maxMarks === '' || !Number.isFinite(maxMarks) || maxMarks < 0) errs[q.questionId] = 'Set the maximum marks.';
       else if (en.marks === '' || !Number.isFinite(marks) || marks < 0 || marks > maxMarks) errs[q.questionId] = `Marks must be between 0 and ${maxMarks}.`;
       else if (!en.explanation.trim()) errs[q.questionId] = 'An explanation is required for every question.';
+      else if (differs(en.marks, proposals.get(q.questionId)) && (en.overrideReason ?? '').trim().length < 10) errs[q.questionId] = 'You changed the proposed mark: say why (at least 10 characters).';
       const criteria = en.criteria.filter((c) => c.code.trim());
       if (criteria.length) {
         const sum = criteria.reduce((a, c) => a + (Number(c.awarded) || 0), 0);
         if (Math.abs(sum - marks) > 0.001) errs[q.questionId] = `Criteria add up to ${sum}, but marks are ${marks}.`;
         if (criteria.some((c) => (Number(c.awarded) || 0) > (Number(c.max) || 0))) errs[q.questionId] = 'A criterion awards more than its maximum.';
       }
-      return { questionId: q.questionId, maxMarks, marks, explanation: en.explanation.trim(), ...(criteria.length ? { criteria: criteria.map((c) => ({ code: c.code.trim(), max: Number(c.max) || 0, awarded: Number(c.awarded) || 0, ...(c.evidence.trim() ? { evidence: c.evidence.trim() } : {}) })) } : {}) };
+      const overrideReason = differs(en.marks, proposals.get(q.questionId)) ? (en.overrideReason ?? '').trim() : '';
+      return { questionId: q.questionId, maxMarks, marks, explanation: en.explanation.trim(), ...(overrideReason ? { overrideReason } : {}), ...(criteria.length ? { criteria: criteria.map((c) => ({ code: c.code.trim(), max: Number(c.max) || 0, awarded: Number(c.awarded) || 0, ...(c.evidence.trim() ? { evidence: c.evidence.trim() } : {}) })) } : {}) };
     });
     setErrors(errs);
     if (Object.keys(errs).length) return;
     setBusy(true);
     try {
-      const out = await api.post<{ resultVersionId: string; version: number; total: number; max: number; invalidatedApprovals: number }>(`/candidates/${attemptId}/result-versions`, { items }, { quiet: ['PACKET_STATE', 'MARK_OUT_OF_RANGE', 'CRITERIA_SUM_MISMATCH', 'CRITERION_OUT_OF_RANGE', 'EXPLANATION_REQUIRED', 'MARKS_WITHOUT_ANSWER'] });
+      const out = await api.post<{ resultVersionId: string; version: number; total: number; max: number; invalidatedApprovals: number }>(`/candidates/${attemptId}/result-versions`, { items }, { quiet: ['PACKET_STATE', 'MARK_OUT_OF_RANGE', 'CRITERIA_SUM_MISMATCH', 'CRITERION_OUT_OF_RANGE', 'EXPLANATION_REQUIRED', 'MARKS_WITHOUT_ANSWER', 'OVERRIDE_REASON_REQUIRED'] });
       setDone(out);
       void qc.invalidateQueries({ queryKey: ['booklet', attemptId] });
       toast({ tone: 'success', title: `Result version ${out.version} recorded`, description: `${out.total} / ${out.max}${out.invalidatedApprovals ? ` · ${out.invalidatedApprovals} earlier approval invalidated` : ''}` });
@@ -363,18 +370,16 @@ export function EvaluatePage() {
       <div className="max-w-[210mm] mx-auto mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-h2">Marks entry</h1>
-          <p className="text-ink-2">Each question needs marks, a maximum and one explanation. Criteria rows are optional and must add up to the marks.</p>
+          <p className="text-ink-2">The system proposes marks from the answer key and the rubric's key terms. Check each answer: keep the proposal, or change it and say why. Every question needs one explanation.</p>
+          {proposalsQuery.data ? (
+            <p className="text-sm text-ink-2 mt-1" role="status">
+              Proposed total {proposalsQuery.data.proposedTotal}
+              {proposalsQuery.data.needsExaminer.length ? ` · ${proposalsQuery.data.needsExaminer.length} ${proposalsQuery.data.needsExaminer.length === 1 ? 'question needs' : 'questions need'} your judgement (no proposal)` : ''}
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center gap-4">
-          <Button
-            size="sm"
-            variant="ghost"
-            type="button"
-            onClick={fetchRubricProposals}
-            disabled={proposalsBusy}
-          >
-            {proposalsBusy ? 'Analyzing Rubrics...' : 'Suggest Rubric Marks (AI)'}
-          </Button>
+
           <div className="text-right">
             <p className="text-sm text-ink-2">Running total</p>
             <p className="font-mono tabular text-2xl">
@@ -412,6 +417,20 @@ export function EvaluatePage() {
           return (
             <fieldset className="border border-rule-2 rounded-sm p-4 bg-sheet-2 flex flex-col gap-3">
               <legend className="px-1 text-sm font-medium">Marks for {questionLabel(q.questionId, i).toLowerCase()}</legend>
+              {proposals.get(q.questionId) ? (
+                <div className="rounded-sm border border-rule bg-sheet px-3 py-2 text-sm" aria-label={`Proposal for ${questionLabel(q.questionId, i).toLowerCase()}`}>
+                  <p className="font-medium">
+                    {proposals.get(q.questionId)!.proposedMarks === null ? 'No proposal' : `Proposed: ${proposals.get(q.questionId)!.proposedMarks} / ${proposals.get(q.questionId)!.maxMarks}`}
+                    <span className="text-ink-2 font-normal"> · {METHOD_LABEL[proposals.get(q.questionId)!.method]}</span>
+                  </p>
+                  <p className="text-ink-2">{proposals.get(q.questionId)!.basis}</p>
+                  {proposals.get(q.questionId)!.criteria?.map((c) => (
+                    <p key={c.code} className="text-ink-2">
+                      <span className="font-mono">{c.code}</span> {c.awarded}/{c.max} — {c.evidence}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
               <div className="grid grid-cols-2 gap-3 max-w-xs">
                 <Field label="Marks">
                   {({ id }) => <TextInput id={id} type="number" min={0} step="0.5" value={en.marks} onChange={(e) => update(q.questionId, { marks: e.target.value })} className="font-mono" aria-invalid={!!err || undefined} />}
@@ -420,6 +439,11 @@ export function EvaluatePage() {
                   {({ id }) => <TextInput id={id} type="number" min={0} step="0.5" value={en.maxMarks} onChange={(e) => update(q.questionId, { maxMarks: e.target.value })} className="font-mono" />}
                 </Field>
               </div>
+              {differs(en.marks, proposals.get(q.questionId)) ? (
+                <Field label="Reason for changing the proposed mark" required hint={`Proposed ${proposals.get(q.questionId)!.proposedMarks}, you gave ${en.marks}. Kept with the result for the Exam Cell and any appeal.`}>
+                  {({ id, describedBy }) => <TextArea id={id} value={en.overrideReason ?? ''} onChange={(e) => update(q.questionId, { overrideReason: e.target.value })} aria-describedby={describedBy} rows={2} />}
+                </Field>
+              ) : null}
               <Field label="Marks explanation" required hint={q.answerSha256 ? 'Shown to the student in the booklet.' : 'No answer was written; the server accepts 0 marks only.'}>
                 {({ id, describedBy }) => <TextArea id={id} value={en.explanation} onChange={(e) => update(q.questionId, { explanation: e.target.value })} aria-describedby={describedBy} rows={3} />}
               </Field>

@@ -8,6 +8,7 @@ import {
   type RevaluationDecideInput,
   type ResultItem,
 } from '@examos/contracts';
+import { proposeMarksForAttempt } from './auto-marks.js';
 import { AppError } from '../../lib/errors.js';
 import { audit, logAttemptEvent } from '../../lib/audit.js';
 import { sha256Hex } from '../../lib/crypto.js';
@@ -620,99 +621,18 @@ export async function decideRevaluationRequest(
 // ---------------------------------------------------------------------------
 // Gate E: Rubric Proposal Generation & Similarity Analysis
 // ---------------------------------------------------------------------------
-export async function generateRubricProposals(
-  trx: Knex.Transaction,
-  tenantId: string,
-  attemptId: string,
-) {
-  const packet = await trx('candidate_review_packets').where({ tenant_id: tenantId, attempt_id: attemptId }).first();
+/**
+ * Automatic mark proposals for the examiner (see ./auto-marks.ts): answer key for MCQ and NUMERIC, rubric key terms
+ * otherwise; none where the system cannot judge. Never a mark: recordResultVersion requires a reason for any mark
+ * that differs from these, recomputed there from the same data.
+ */
+export async function generateRubricProposals(trx: Knex.Transaction, tenantId: string, attemptId: string) {
+  const packet = await trx('candidate_review_packets').where({ tenant_id: tenantId, attempt_id: attemptId }).first('exam_id');
   if (!packet) throw AppError.notFound('PACKET_NOT_FOUND');
-
-  const paper = await trx('question_papers')
-    .where({ tenant_id: tenantId, exam_id: packet.exam_id, status: 'APPROVED' })
-    .first();
-  if (!paper) {
-    throw AppError.notFound('APPROVED_PAPER_NOT_FOUND', 'No approved question paper for this exam');
-  }
-
-  const paperQuestions = await trx('paper_questions')
-    .where({ tenant_id: tenantId, paper_id: paper.id })
-    .orderBy('number');
-
-  const docs = await trx('answer_documents')
-    .where({ attempt_id: attemptId })
-    .select('question_id', 'content');
-
-  const docMap = new Map<string, Array<{ kind: string; content: string }>>(
-    docs.map((d) => {
-      const parsed = typeof d.content === 'string' ? JSON.parse(d.content) : d.content;
-      return [d.question_id, (parsed?.blocks ?? []) as Array<{ kind: string; content: string }>];
-    }),
-  );
-
-  const proposals = paperQuestions.map((q) => {
-    const blocks = docMap.get(q.question_id) ?? [];
-    const text = blocks
-      .map((b) => (typeof b.content === 'string' ? b.content : ''))
-      .join(' ')
-      .trim();
-
-    const maxMarks = Number(q.max_marks);
-    const rubric = (q.rubric ?? []) as Array<{ code: string; max: number; description: string }>;
-
-    if (!text && blocks.length === 0) {
-      return {
-        questionId: q.question_id,
-        maxMarks,
-        suggestedMarks: 0,
-        suggestionExplanation: 'No answer submitted by the candidate.',
-        criteriaSuggestions: rubric.map((c) => ({ code: c.code, max: c.max, awarded: 0 })),
-      };
-    }
-
-    if (q.kind === 'MCQ' || q.kind === 'NUMERIC') {
-      const match = q.expected_answer && text.toLowerCase().includes(String(q.expected_answer).toLowerCase());
-      const awarded = match ? maxMarks : 0;
-      return {
-        questionId: q.question_id,
-        maxMarks,
-        suggestedMarks: awarded,
-        suggestionExplanation: match ? 'Matches expected answer format.' : 'Does not match expected answer key.',
-        criteriaSuggestions: rubric.map((c) => ({ code: c.code, max: c.max, awarded: match ? c.max : 0 })),
-      };
-    }
-
-    // Descriptive text scoring proposal:
-    // Suggest marks based on length and criteria keyword matching
-    const words = text.split(/\s+/).filter(Boolean).length;
-    const completenessRatio = Math.min(words / 100, 1.0); // 100 words = baseline completeness
-    const criteriaSuggestions = rubric.map((c) => {
-      const kw = c.description.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
-      const matches = kw.filter((w) => text.toLowerCase().includes(w)).length;
-      const kwRatio = kw.length > 0 ? matches / kw.length : 0.5;
-      const awarded = Math.round(Number(c.max) * Math.max(completenessRatio * 0.5 + kwRatio * 0.5, 0.2) * 10) / 10;
-      return {
-        code: c.code,
-        max: Number(c.max),
-        awarded: Math.min(awarded, Number(c.max)),
-      };
-    });
-
-    const sumCriteria = criteriaSuggestions.reduce((a, c) => a + c.awarded, 0);
-    const suggestedMarks = criteriaSuggestions.length > 0
-      ? Math.round(sumCriteria * 10) / 10
-      : Math.round(maxMarks * Math.max(completenessRatio * 0.7, 0.3) * 10) / 10;
-
-    return {
-      questionId: q.question_id,
-      maxMarks,
-      suggestedMarks: Math.min(suggestedMarks, maxMarks),
-      suggestionExplanation: `Draft AI proposal: word count (${words} words) with key rubric criteria coverage. Subject to evaluator verification.`,
-      criteriaSuggestions,
-    };
-  });
-
-  return { attemptId, proposals };
+  const proposals = await proposeMarksForAttempt(trx, tenantId, packet.exam_id, attemptId);
+  if (!proposals) throw AppError.notFound('APPROVED_PAPER_NOT_FOUND', 'No approved question paper for this exam');
+  const proposedTotal = proposals.reduce((a, p) => a + (p.proposedMarks ?? 0), 0);
+  return { attemptId, proposals, proposedTotal: Math.round(proposedTotal * 100) / 100, needsExaminer: proposals.filter((p) => p.proposedMarks === null).map((p) => p.questionId) };
 }
 
 export async function analyzeExamSimilarity(

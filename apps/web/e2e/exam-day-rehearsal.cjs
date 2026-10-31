@@ -431,26 +431,42 @@ const Q2 = `Deadlock needs all four Coffman conditions at once: mutual exclusion
       await shot(examcell, 'examcell-candidates-after-close', { fullPage: true });
     });
 
-    await step('Examiner marks every question with an explanation', async () => {
+    await step('Examiner reviews the automatic proposals, keeps or changes them, and explains every change', async () => {
       evaluator = await login(await staff(), 'evaluator@demo.local', STAFF_PW, 'Examiner');
       await evaluator.goto(`${BASE}/evaluate/${attemptId}`);
       const submit = evaluator.getByRole('button', { name: /Record marks as version 1/ });
       await submit.waitFor({ timeout: 30000 });
-      await caption(evaluator, 'Examiner: marks each question, with an explanation for each mark');
+      await evaluator.getByText(/Proposed total/).waitFor({ timeout: 30000 });
+      await caption(evaluator, 'Examiner: the system proposes marks from the answer key and rubric key terms, with its reasons');
+      await shot(evaluator, 'evaluator-proposals', { fullPage: true });
       const sets = evaluator.locator('fieldset');
       const n = await sets.count();
+      let changed = false;
       for (let i = 0; i < n; i++) {
         const fsx = sets.nth(i);
-        const unanswered = ((await fsx.textContent()) ?? '').includes('No answer was written');
-        if (!(await fsx.getByLabel('Out of').inputValue())) await fsx.getByLabel('Out of').fill('5');
-        await fsx.getByLabel('Marks', { exact: true }).fill(unanswered ? '0' : ['4', '4.5'][i] ?? '3');
-        await fsx.getByLabel('Marks explanation').fill(unanswered ? 'No answer was written.' : 'Correct and complete on the essentials; one point not developed.');
+        const marks = fsx.getByLabel('Marks', { exact: true });
+        const current = await marks.inputValue();
+        if (current === '') {
+          // no proposal (e.g. a drawing): the examiner marks it
+          if (!(await fsx.getByLabel('Out of').inputValue())) await fsx.getByLabel('Out of').fill('5');
+          await marks.fill('2');
+          await fsx.getByLabel('Marks explanation').fill('Marked by the examiner: partially correct.');
+        } else if (!changed && Number(current) > 0) {
+          // the examiner disagrees with one proposal: the reason is required before the marks can be saved
+          changed = true;
+          await caption(evaluator, 'Examiner changes a proposed mark — the reason for the change is required');
+          while ((await fsx.getByRole('button', { name: /Remove criterion/ }).count()) > 0) await fsx.getByRole('button', { name: /Remove criterion/ }).first().click();
+          const next = Number(current) >= 1 ? Number(current) - 1 : Number(current) + 0.5;
+          await marks.fill(String(next));
+          await fsx.getByLabel(/Reason for changing the proposed mark/).fill('The key terms are present but the explanation of the mechanism is incomplete.');
+          await shot(evaluator, 'evaluator-override-reason');
+        }
       }
-      await shot(evaluator, 'evaluator-marking', { fullPage: true });
       const resp = evaluator.waitForResponse((r) => r.url().includes('/result-versions') && r.request().method() === 'POST');
       await submit.click();
       const r = await resp;
-      if (r.status() >= 300) throw new Error(`marks refused: ${r.status()}`);
+      if (r.status() >= 300) throw new Error(`marks refused: ${r.status()} ${await r.text()}`);
+      log('  stored:', sql(`select string_agg((i->>'questionId') || ' ' || (i->>'marks') || ' (proposed ' || coalesce(i->>'proposedMarks','none') || ', ' || (i->>'proposalMethod') || ')' || case when i ? 'overrideReason' then ' reason given' else '' end, ' | ') from result_versions rv, jsonb_array_elements(rv.items) i where rv.attempt_id = '${attemptId}'`));
     });
 
     await step('Exam Cell approves the exact result version', async () => {

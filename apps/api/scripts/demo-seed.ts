@@ -147,7 +147,7 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
         kind: 'DESCRIPTIVE',
         prompt: { blocks: [{ id: 'b1', kind: 'paragraph', content: 'Explain the difference between a process and a thread. Detail the components stored in a Process Control Block (PCB).' }] },
         maxMarks: 5,
-        rubric: [{ code: 'DEF', description: 'Process vs thread comparison', max: 2.5 }, { code: 'PCB', description: 'PCB components list and purpose', max: 2.5 }],
+        rubric: [{ code: 'DEF', description: 'Process vs thread comparison', max: 2.5, keywords: ['address space', 'shares|share|shared', 'scheduling|scheduled|unit of execution', 'context switch'] }, { code: 'PCB', description: 'PCB components list and purpose', max: 2.5, keywords: ['program counter', 'registers', 'process state|state', 'memory-management|page table|base and limit', 'open files|I/O status'] }],
       },
       {
         questionId: 'Q2',
@@ -156,7 +156,7 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
         kind: 'DESCRIPTIVE',
         prompt: { blocks: [{ id: 'b2', kind: 'paragraph', content: 'Describe the four Coffman conditions necessary for deadlock to occur. How can deadlock prevention break the hold-and-wait condition?' }] },
         maxMarks: 5,
-        rubric: [{ code: 'COND', description: 'Four Coffman conditions', max: 3 }, { code: 'PREV', description: 'Hold-and-wait prevention mechanism', max: 2 }],
+        rubric: [{ code: 'COND', description: 'Four Coffman conditions', max: 3, keywords: ['mutual exclusion', 'hold and wait', 'no preemption|non-preemption', 'circular wait'] }, { code: 'PREV', description: 'Hold-and-wait prevention mechanism', max: 2, keywords: ['all resources at once|request all|before execution|at the start', 'release|releases|give up'] }],
       },
       {
         questionId: 'Q3',
@@ -166,6 +166,8 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
         prompt: { blocks: [{ id: 'b3', kind: 'paragraph', content: 'Three processes P1(burst 6ms), P2(burst 4ms), P3(burst 2ms) arrive at t=0. Compute the average turnaround time and average waiting time under Round Robin scheduling with time quantum q=2ms.' }] },
         maxMarks: 5,
         rubric: [{ code: 'GANTT', description: 'Correct execution order and completion times', max: 3 }, { code: 'AVG', description: 'Turnaround and waiting time calculations', max: 2 }],
+        // Round Robin q=2: completions P1 12, P2 10, P3 6 → average turnaround 28/3, average waiting 16/3
+        expectedAnswer: { values: [9.33, 5.33], tolerance: 0.05 },
       },
       {
         questionId: 'Q4',
@@ -174,7 +176,7 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
         kind: 'DESCRIPTIVE',
         prompt: { blocks: [{ id: 'b4', kind: 'paragraph', content: 'Explain virtual memory paging. Contrast the function of a standard hierarchical page table with a Translation Lookaside Buffer (TLB). What happens during a page fault?' }] },
         maxMarks: 5,
-        rubric: [{ code: 'PAGING', description: 'Paging concepts and address translation', max: 2.5 }, { code: 'TLB', description: 'TLB lookup vs page fault handling', max: 2.5 }],
+        rubric: [{ code: 'PAGING', description: 'Paging concepts and address translation', max: 2.5, keywords: ['page|pages', 'frame|frames', 'page table', 'logical address|virtual address'] }, { code: 'TLB', description: 'TLB lookup vs page fault handling', max: 2.5, keywords: ['TLB|translation lookaside buffer', 'cache|cached', 'page fault', 'disk|secondary storage|swap'] }],
       },
     ],
   }), 'paper basic author');

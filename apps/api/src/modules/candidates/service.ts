@@ -1,6 +1,7 @@
 import { withTenantTx, withWorkerTx, type Knex } from '@examos/db';
 import { CANDIDATE_TRANSITIONS, assertTransition, type CandidateStatus } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
+import { proposeMarksForAttempt } from '../evaluation/auto-marks.js';
 import { AppError } from '../../lib/errors.js';
 import { audit, logAttemptEvent } from '../../lib/audit.js';
 import { canonicalJson, sha256Hex } from '../../lib/crypto.js';
@@ -115,6 +116,9 @@ export interface ResultItem {
   marks: number;
   explanation: string;
   criteria?: Array<{ code: string; max: number; awarded: number; evidence?: string }>;
+  overrideReason?: string;
+  proposedMarks?: number | null;
+  proposalMethod?: string;
 }
 
 export async function recordResultVersion(trx: Knex.Transaction, tenantId: string, examinerId: string, attemptId: string, items: ResultItem[]) {
@@ -154,6 +158,23 @@ export async function recordResultVersion(trx: Knex.Transaction, tenantId: strin
         throw AppError.unprocessable('MARK_OUT_OF_RANGE', `question ${it.questionId}: marks ${it.marks} exceeds paper max marks ${q.max_marks}`);
       }
     }
+  }
+
+  // Automatic proposals: recomputed here (never taken from the client). A mark that differs from the proposal needs
+  // the examiner's reason; proposal, method and reason are kept with the version for the Exam Cell and any appeal.
+  const proposals = await proposeMarksForAttempt(trx, tenantId, packet.exam_id, attemptId);
+  if (proposals) {
+    const byQ = new Map(proposals.map((p) => [p.questionId, p]));
+    items = items.map((it) => {
+      const p = byQ.get(it.questionId);
+      if (!p) return it;
+      const differs = p.proposedMarks !== null && Math.abs(p.proposedMarks - it.marks) > 0.001;
+      if (differs && !(it.overrideReason && it.overrideReason.trim().length >= 10)) {
+        throw AppError.unprocessable('OVERRIDE_REASON_REQUIRED', `question ${it.questionId}: the proposed mark is ${p.proposedMarks}; give a reason (at least 10 characters) for ${it.marks}`);
+      }
+      const { overrideReason, ...rest } = it;
+      return { ...rest, proposedMarks: p.proposedMarks, proposalMethod: p.method, ...(differs ? { overrideReason: overrideReason!.trim() } : {}) };
+    });
   }
 
   const total = round2(items.reduce((a, i) => a + i.marks, 0));

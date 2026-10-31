@@ -176,6 +176,8 @@ export const PaperQuestionRubricCriterionSchema = z.object({
   code: z.string().trim().min(1).max(32),
   max: z.number().positive().max(1000),
   description: z.string().trim().min(1).max(500),
+  /** Key terms a full answer mentions (`a|b` = alternatives); with them the system proposes marks for this criterion. */
+  keywords: z.array(z.string().trim().min(1).max(120)).max(30).optional(),
 });
 export type PaperQuestionRubricCriterion = z.infer<typeof PaperQuestionRubricCriterionSchema>;
 
@@ -537,6 +539,11 @@ export interface ResultItem {
   marks: number;
   explanation: string;
   criteria?: Array<{ code: string; max: number; awarded: number; evidence?: string }>;
+  /** Why the examiner's marks differ from the system's proposal (required then). */
+  overrideReason?: string;
+  /** Recorded by the server: the proposal at the time of marking, and how it was made. */
+  proposedMarks?: number | null;
+  proposalMethod?: string;
 }
 
 export const ModerationResolveSchema = z.object({
@@ -548,6 +555,8 @@ export const ModerationResolveSchema = z.object({
         maxMarks: z.number().min(0).max(1000),
         marks: z.number().min(0).max(1000),
         explanation: z.string().trim().min(1).max(4000),
+        /** Required when the marks differ from the system's proposal: why the examiner decided otherwise. */
+        overrideReason: z.string().trim().min(10).max(2000).optional(),
         criteria: z
           .array(
             z.object({
