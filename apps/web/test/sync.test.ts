@@ -113,11 +113,9 @@ describe('AnswerSync', () => {
     await sync.load('Q1');
     srv.fail('network');
     sync.edit('Q1', { blocks: [{ id: 'b1', kind: 'paragraph', content: 'keep me' }] });
-    await wait(25);
-    expect(srv.puts).toHaveLength(1);
+    await waitFor(() => expect(srv.puts).toHaveLength(1));
     expect(sync.getSnapshot().overall).toBe('saved-local');
-    await wait(85);
-    expect(srv.puts).toHaveLength(2);
+    await waitFor(() => expect(srv.puts).toHaveLength(2));
     expect(srv.puts[1]?.clientOperationId).toBe(srv.puts[0]?.clientOperationId);
     expect(sync.getSnapshot().overall).toBe('saved-server');
     sync.dispose();

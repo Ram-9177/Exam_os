@@ -93,7 +93,7 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
           <div className="flex items-center gap-2">
             <p className="font-medium">{u.fullName}</p>
             {u.signatureDataUrl ? (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200" title="Digital signature mapped">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200" title="Digital signature mapped">
                 e-Sign
               </span>
             ) : null}
@@ -347,11 +347,13 @@ function SignatureDialog({ user, onClose }: { user: UserRow; onClose: () => void
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
     const touch = 'touches' in e ? e.touches[0] : null;
     const clientX = touch ? touch.clientX : ('clientX' in e ? e.clientX : 0);
     const clientY = touch ? touch.clientY : ('clientY' in e ? e.clientY : 0);
     ctx.beginPath();
-    ctx.moveTo(clientX - rect.left, clientY - rect.top);
+    ctx.moveTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
     ctx.lineWidth = 2.5;
     ctx.lineCap = 'round';
     ctx.strokeStyle = '#111827';
@@ -365,10 +367,12 @@ function SignatureDialog({ user, onClose }: { user: UserRow; onClose: () => void
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
     const touch = 'touches' in e ? e.touches[0] : null;
     const clientX = touch ? touch.clientX : ('clientX' in e ? e.clientX : 0);
     const clientY = touch ? touch.clientY : ('clientY' in e ? e.clientY : 0);
-    ctx.lineTo(clientX - rect.left, clientY - rect.top);
+    ctx.lineTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
     ctx.stroke();
   };
 
@@ -519,7 +523,7 @@ function SignatureDialog({ user, onClose }: { user: UserRow; onClose: () => void
             <p className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">Signature Preview</p>
             <div className="bg-white p-3 rounded border border-line-2 flex flex-col items-center justify-center min-h-22.5">
               <img src={dataUrl} alt="Signature preview" className="max-h-16 max-w-full object-contain mb-1" />
-              <div className="border-t border-ink w-48 text-center text-[11px] font-semibold text-ink pt-1">
+              <div className="border-t border-ink w-48 text-center text-xs font-semibold text-ink pt-1">
                 Controller of Examinations
               </div>
             </div>
