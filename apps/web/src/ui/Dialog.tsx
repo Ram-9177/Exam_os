@@ -95,7 +95,7 @@ export function Dialog({ open, onClose, title, description, children, footer, si
 
   const isDrawer = variant === 'drawer';
   return createPortal(
-    <div className={cn('fixed inset-0 z-50 flex', isDrawer ? 'justify-end' : 'items-center justify-center p-4')}>
+    <div data-examos-portal="" className={cn('fixed inset-0 z-50 flex', isDrawer ? 'justify-end' : 'items-center justify-center p-4')}>
       <div className="absolute inset-0 bg-[rgb(26_32_48/0.45)]" onClick={dismissable ? onClose : undefined} aria-hidden="true" />
       <div
         ref={panelRef}

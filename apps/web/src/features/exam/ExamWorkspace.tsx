@@ -15,6 +15,8 @@ import { AnswerEditor } from './AnswerEditor';
 import { useLockdown } from './lockdown';
 import { StructuredAnswer, type CodeSpec } from './StructuredAnswer';
 import { SelfView, useCameraPresence } from './presence';
+import { useIntegrityWatch } from './integrity-watch';
+import { ScreenShareGate, useScreenWatch } from './screen-watch';
 import { useAttemptSession } from './session';
 import { Timer } from './Timer';
 
@@ -90,7 +92,7 @@ export function ExamWorkspace() {
     id: q.questionId, label: `Question ${q.number}`, prompt: q.prompt,
     maxMarks: q.maxMarks, kind: q.kind, options: q.options, sectionId: q.sectionCode, codeSpec: (q as { codeSpec?: CodeSpec }).codeSpec,
   })), [paper.data]);
-  const policy = useQuery({ queryKey: ['student', 'policy', attemptId], queryFn: () => api.get<{ examTitle: string; durationMinutes: number; cameraPresence?: boolean }>(`/student/attempts/${attemptId}/policy`, { quiet: true }), enabled: !!attemptId, staleTime: Infinity });
+  const policy = useQuery({ queryKey: ['student', 'policy', attemptId], queryFn: () => api.get<{ examTitle: string; durationMinutes: number; cameraPresence?: boolean; screenWatch?: { intervalSeconds: number } | null }>(`/student/attempts/${attemptId}/policy`, { quiet: true }), enabled: !!attemptId, staleTime: Infinity });
 
   // ---------- answer sync ----------
   const transport = useMemo<SyncTransport>(
@@ -155,6 +157,8 @@ export function ExamWorkspace() {
   const onRestricted = useCallback(() => toast({ tone: 'warning', title: 'Action restricted', description: 'Developer tools, printing, saving and source inspection are blocked during the exam.' }), [toast]);
   const lockdown = useLockdown({ attemptId, active: session.kind === 'active', reporter, onDisplayChange: () => scanNowRef.current(), onRestricted });
   const presence = useCameraPresence({ enabled: policy.data?.cameraPresence === true, active: session.kind === 'active', reporter });
+  useIntegrityWatch({ active: session.kind === 'active', reporter });
+  const screen = useScreenWatch({ enabled: !!policy.data?.screenWatch, active: session.kind === 'active', attemptId, intervalSeconds: policy.data?.screenWatch?.intervalSeconds ?? 60, reporter });
 
   // ---------- navigation state ----------
   const [index, setIndex] = useState(0);
@@ -287,6 +291,7 @@ export function ExamWorkspace() {
       {session.kind === 'paused' ? <PausedOverlay /> : null}
       <SelfView stream={presence.stream} status={presence.status} />
       {session.kind !== 'paused' && lockable && lockdown.needsFullscreen ? <FullscreenGate onEnter={() => void lockdown.enterFullscreen()} /> : null}
+      {session.kind !== 'paused' && lockable && !lockdown.needsFullscreen && screen.status === 'needs-share' ? <ScreenShareGate onShare={() => void screen.start()} error={screen.error} /> : null}
       {session.kind !== 'paused' && lockable && !lockdown.needsFullscreen && lockdown.state.away ? <AwayShield /> : null}
       <header className="border-b border-rule bg-sheet">
         <div className="mx-auto max-w-350 px-4 sm:px-6 h-16 flex items-center gap-6">

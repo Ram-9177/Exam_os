@@ -221,6 +221,16 @@ export async function request<T>(method: string, path: string, opts: RequestOpti
   throw new ApiError(problem);
 }
 
+/** An authenticated image (or other file) as an object URL for <img src>; the caller revokes it. */
+export async function fetchObjectUrl(path: string): Promise<string> {
+  const headers: Record<string, string> = { ...sebHeaders() };
+  const t = getTokens();
+  if (t) headers['authorization'] = `Bearer ${t.accessToken}`;
+  const res = await fetch(`${API_BASE}${path}`, { method: 'GET', headers });
+  if (!res.ok) throw new ApiError(await toProblem(res));
+  return URL.createObjectURL(await res.blob());
+}
+
 export async function downloadBlob(path: string, fallbackFilename: string, opts: RequestOptions = {}): Promise<void> {
   const headers: Record<string, string> = { ...sebHeaders(), ...(opts.headers ?? {}) };
   const auth = opts.auth ?? true;

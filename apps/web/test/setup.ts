@@ -3,6 +3,11 @@ import { afterEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import { webcrypto } from 'node:crypto';
 import { setTokens, setDeviceSession } from '@/lib/api';
+import { setTrustCheck } from '@/features/exam/integrity-watch';
+
+// jsdom marks every event untrusted, user-event's typing included; in tests, typing counts as the student's own.
+// Tests of the integrity watch mark the "script" events explicitly.
+setTrustCheck((e) => !(e as Event & { fromScript?: boolean }).fromScript);
 
 // jsdom has no SubtleCrypto; the app hashes with WebCrypto, so bring Node's implementation in.
 if (!globalThis.crypto?.subtle) {

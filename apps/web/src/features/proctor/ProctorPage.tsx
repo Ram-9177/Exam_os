@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { ScreenPictures } from './ScreenPictures';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { INCIDENT_STATUSES, TECHNICAL_SIGNAL_CLASSES, type IncidentStatus, type ProctorSignalClass } from '@examos/contracts';
 import { api, isApiError } from '@/lib/api';
@@ -62,6 +63,9 @@ const SIGNAL_LABEL: Record<ProctorSignalClass, string> = {
   DISPLAY_CHANGED: 'Display changed',
   FACE_NOT_VISIBLE: 'Face not visible',
   SECURE_CLIENT_MISSING: 'Safe Exam Browser missing',
+  SCREEN_SHARE_ENDED: 'Screen sharing stopped',
+  PAGE_TAMPERED: 'Extension or AI tool in the page',
+  TEXT_NOT_TYPED: 'Answer text not typed',
   NETWORK_ADDRESS_CHANGED: 'Network address changed',
   NETWORK_ANOMALY: 'Network anomaly',
   CAMERA_UNAVAILABLE: 'Camera unavailable',
@@ -287,6 +291,7 @@ function IncidentDrawer({ incident, exam, threshold, tz, chief, onClose }: { inc
           />
           {technical ? <p className="text-sm text-ink-2">Technical signals (network, camera, recording) can never become a countable warning.</p> : null}
           <SignalList title="What was reported" rows={(timeline.data?.signals ?? []).filter((s) => s.incident_id === incident.id)} tz={tz} loading={timeline.isLoading} />
+          <ScreenPictures attemptId={incident.attempt_id} tz={tz} />
 
           <section className="flex flex-col gap-3" aria-labelledby="decide-h">
             <h3 id="decide-h" className="text-h3">

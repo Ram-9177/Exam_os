@@ -102,6 +102,8 @@ export async function attemptPolicy(trx: Knex.Transaction, tenantId: string, use
     allowedClientBuilds: Array.isArray(policy['allowedClientBuilds']) ? (policy['allowedClientBuilds'] as string[]) : [],
     // The workspace runs the face-presence check on the student's device; no image leaves it, only signals.
     cameraPresence: cameraPresenceOn(policy),
+    // Screen watch: the workspace asks for the entire screen and sends a small picture every intervalSeconds.
+    screenWatch: screenWatchOf(policy),
     monitoringNotice: typeof policy['monitoringNotice'] === 'string' ? (policy['monitoringNotice'] as string) : 'This examination records permitted device signals and, where your exam profile requires it, camera and microphone, only for the purposes described in the examination policy. Technical problems are never treated as misconduct.',
   };
 }
@@ -146,6 +148,12 @@ export async function startPrecheck(deps: AppDeps, trx: Knex.Transaction, tenant
   return { runId, checks: await listItems(trx, runId) };
 }
 
+/** Screen watch (entire screen shared, a picture to the proctors every intervalSeconds): opt-in per exam. */
+export function screenWatchOf(policy: Record<string, unknown>): { intervalSeconds: number } | null {
+  const sw = ((policy['proctoring'] ?? {}) as Record<string, unknown>)['screenWatch'] as { intervalSeconds?: number } | null | undefined;
+  return sw && typeof sw === 'object' ? { intervalSeconds: typeof sw.intervalSeconds === 'number' ? sw.intervalSeconds : 60 } : null;
+}
+
 /** On-device camera presence check (face in view, one person, camera not covered): opt-in per exam. */
 export function cameraPresenceOn(policy: Record<string, unknown>): boolean {
   const p = (policy['proctoring'] ?? {}) as Record<string, unknown>;
@@ -160,6 +168,7 @@ function requiredConsents(profile: SecurityProfile, policy: Record<string, unkno
   const needsMic = typeof capture['mic_required_for_this_tier'] === 'boolean' ? (capture['mic_required_for_this_tier'] as boolean) : highTier;
   if (needsCamera || cameraPresenceOn(policy)) out.push('CAMERA');
   if (needsMic) out.push('MICROPHONE');
+  if (screenWatchOf(policy)) out.push('SCREEN');
   return out;
 }
 

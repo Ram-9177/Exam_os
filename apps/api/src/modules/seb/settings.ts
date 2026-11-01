@@ -64,10 +64,18 @@ export const DEFAULT_PROHIBITED_APPS: readonly ProhibitedApp[] = [
   win('Snipping Tool', 'SnippingTool.exe'), win('Screen clipping', 'ScreenClippingHost.exe'), win('Xbox Game Bar', 'GameBar.exe'),
   win('Loom', 'Loom.exe'), mac('Loom', 'Loom', 'com.loom.desktop'),
   mac('QuickTime Player', 'QuickTime Player', 'com.apple.QuickTimePlayerX'), mac('Screenshot', 'Screenshot', 'com.apple.screenshot.launcher'),
-  // AI assistants
+  // AI assistants and AI overlays (including "invisible" interview/exam helpers that hide from screen capture: SEB
+  // closes them by process, which a screen picture could never show). Not exhaustive: the Examination Section adds
+  // new ones per exam, and on Windows SEB's own desktop keeps other apps' windows off the exam screen anyway.
   win('ChatGPT', 'ChatGPT.exe'), mac('ChatGPT', 'ChatGPT', 'com.openai.chat'),
   win('Claude', 'claude.exe'), mac('Claude', 'Claude', 'com.anthropic.claudefordesktop'),
-  win('Microsoft Copilot', 'Copilot.exe'),
+  win('Microsoft Copilot', 'Copilot.exe'), win('Microsoft 365 Copilot', 'M365Copilot.exe'),
+  win('Perplexity', 'Perplexity.exe'), mac('Perplexity', 'Perplexity', 'ai.perplexity.mac'),
+  win('Cluely', 'Cluely.exe'), mac('Cluely', 'Cluely', 'com.cluely.desktop'),
+  win('Interview Coder', 'Interview Coder.exe'), mac('Interview Coder', 'Interview Coder', 'com.chunginlee.interviewcoder'),
+  win('Grammarly for Windows', 'Grammarly.Desktop.exe'), mac('Grammarly for Mac', 'Grammarly Desktop', 'com.grammarly.ProjectLlama'),
+  mac('Raycast (AI)', 'Raycast', 'com.raycast.macos'),
+  win('Notion', 'Notion.exe'), mac('Notion', 'Notion', 'notion.id'),
   // hypervisors (SEB also refuses to run inside a virtual machine)
   win('VirtualBox', 'VirtualBox.exe'), mac('VirtualBox', 'VirtualBox', 'org.virtualbox.app.VirtualBox'),
   win('VMware Workstation', 'vmware.exe'), win('VMware Player', 'vmplayer.exe'), mac('VMware Fusion', 'VMware Fusion', 'com.vmware.fusion'),

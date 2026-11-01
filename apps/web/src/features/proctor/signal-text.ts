@@ -92,6 +92,20 @@ export function describeSignal(row: Pick<SignalRow, 'signal_class' | 'metadata' 
       return `${by}: the exam was used from a second device session.`;
     case 'NETWORK_ADDRESS_CHANGED':
       return `${by}: the attempt was reached from a new network address${str(m['ip']) ? ` (${m['ip']})` : ''}.`;
+    case 'SCREEN_SHARE_ENDED':
+      return m['reason'] === 'not-entire-screen'
+        ? `${by}: a ${str(m['surface']) ?? 'window or tab'} was shared instead of the entire screen. The paper stays hidden until the entire screen is shared.`
+        : m['reason'] === 'refused'
+          ? `${by}: the student did not allow screen sharing. The paper stays hidden until they do.`
+          : `${by}: screen sharing stopped${num(m['afterSeconds']) !== null ? ` after ${formatDuration(num(m['afterSeconds'])! * 1000)}` : ''}. The paper is hidden until it is shared again.`;
+    case 'PAGE_TAMPERED': {
+      const what = m['kind'] === 'extension-resource' ? 'a browser extension loaded its own content' : m['kind'] === 'frame' ? 'a frame from outside ExamOS was added' : m['kind'] === 'script' ? 'a script from outside ExamOS was added' : 'something from outside ExamOS was added';
+      return `${by}: ${what} into the exam page${str(m['tag']) ? ` (<${m['tag']}>)` : ''}${str(m['origin']) ? ` from ${m['origin']}` : ''}. AI sidebars, writing assistants and password managers do this; ask the student which extension it is.`;
+    }
+    case 'TEXT_NOT_TYPED':
+      return m['reason'] === 'untrusted'
+        ? `${by}: ${num(m['chars']) ?? 'some'} characters were put into the answer by a script or extension, not typed${str(m['field']) ? ` (${m['field']})` : ''}.`
+        : `${by}: ${num(m['chars']) ?? 'many'} characters appeared in the answer at once${str(m['inputType']) ? ` (${m['inputType']})` : ''}${str(m['field']) ? ` in ${m['field']}` : ''}. Dictation and autocorrect can do this too.`;
     default:
       return `${by}.`;
   }

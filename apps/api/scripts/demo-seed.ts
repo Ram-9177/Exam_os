@@ -301,6 +301,8 @@ Demo tenant already provisioned on http://${HOST}:${config.PORT} (web app on htt
         expectedAnswer: { tests: [{ input: 'hello', expected: 'olleh' }, { input: 'racecar', expected: 'racecar' }, { input: 'ExamOS 2026', expected: '6202 SOmaxE' }], reference: { language: 'java', source: '', files: { 'Stack.java': 'class Stack {\n    private final java.util.ArrayDeque<Character> items = new java.util.ArrayDeque<>();\n    void push(char c) { items.push(c); }\n    char pop() { return items.pop(); }\n    boolean isEmpty() { return items.isEmpty(); }\n}\n' } } } },
     ],
   }), 'paper mixed author');
+  // the mixed paper also shows screen watch: students share their entire screen, proctors see a picture every 60 s
+  must(await req().put(`/api/v1/exams/${mixed.examId}/client-policy`).set(E).send({ screenWatch: { intervalSeconds: 60 } }), 'screen watch');
   // with a sandbox configured, the setter's reference solutions must pass the tests before approval
   if (config.JUDGE_URL) for (const q of ['Q5', 'Q6']) must(await req().post(`/api/v1/exams/${mixed.examId}/paper/questions/${q}/check-code`).set(S), `check ${q}`);
   must(await req().post(`/api/v1/exams/${mixed.examId}/paper/submit-for-review`).set(S), 'paper mixed submit');
@@ -324,7 +326,7 @@ Demo tenant ready on http://${HOST}:${config.PORT} (web app proxies here)
 
   Exam CS301-MID1 (BASIC_BROWSER, ipPolicy REVIEW): readiness check is open; start it as examcell when students are READY.
   Exam CS302-SEM (SECURE_BYOD, ipPolicy LOCK): scheduled in 2 days; requires an approved client build.
-  Exam CS301-LAB (mixed: several-correct MCQ, maths, dose with unit, clinical must-not-miss, coding, a two-file Java project): open its
+  Exam CS301-LAB (mixed: several-correct MCQ, maths, dose with unit, clinical must-not-miss, coding, a two-file Java project; screen watch on): open its
     readiness check as examcell to try it. Coding sample runs and grading need a Judge0 at JUDGE_URL.
   ERP API key (store it): ${key.apiKey}
 `);

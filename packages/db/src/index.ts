@@ -145,6 +145,7 @@ export const TENANT_TABLES = [
   'device_scans',
   'mark_proposals',
   'code_runs',
+  'screen_frames',
 ] as const;
 
 /** Tables the application role may only INSERT into (append-only evidence and audit). */

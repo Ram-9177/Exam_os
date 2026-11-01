@@ -572,6 +572,12 @@ export const ExamClientPolicyUpdateSchema = z.object({
    * Turning it on adds the CAMERA consent and starts a new policy version (earlier readiness runs must be repeated).
    */
   cameraPresence: z.boolean().optional(),
+  /**
+   * Screen watch: the student shares the entire screen while writing, and a small picture of it is sent to the
+   * proctors every `intervalSeconds`. People look at the pictures; nothing is judged automatically. Turning it on adds
+   * the SCREEN consent and starts a new policy version. `null` turns it off.
+   */
+  screenWatch: z.object({ intervalSeconds: z.number().int().min(15).max(600).default(60) }).nullable().optional(),
   /** What an in-exam network address change does: LOG (default), REVIEW (signal for a human), LOCK (writes held to the admitted address). */
   ipPolicy: z.enum(IP_POLICIES).optional(),
 });
@@ -734,5 +740,12 @@ export interface MailHealthMetrics {
   };
 }
 
-
-
+/** One picture of the student's shared screen (screen watch). JPEG only, at most ~400 KB of base64. */
+export const ScreenFrameUploadSchema = z.object({
+  image: z.string().regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/).max(560_000),
+  /** what the browser says it is sharing: 'monitor' is the entire screen. Context only, never trusted. */
+  displaySurface: z.enum(['monitor', 'window', 'browser', 'unknown']).default('unknown'),
+  width: z.number().int().min(1).max(10_000),
+  height: z.number().int().min(1).max(10_000),
+});
+export type ScreenFrameUpload = z.infer<typeof ScreenFrameUploadSchema>;

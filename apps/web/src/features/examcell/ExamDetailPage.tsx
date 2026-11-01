@@ -273,6 +273,56 @@ function CameraPresenceCard({ exam, onUpdated }: { exam: ExamRow; onUpdated: () 
   );
 }
 
+/** Turns screen watch on or off for this exam (before it goes live), with how often a picture is sent. */
+function ScreenWatchCard({ exam, onUpdated }: { exam: ExamRow; onUpdated: () => void }) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const current = ((exam.policy ?? {}) as { proctoring?: { screenWatch?: { intervalSeconds?: number } | null } }).proctoring?.screenWatch ?? null;
+  const [interval, setInterval_] = useState(String(current?.intervalSeconds ?? 60));
+  const frozen = SEB_FROZEN.includes(exam.status);
+  const save = async (screenWatch: { intervalSeconds: number } | null) => {
+    setBusy(true);
+    try {
+      await updateClientPolicy(exam.id, { screenWatch });
+      toast({ tone: 'success', title: screenWatch ? `Screen watch on: a picture every ${screenWatch.intervalSeconds} s` : 'Screen watch turned off', description: 'Students take the readiness check again under the new policy.' });
+      onUpdated();
+    } catch (err) {
+      toast({ tone: 'warning', title: 'Not changed', description: isApiError(err) ? (err.problem.detail ?? err.problem.title) : 'Error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const seconds = Math.min(600, Math.max(15, Number(interval) || 60));
+  return (
+    <section className="sheet p-6 space-y-3" aria-labelledby="sw-h">
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="sw-h" className="text-h3">Screen watch</h2>
+        <Badge tone={current ? 'ready' : 'note'}>{current ? `On · every ${current.intervalSeconds} s` : 'Off'}</Badge>
+      </div>
+      <p className="text-sm text-ink-2">
+        Students share their entire screen while writing; a small picture goes to the proctors at a fixed interval, so a person can see an AI app, a chat or notes beside the exam. Stopping the share, or sharing only a window, hides the paper and is flagged; the server shows gaps between pictures. Nothing is judged automatically. Some “invisible” AI overlays hide from screen capture: use Safe Exam Browser, which closes them, for exams where that matters. Pictures are personal data: confirm your data-protection assessment and retention before turning it on.
+      </p>
+      {frozen ? (
+        <p className="text-sm text-ink-2">Fixed while the exam is {humanize(exam.status)}.</p>
+      ) : (
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="Picture every (seconds)" className="w-48">
+            {({ id }) => <TextInput id={id} type="number" min={15} max={600} value={interval} onChange={(e) => setInterval_(e.target.value)} />}
+          </Field>
+          <Button loading={busy} onClick={() => void save({ intervalSeconds: seconds })}>
+            {current ? 'Save interval' : 'Turn on'}
+          </Button>
+          {current ? (
+            <Button variant="ghost" disabled={busy} onClick={() => void save(null)}>
+              Turn off
+            </Button>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Overview({ exam, counts, tz, onUpdated }: { exam: ExamRow; counts: Record<string, number>; tz: string; onUpdated: () => void }) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return (
@@ -323,6 +373,7 @@ function Overview({ exam, counts, tz, onUpdated }: { exam: ExamRow; counts: Reco
 
       <ClientSecurityPolicyCard exam={exam} onUpdated={onUpdated} />
       <CameraPresenceCard exam={exam} onUpdated={onUpdated} />
+      <ScreenWatchCard exam={exam} onUpdated={onUpdated} />
     </div>
   );
 }

@@ -399,6 +399,12 @@ export const PROCTOR_SIGNAL_CLASSES = [
   'FACE_NOT_VISIBLE',
   /** Server-observed: an exam that requires Safe Exam Browser was reached without a valid SEB key hash. */
   'SECURE_CLIENT_MISSING',
+  /** Screen watch: the student stopped sharing the screen, or shared a window/tab instead of the entire screen. */
+  'SCREEN_SHARE_ENDED',
+  /** Something not part of ExamOS was put into the exam page (an AI sidebar, writing assistant or other browser extension). */
+  'PAGE_TAMPERED',
+  /** Answer text appeared without being typed: inserted by a script or extension, or a large block in one go. */
+  'TEXT_NOT_TYPED',
   /** Server-observed: the attempt was reached from a new network address (context for a human). */
   'NETWORK_ADDRESS_CHANGED',
   'NETWORK_ANOMALY',
@@ -435,6 +441,9 @@ export const HUMAN_REVIEW_ONLY_SIGNAL_CLASSES: readonly ProctorSignalClass[] = [
   'FACE_NOT_VISIBLE',
   'SECURE_CLIENT_MISSING',
   'NETWORK_ADDRESS_CHANGED',
+  'SCREEN_SHARE_ENDED',
+  'PAGE_TAMPERED',
+  'TEXT_NOT_TYPED',
 ];
 /** Classes only the server may raise; a client report of these is refused at ingest. */
 export const SERVER_ONLY_SIGNAL_CLASSES: readonly ProctorSignalClass[] = ['CONCURRENT_SESSION', 'NETWORK_ADDRESS_CHANGED', 'SECURE_CLIENT_MISSING'];

@@ -80,7 +80,8 @@ export function CanvasPractice({ onSubmit, onSkip, busy }: { onSubmit: (ops: num
 /** Monitoring notice and consent, recorded against the exam's policy version. */
 export function ConsentStep({ notice, purposes, policyVersion, onSubmit, busy }: { notice: string; purposes: string[]; policyVersion: string; onSubmit: () => void; busy: boolean }) {
   const [agreed, setAgreed] = useState(false);
-  const list = purposes.length ? purposes.map((p) => p.toLowerCase()).join(' and ') : 'device signals';
+  const PURPOSE: Record<string, string> = { CAMERA: 'camera', MICROPHONE: 'microphone', FACE_REFERENCE: 'face reference photo', SCREEN: 'your entire screen is shared and a picture of it goes to the invigilators every so often while you write' };
+  const list = purposes.length ? purposes.map((p) => PURPOSE[p] ?? p.toLowerCase()).join(' and ') : 'device signals';
   return (
     <div className="flex flex-col gap-4">
       <div className="sheet p-4 bg-sheet-2">

@@ -149,6 +149,9 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Build-level (project) questions: read-only and editable files, setter's build/run commands, Judge0 multi-file zip; students change only editable files; build errors shown | Tested against an in-process judge and a fake Judge0 HTTP server; a real Judge0 deployment is pending | coding-languages.test.ts; apps/web/test/structured-answer.test.tsx, rubric-editor.test.tsx |
 | Setter's reference solution checked against samples and hidden tests; approval refused until the current version passes (CODE_NOT_CHECKED) | Tested | coding-languages.test.ts, code-exam.test.ts |
 | Examiner sees every hidden test (input, expected, actual, compiler output) | Tested | code-exam.test.ts, coding-languages.test.ts; apps/web/test/evaluate-marks.test.tsx |
+| Screen watch (opt-in per exam): entire screen required, paper hidden until shared, JPEG pictures from the admitted device of a live attempt, proctor view with server-measured gaps, audited viewing, SCREEN consent and new policy version | Tested | screen-watch.test.ts; apps/web/test/screen-watch.test.tsx, screen-pictures.test.tsx |
+| AI-tool signals: PAGE_TAMPERED (extensions/AI sidebars injected into the exam page), TEXT_NOT_TYPED (script-inserted or bulk-replaced answer text), SCREEN_SHARE_ENDED; human review only | Tested | screen-watch.test.ts; apps/web/test/integrity-watch.test.tsx |
+| Safe Exam Browser closes more desktop AI apps and AI overlays (Copilot, Perplexity, Cluely, Interview Coder, Grammarly, Raycast, Notion) | Tested (list); acceptance on real devices pending | screen-watch.test.ts |
 | Booklet tells the student how the marks were decided and how to apply for revaluation | Tested | browser rehearsal (apps/web/e2e) |
 | Answer similarity analysis and adjudication (MinHash/shingles, integrity hold) | Tested | evaluation-scale.test.ts |
 
