@@ -266,7 +266,7 @@ export function EvaluationTab({ examId }: { examId: string }) {
                 ),
               },
               { key: 'reason', header: 'Appeal Justification', render: (r) => r.reason },
-              { key: 'fee', header: 'Fee Ref', render: (r) => r.feeRef || '—' },
+              { key: 'fee', header: 'Fee ref (as typed, unverified)', render: (r) => r.feeRef || '—' },
               {
                 key: 'status',
                 header: 'Status',
@@ -383,7 +383,9 @@ export function EvaluationTab({ examId }: { examId: string }) {
               <p className="font-medium text-ink-1">Student Appeal Justification:</p>
               <p className="text-ink-2 mt-1">{selectedReval.reason}</p>
               {selectedReval.feeRef ? (
-                <p className="text-xs text-ink-2 mt-2 font-mono">Fee Ref: {selectedReval.feeRef}</p>
+                <p className="text-xs text-ink-2 mt-2">
+                  Fee reference typed by the student: <span className="font-mono">{selectedReval.feeRef}</span>. ExamOS does not take payments and has not checked it: confirm it against the university's fee record before approving.
+                </p>
               ) : null}
             </div>
 

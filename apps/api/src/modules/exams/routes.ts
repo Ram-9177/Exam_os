@@ -1,4 +1,5 @@
 import { Router, type Request } from 'express';
+import { costly } from '../../middleware/rate-limit.js';
 import { z } from 'zod';
 import {
   ExamCreateSchema,
@@ -232,6 +233,7 @@ export function examRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/:id/hall-tickets/:userId/pdf',
     user,
     requirePermission('exams:read', examScope),
+    costly(deps, 'pdf', 60, 60),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
@@ -284,6 +286,7 @@ export function examRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/:id/exports/scripts',
     user,
     requirePermission('exports:read', examScope),
+    costly(deps, 'export', 10, 600),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);

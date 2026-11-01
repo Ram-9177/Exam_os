@@ -345,4 +345,17 @@ describe('Tenant administration', () => {
     await waitFor(() => expect(within(table).queryByText('tenant.mail_config.upserted')).not.toBeInTheDocument());
     expect(within(table).getByText('webhook.delivery.replayed')).toBeInTheDocument();
   });
+
+  it('an administrator resets a password: confirmation explains the sign-out, the reset is sent for that user only', async () => {
+    const { calls, user } = setup(ADMIN_CONTROLLER, ({ method, path }) => (method === 'POST' && path === `/tenant/users/${users[0]!.id}/password-reset` ? { status: 202, json: { dispatchId: 'd1', sessionsRevoked: 2 } } : undefined));
+    await screen.findByRole('table', { name: 'Users' });
+    await user.click(screen.getByRole('button', { name: 'Reset password for asha.rao@smru.edu.in' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reset the password of Asha Rao?' });
+    expect(within(dialog).getByText(/signed out on every device now/)).toBeInTheDocument();
+    expect(sent(calls, 'POST', `/tenant/users/${users[0]!.id}/password-reset`)).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Send reset link' }));
+    await waitFor(() => expect(sent(calls, 'POST', `/tenant/users/${users[0]!.id}/password-reset`)).toHaveLength(1));
+    expect(sent(calls, 'POST', `/tenant/users/${users[0]!.id}/password-reset`)[0]!.body).toEqual({});
+    expect(await screen.findByText(/signed out of 2 sessions/)).toBeInTheDocument();
+  });
 });

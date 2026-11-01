@@ -143,6 +143,7 @@ POST /tenant/users {email,fullName,kind:'STUDENT'|'STAFF',externalId?,provider?,
 GET  /tenant/users?q&kind (users:read) → {users:[{id,email,fullName,kind,status,registerNumber,createdAt}]}   (max 200)
 GET  /tenant/staff-seats (users:read) → {limit,used,free,bundles,staff:[{…,roles:[{role,scopeType,scopeId}]}]}
 PATCH /tenant/users/:id/status {status:'ACTIVE'|'INACTIVE'|'SUSPENDED'|'PENDING_ACTIVATION', reason?} (users:write) → {status}
+POST /tenant/users/:id/password-reset (users:write) → 202 {dispatchId,sessionsRevoked}   (unlocks the account, signs it out everywhere, mails a single-use link to the address on record; earlier links stop working; setting the new password signs out every session again)
 GET  /tenant/users/:id/roles (users:read) → {roles:[{id,role,scopeType,scopeId,effectiveFrom,effectiveUntil}]}
 POST /tenant/users/:id/roles {role,scopeType,scopeId} (users:write) → 201 {grantId}
 DELETE /tenant/users/:id/roles {role,scopeType,scopeId} (users:write) → {revoked}

@@ -4,7 +4,7 @@ import { API_KEY_SCOPES, MAIL_TRANSPORT_KINDS, ROLE_CODES, ROLE_PERMISSIONS, WEB
 import { api, isApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDateTime } from '@/lib/time';
-import { Badge, Button, Checkbox, CopyIcon, Dialog, EmptyState, Field, humanize, PageTitle, Select, Skeleton, StatusChip, Table, Tabs, TextArea, TextInput, useToast, type Column, type TabDef, type Tone } from '@/ui';
+import { Badge, Button, Checkbox, ConfirmDialog, CopyIcon, Dialog, EmptyState, Field, humanize, PageTitle, Select, Skeleton, StatusChip, Table, Tabs, TextArea, TextInput, useToast, type Column, type TabDef, type Tone } from '@/ui';
 
 type TabId = 'users' | 'mail' | 'dispatches' | 'sso' | 'keys' | 'webhooks' | 'deliveries' | 'audit' | 'erp' | 'import';
 
@@ -87,6 +87,21 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
   const [kind, setKind] = useState('');
   const [create, setCreate] = useState(false);
   const [roleFor, setRoleFor] = useState<UserRow | null>(null);
+  const [resetFor, setResetFor] = useState<UserRow | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const { toast } = useToast();
+  const sendReset = async (u: UserRow) => {
+    setResetting(true);
+    try {
+      const r = await api.post<{ sessionsRevoked: number }>(`/tenant/users/${u.id}/password-reset`, {});
+      toast({ tone: 'success', title: 'Password reset link sent', description: `${u.email}${r.sessionsRevoked ? ` · signed out of ${r.sessionsRevoked} session${r.sessionsRevoked === 1 ? '' : 's'}` : ''}` });
+      setResetFor(null);
+    } catch (e) {
+      toast({ tone: 'warning', title: 'No link sent', description: isApiError(e) ? (e.problem.detail ?? e.problem.title) : 'Network or server error' });
+    } finally {
+      setResetting(false);
+    }
+  };
   const users = useQuery({ queryKey: ['tenant', 'users', q, kind], queryFn: () => api.get<{ users: UserRow[] }>(`/tenant/users?q=${encodeURIComponent(q)}&kind=${kind}`) });
   const columns: Column<UserRow>[] = [
     { key: 'name', header: 'Name', render: (u) => (
@@ -99,7 +114,22 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
     { key: 'reg', header: 'Register number', hideOnMobile: true, render: (u) => <span className="font-mono">{u.registerNumber ?? '—'}</span> },
     { key: 'status', header: 'Status', render: (u) => <StatusChip tone={u.status === 'ACTIVE' ? 'ready' : u.status === 'PENDING_ACTIVATION' ? 'fix' : 'note'} icon={false}>{humanize(u.status)}</StatusChip> },
     { key: 'created', header: 'Created', hideOnMobile: true, render: (u) => formatDateTime(u.createdAt, tz) },
-    { key: 'roles', header: '', align: 'right', render: (u) => (canWrite ? <Button size="sm" onClick={() => setRoleFor(u)}>Roles</Button> : null) },
+    {
+      key: 'roles',
+      header: '',
+      align: 'right',
+      render: (u) =>
+        canWrite ? (
+          <div className="flex justify-end gap-2">
+            {u.status === 'ACTIVE' || u.status === 'PENDING_ACTIVATION' ? (
+              <Button size="sm" variant="ghost" onClick={() => setResetFor(u)} aria-label={`Reset password for ${u.email}`}>
+                Reset password
+              </Button>
+            ) : null}
+            <Button size="sm" onClick={() => setRoleFor(u)}>Roles</Button>
+          </div>
+        ) : null,
+    },
   ];
   return (
     <div>
@@ -126,6 +156,11 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
       {users.data ? <Table caption="Users" columns={columns} rows={users.data.users} rowKey={(u) => u.id} empty="No users match." /> : null}
       {create ? <CreateUserDialog onClose={() => setCreate(false)} /> : null}
       {roleFor ? <RoleDialog user={roleFor} onClose={() => setRoleFor(null)} /> : null}
+      {resetFor ? (
+        <ConfirmDialog open onClose={() => setResetFor(null)} onConfirm={() => void sendReset(resetFor)} busy={resetting} title={`Reset the password of ${resetFor.fullName}?`} confirmLabel="Send reset link" tone="danger">
+          They are signed out on every device now, and a single-use link goes to {resetFor.email} (the address on record). Any earlier link stops working. If they are writing an exam right now, they will have to sign in again.
+        </ConfirmDialog>
+      ) : null}
     </div>
   );
 }

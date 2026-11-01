@@ -519,6 +519,9 @@ export async function getStudentRevaluationStatus(
   studentUserId: string,
   attemptId: string,
 ) {
+  // someone else's attempt is "not found", exactly like every other student route (never an empty 200)
+  const own = await trx('exam_attempts').where({ tenant_id: tenantId, id: attemptId, user_id: studentUserId }).first('id');
+  if (!own) throw AppError.notFound('ATTEMPT_NOT_FOUND');
   const req = await trx('revaluation_requests')
     .where({ tenant_id: tenantId, attempt_id: attemptId, requested_by: studentUserId })
     .first();

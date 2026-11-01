@@ -125,6 +125,12 @@ export async function uploadStudentPhoto(
     throw AppError.badRequest('IMAGE_TOO_LARGE', 'Photograph must not exceed 2 MB');
   }
 
+  // The declared type is the client's claim: the bytes must really be that kind of image (an HTML or SVG file
+  // renamed to .png is refused), so nothing stored here can ever be served as something a browser would run.
+  if (!imageBytesMatch(buffer, mimeType)) {
+    throw AppError.badRequest('INVALID_IMAGE', 'The file is not a real JPEG, PNG or WebP image');
+  }
+
   const sha256 = sha256Hex(buffer);
   const storage = getDocumentStorage();
   const key = `students_${userId}_photo.${ext}`;
@@ -280,4 +286,12 @@ export async function verifyStudentByHash(
     photoAvailable: !!matched.photoRef,
     issuedAt: deps.clock.now().toISOString(),
   };
+}
+
+/** Magic numbers: JPEG FF D8 FF, PNG 89 50 4E 47 0D 0A 1A 0A, WebP "RIFF" …. "WEBP". */
+export function imageBytesMatch(b: Buffer, mimeType: string): boolean {
+  if (mimeType === 'image/jpeg') return b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (mimeType === 'image/png') return b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (mimeType === 'image/webp') return b.length > 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP';
+  return false;
 }

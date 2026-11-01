@@ -36,7 +36,7 @@ import {
 import { generateTemplate, previewRosterImport, executeRosterImport } from '../integration/csv-importer.js';
 import { getMailHealthMetrics } from '../notifications/health.js';
 import { reconcileBounce } from '../notifications/bounce.js';
-import { createUserWithActivation, grantRole, revokeRole, setUserStatus, staffSeats } from '../users/service.js';
+import { createUserWithActivation, grantRole, revokeRole, setUserStatus, staffSeats, sendPasswordReset } from '../users/service.js';
 import { audit } from '../../lib/audit.js';
 
 const MailConfigBody = TenantMailConfigSchema.extend({
@@ -129,6 +129,18 @@ export function tenantAdminRoutes(deps: AppDeps, jwt: JwtService): Router {
       const p = userPrincipal(req);
       const input = body<typeof UserStatusBody>(req);
       res.json(await tenantTx(deps, req, (trx) => setUserStatus(trx, { tenantId: t.id, userId: uuidParam(req, 'id'), status: input.status, actorId: p.userId, reason: input.reason })));
+    }),
+  );
+  // Password reset by an administrator: the account is signed out everywhere and a single-use link goes to its own mailbox.
+  r.post(
+    '/users/:id/password-reset',
+    user,
+    requirePermission('users:write'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      const out = await tenantTx(deps, req, (trx) => sendPasswordReset(deps, trx, { tenantId: t.id, userId: uuidParam(req, 'id'), actorId: p.userId, requestId: req.ctx.requestId }));
+      res.status(202).json(out);
     }),
   );
   r.post(

@@ -45,3 +45,10 @@ Permissions-Policy: camera=(self), microphone=(self), display-capture=(), window
 ## Coding questions: the judge
 
 Programs run only in a self-hosted Judge0 (https://github.com/judge0/judge0) on its own server: no outbound network, CPU/memory/time limits per run. Set `JUDGE_URL` (and `JUDGE_TOKEN` if the judge requires `X-Auth-Token`) for the API and the worker. ExamOS uses Judge0 CE 1.13 language ids for all 39 catalogue languages (`packages/contracts/src/code-languages.ts`) and id 89 (*Multi-file program*) for build-level questions; the *Coding languages* page shows which of them your judge has installed. If your build numbers languages differently, set `JUDGE_LANGUAGE_IDS` to a JSON map such as `{"python":92}`. Projects build without network: install the compilers and build tools you need (make, javac, gcc …) in the judge image and vendor any libraries into the question's files. Load: one run per hidden test per student after the exam, plus limited sample runs during it — size the judge before the first coding exam. Without `JUDGE_URL`, coding answers are marked by examiners only.
+
+## Backups and restore
+
+- `BACKUP_DATABASE_URL=… BACKUP_DIR=… infrastructure/scripts/backup.sh` writes a compressed, owner-only `pg_dump` with a SHA-256 checksum. Run it at least daily from the scheduler and copy it off the server (another region or account). Also enable point-in-time recovery (WAL archiving) on the managed PostgreSQL.
+- `SOURCE_DATABASE_URL=… ADMIN_DATABASE_URL=… infrastructure/scripts/restore-check.sh <dump>` restores into a scratch database and compares every table's row count with the source. Run it after any backup change and monthly; a backup that has never been restored is not a backup.
+- Documents (photos, PDFs) are in object storage: keep bucket versioning on and replicate it.
+- Security checklist and evidence: `docs/security-checklist.md`. Secret scan: `npm run security:secrets`.

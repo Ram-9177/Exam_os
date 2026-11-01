@@ -18,6 +18,8 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
   const r = Router();
   const loginLimiter = rateLimit(deps, { pool: 'auth-login', limit: 20, windowSeconds: 300, keyOf: (req) => `${req.ip}:${String((req.body as { email?: string })?.email ?? '')}` });
   // Activation links are single-use random tokens; the limiter only blunts scanning. Whole labs activate behind one NAT address.
+  // SSO hand-offs: generous per address (a lab behind one NAT signs in together), but not unlimited
+  const oidcLimiter = rateLimit(deps, { pool: 'auth-oidc', limit: 600, windowSeconds: 300, keyOf: (req) => String(req.ip) });
   const activateLimiter = rateLimit(deps, { pool: 'auth-activate', limit: 600, windowSeconds: 300, keyOf: (req) => String(req.ip) });
 
   r.post(
@@ -65,6 +67,7 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
   );
   r.get(
     '/oidc/start',
+    oidcLimiter,
     validateQuery(OidcStartSchema),
     asyncHandler(async (req, res) => {
       res.json(await oidc.start(requireTenant(req).id, query<typeof OidcStartSchema>(req).redirectUri));
@@ -72,6 +75,7 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
   );
   r.post(
     '/oidc/callback',
+    oidcLimiter,
     validateBody(OidcCallbackSchema),
     asyncHandler(async (req, res) => {
       const { code, state } = body<typeof OidcCallbackSchema>(req);

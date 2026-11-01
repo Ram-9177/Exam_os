@@ -1,4 +1,5 @@
 import { Router, type Request } from 'express';
+import { costly } from '../../middleware/rate-limit.js';
 import { z } from 'zod';
 import { CODE_LANGUAGE_CATALOGUE, DEFAULT_SUBJECT_LANGUAGES, SubjectCodeProfileSchema, codeLanguage } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
@@ -89,6 +90,7 @@ export function codingRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/exams/:id/paper/questions/:questionId/check-code',
     user,
     requirePermission('paper:write', examScope),
+    costly(deps, 'code-check', 30, 600),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);

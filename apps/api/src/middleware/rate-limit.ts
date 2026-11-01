@@ -44,3 +44,19 @@ export function rateLimit(deps: AppDeps, opts: RateLimitOptions): RequestHandler
     next();
   };
 }
+
+/** The caller: a signed-in user, an ERP API key, or (anonymous) the IP address. */
+export function principalKey(req: Parameters<RequestHandler>[0]): string {
+  const pr = req.ctx?.principal as { type?: string; userId?: string; apiKeyId?: string } | undefined;
+  if (pr?.type === 'USER' && pr.userId) return `u:${pr.userId}`;
+  if (pr?.apiKeyId) return `k:${pr.apiKeyId}`;
+  return `ip:${req.ip ?? 'unknown'}`;
+}
+
+/**
+ * Per-caller cap on work that costs real resources (sandbox runs, PDF rendering, exam-wide analysis), so one account
+ * cannot exhaust the judge, the renderer or the database for everyone else. Place it after requireUser.
+ */
+export function costly(deps: AppDeps, pool: string, limit: number, windowSeconds: number): RequestHandler {
+  return rateLimit(deps, { pool: `costly-${pool}`, limit, windowSeconds, keyOf: principalKey });
+}

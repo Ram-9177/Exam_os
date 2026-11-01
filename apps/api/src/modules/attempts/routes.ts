@@ -1,4 +1,5 @@
 import { Router, type Request } from 'express';
+import { costly } from '../../middleware/rate-limit.js';
 import { z } from 'zod';
 import { AnswerSaveSchema, SubmitSchema, PrecheckItemVerifySchema, DeviceScanReportSchema } from '@examos/contracts';
 import { clientNet } from '../../lib/client-net.js';
@@ -49,6 +50,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/me/exams/:examId/hall-ticket.pdf',
     user,
     own,
+    costly(deps, 'pdf', 30, 60),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
@@ -235,6 +237,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/attempts/:id/code-runs',
     user,
     own,
+    costly(deps, 'code-run', 20, 60),
     validateBody(CodeRunRequestSchema),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
@@ -276,6 +279,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
   r.get(
     '/attempts/:id/booklet.pdf',
     user,
+    costly(deps, 'pdf', 30, 60),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);

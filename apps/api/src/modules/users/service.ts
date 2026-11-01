@@ -63,6 +63,8 @@ export async function createUserWithActivation(deps: AppDeps, trx: Knex.Transact
 export async function issueActivation(deps: AppDeps, trx: Knex.Transaction, u: { tenantId: string; userId: string; email: string; fullName: string }): Promise<string | null> {
   const token = randomToken(32);
   const ttlHours = deps.config.ACTIVATION_TTL_HOURS;
+  // only the newest link works: earlier unused links (possibly in a forwarded or leaked mail) stop working now
+  await trx('one_time_tokens').where({ tenant_id: u.tenantId, user_id: u.userId, purpose: 'ACTIVATION' }).whereNull('consumed_at').update({ consumed_at: trx.fn.now() });
   const [t] = await trx('one_time_tokens')
     .insert({ tenant_id: u.tenantId, user_id: u.userId, purpose: 'ACTIVATION', token_hash: sha256Hex(token), expires_at: new Date(deps.clock.now().getTime() + ttlHours * 3600_000) })
     .returning('id');
@@ -156,4 +158,31 @@ export async function staffSeats(trx: Knex.Transaction, tenantId: string) {
     bundles: STAFF_BUNDLES,
     staff: staff.map((u) => ({ ...u, roles: grants.filter((g) => g.user_id === u.id).map((g) => ({ role: g.role_code, scopeType: g.scope_type, scopeId: g.scope_id })) })),
   };
+}
+
+/**
+ * Signs a user out everywhere: every refresh family is revoked and flagged in Redis, so access tokens already issued
+ * stop working on the next request (requireUser consults the flag), not only at expiry.
+ */
+export async function revokeUserSessions(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, reason: string): Promise<number> {
+  const families = await trx('auth_sessions').where({ tenant_id: tenantId, user_id: userId }).whereNull('revoked_at').distinct('family_id');
+  if (!families.length) return 0;
+  await trx('auth_sessions').where({ tenant_id: tenantId, user_id: userId }).whereNull('revoked_at').update({ revoked_at: trx.fn.now(), revoked_reason: reason });
+  for (const f of families) await deps.redis.set(`auth:family-revoked:${f.family_id}`, '1', 'EX', deps.config.JWT_ACCESS_TTL_SECONDS + 60);
+  return families.length;
+}
+
+/**
+ * Password reset by an administrator (users:write): unlocks the account, signs it out everywhere and mails a fresh
+ * single-use link to the address on record (never to an address given in the request). Earlier links stop working.
+ */
+export async function sendPasswordReset(deps: AppDeps, trx: Knex.Transaction, input: { tenantId: string; userId: string; actorId: string; requestId?: string }): Promise<{ dispatchId: string | null; sessionsRevoked: number }> {
+  const u = await trx('users').where({ tenant_id: input.tenantId, id: input.userId }).forNoKeyUpdate().first('id', 'email', 'full_name', 'status');
+  if (!u) throw AppError.notFound('USER_NOT_FOUND');
+  if (!['ACTIVE', 'PENDING_ACTIVATION'].includes(u.status)) throw AppError.conflict('USER_DISABLED', 'Enable the account before sending a password reset link');
+  await trx('users').where('id', u.id).update({ failed_login_count: 0, locked_until: null, updated_at: trx.fn.now() });
+  const sessionsRevoked = await revokeUserSessions(deps, trx, input.tenantId, u.id, 'password_reset_by_admin');
+  const dispatchId = await issueActivation(deps, trx, { tenantId: input.tenantId, userId: u.id, email: u.email, fullName: u.full_name });
+  await audit(trx, { tenantId: input.tenantId, actorType: 'USER', actorId: input.actorId, action: 'user.password_reset_sent', entityType: 'user', entityId: u.id, requestId: input.requestId, metadata: { sessionsRevoked } });
+  return { dispatchId, sessionsRevoked };
 }

@@ -20,7 +20,7 @@ export interface BuildDepsOptions {
 
 export function buildDeps(opts: BuildDepsOptions = {}): AppDeps {
   const config = opts.config ?? loadConfig();
-  const logger = pino({ level: config.LOG_LEVEL, redact: ['req.headers.authorization', 'req.headers["x-api-key"]'] });
+  const logger = pino({ level: config.LOG_LEVEL, redact: ['req.headers.authorization', 'req.headers["x-api-key"]', 'req.headers.cookie', 'res.headers["set-cookie"]', 'req.headers["x-device-session"]', 'req.headers["x-auth-token"]', 'req.headers["x-examos-signature"]'] });
   const db = createDb({ connectionString: config.DATABASE_URL, adminConnectionString: config.DATABASE_ADMIN_URL, poolMax: config.DB_POOL_MAX, acquireTimeoutMs: config.DB_ACQUIRE_TIMEOUT_MS });
   const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 2, lazyConnect: false });
   const fetchImpl = opts.fetchImpl ?? fetch;

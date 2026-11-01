@@ -1,4 +1,5 @@
 import { Router, type Request } from 'express';
+import { costly } from '../../middleware/rate-limit.js';
 import { z } from 'zod';
 import { CandidateApprovalSchema, ControllerAuthorizeSchema } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
@@ -144,6 +145,7 @@ export function candidateRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/:attemptId/booklet.pdf',
     user,
     scoped('exams:read'),
+    costly(deps, 'pdf', 60, 60),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
@@ -160,6 +162,7 @@ export function candidateRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/:attemptId/evidence.pdf',
     user,
     scoped('examcell:candidates:read'),
+    costly(deps, 'pdf', 60, 60),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);

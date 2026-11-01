@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import { costly } from '../../middleware/rate-limit.js';
 import { z } from 'zod';
 import {
   EvaluatorAssignSchema,
@@ -244,6 +245,7 @@ export function evaluationRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/exams/:id/auto-evaluate',
     user,
     requirePermission('evaluation:assign', (req) => ({ examId: req.params['id'] })),
+    costly(deps, 'auto-evaluate', 10, 600),
     asyncHandler(async (req: Request, res: Response) => {
       const t = requireTenant(req);
       const examId = uuidParam(req, 'id');
@@ -268,6 +270,7 @@ export function evaluationRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/exams/:id/similarity-analysis',
     user,
     requirePermission('exams:write', (req) => ({ examId: req.params['id'] })),
+    costly(deps, 'similarity', 10, 600),
     validateBody(SimilarityAnalysisSchema),
     asyncHandler(async (req: Request, res: Response) => {
       const t = requireTenant(req);

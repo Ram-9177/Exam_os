@@ -7,6 +7,7 @@ import { AppError } from '../../lib/errors.js';
 import { randomToken, sha256Hex } from '../../lib/crypto.js';
 import { audit } from '../../lib/audit.js';
 import type { JwtService } from './jwt.js';
+import { revokeUserSessions } from '../users/service.js';
 
 const BCRYPT_ROUNDS = 12;
 const MAX_FAILED_LOGINS = 5;
@@ -144,7 +145,9 @@ export class AuthService {
       const t = rows[0];
       if (!t) throw AppError.unauthorized('ACTIVATION_INVALID', 'Activation link is invalid, used or expired');
       const passwordHash = await this.hashPassword(password);
-      await trx('users').where({ id: t.user_id, tenant_id: tenantId }).update({ password_hash: passwordHash, status: 'ACTIVE', updated_at: trx.fn.now() });
+      await trx('users').where({ id: t.user_id, tenant_id: tenantId }).update({ password_hash: passwordHash, status: 'ACTIVE', failed_login_count: 0, locked_until: null, updated_at: trx.fn.now() });
+      // a new password signs the account out everywhere: whoever held an old session (e.g. after a leaked password) loses it
+      await revokeUserSessions(this.deps, trx, tenantId, t.user_id, 'password_set');
       const user = await trx('users').where({ id: t.user_id }).first();
       await audit(trx, { tenantId, actorType: 'USER', actorId: t.user_id, action: 'auth.activated', entityType: 'user', entityId: t.user_id, requestId });
       return this.issueTokens(trx, tenantId, user, { familyId: randomUUID(), parentId: null, net });
