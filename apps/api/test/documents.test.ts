@@ -156,6 +156,114 @@ describe('Server-side PDF and QR verification (hall ticket, booklet, evidence, e
     expect(rogueRes.status).toBe(403);
   });
 
+  it('manages e-signatures in user admin and maps Controller e-signature to hall tickets without candidate sign', async () => {
+    const sampleSig = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAPAAAAA8CAYAAABYfzddAAABjklEQVR4nO3bS07DQBBF0eyAIXtg/8thMYhZ+CRO4nb3q/I5EkOkorsuEna4XAAAAAAAAAAAAABgvrf3j897X6vnA65sBStmCLQnXDHDIntDFDIsMjo4IcMEMwIT8ev8ucJNsy/fwj3G8wc2rbxoS/bX6AeHzriplItNmWO10eEJubHEy0ycaYZZkQm5ieQLTJ7tCCuCEnJhFS7sDIuVEFDCDDyh2kV1XK7EaBJn4peql9NpsdJDSZ/vtKpfSPWlqhRGpVlPodNFVFysijN/E3KAjodfZam6BFB9/rI6H3xyHMmzvarLz1FGp+W5JykU71YZ4mzLkxBNwgw0cOYFWhGQcBnGEq37f+YznzkDWKSfjgjsVrjOnF0s0v/uBbd1Vlvf67wZwjJtezRG0TKVpXqOcE+gykVZrP3E2lCFS6wwIyyR/Js4eTaIkRhK4kwQLSWalDmgnJXxCBcGWPGUUrww2IyQvdKAAx317lC4MNHeT+341A8E2PvxPOFCCOFCE4IFAAAAAAAAAAAAjvcFxE2/P71/fvMAAAAASUVORK5CYII=';
+
+    // 1. Student cannot upload staff e-signature (refused 403)
+    const rogue = await req()
+      .put(`/api/v1/tenant/users/${controller.userId}/signature`)
+      .set(H(student.token))
+      .send({ signatureDataUrl: sampleSig });
+    expect(rogue.status).toBe(403);
+
+    // 2. Admin uploads Controller e-signature
+    const uploadRes = await req()
+      .put(`/api/v1/tenant/users/${controller.userId}/signature`)
+      .set(H(t.admin.token))
+      .send({ signatureDataUrl: sampleSig });
+    expect(uploadRes.status).toBe(200);
+    expect(uploadRes.body.ok).toBe(true);
+
+    // 3. User query reflects signature
+    const userSig = await req()
+      .get(`/api/v1/tenant/users/${controller.userId}/signature`)
+      .set(H(t.admin.token));
+    expect(userSig.status).toBe(200);
+    expect(userSig.body.signatureDataUrl).toBe(sampleSig);
+
+    // 4. Verify audit row created
+    const auditRow = await ctx.admin('audit_events').where({
+      tenant_id: t.tenantId,
+      action: 'user.signature_updated',
+      entity_id: controller.userId,
+    }).first();
+    expect(auditRow).toBeDefined();
+
+    // 5. Render HTML helper verification
+    const { renderHallTicketHtml } = await import('../src/modules/documents/renderer.js');
+    const ticketHtml = renderHallTicketHtml({
+      number: 'HT-TEST-001',
+      tenantName: 'St. Mary\'s University',
+      studentName: 'Aarav Patel',
+      registerNumber: '2026CSE001',
+      examTitle: 'Operating Systems',
+      examCode: 'CS301',
+      academicYear: '2026-27',
+      windowStartAt: new Date().toISOString(),
+      windowEndAt: new Date().toISOString(),
+      durationMinutes: 60,
+      securityProfile: 'BASIC_BROWSER',
+      verificationHash: 'vhash123',
+      controllerSignatureDataUrl: sampleSig,
+      controllerName: 'Controller Name',
+    }, 'data:image/png;base64,qr');
+
+    expect(ticketHtml).not.toContain("Candidate's Signature");
+    expect(ticketHtml).toContain('Controller of Examinations');
+    expect(ticketHtml).toContain('Signature of Controller of Examinations');
+    expect(ticketHtml).toContain(sampleSig);
+
+    // 6. Test dynamic hall ticket regeneration when Controller signature is uploaded
+    const dynamicExamRes = await req().post('/api/v1/exams').set(H(examCell.token)).send({
+      code: `EXAM-${randomUUID().slice(0, 6)}`,
+      title: 'Dynamic Signature Test Exam',
+      courseCode: 'CS301',
+      examType: 'SEM_INTERNAL',
+      academicYear: '2026-27',
+      semester: 5,
+      maxMarks: 50,
+      securityProfile: 'BASIC_BROWSER',
+      durationMinutes: 90,
+      windowStartAt: new Date().toISOString(),
+      windowEndAt: new Date(Date.now() + 3600_000).toISOString(),
+    });
+    const dynExamId = dynamicExamRes.body.examId;
+    await req().post(`/api/v1/exams/${dynExamId}/allocations`).set(H(examCell.token)).send({
+      studentExternalIds: [student.externalId],
+      provider: 'erp',
+    });
+    await req().post(`/api/v1/exams/${dynExamId}/hall-tickets`).set(H(examCell.token)).send({});
+
+    // Fetch hall ticket PDF with active Controller signature
+    const htWithSig = await req()
+      .get(`/api/v1/student/me/exams/${dynExamId}/hall-ticket.pdf`)
+      .set(H(student.token))
+      .responseType('blob');
+    expect(htWithSig.status).toBe(200);
+    expect(htWithSig.headers['cache-control']).toBe('no-cache, no-store, must-revalidate');
+    const shaWithSig = htWithSig.headers['x-document-sha256'];
+
+    // 7. Delete signature works and audits, and dynamically clears cached hall tickets
+    const delRes = await req()
+      .delete(`/api/v1/tenant/users/${controller.userId}/signature`)
+      .set(H(t.admin.token));
+    expect(delRes.status).toBe(200);
+
+    const clearedSig = await req()
+      .get(`/api/v1/tenant/users/${controller.userId}/signature`)
+      .set(H(t.admin.token));
+    expect(clearedSig.body.signatureDataUrl).toBeNull();
+
+    // 8. Re-fetching hall ticket dynamically regenerates fresh PDF without Controller signature image
+    const htWithoutSig = await req()
+      .get(`/api/v1/student/me/exams/${dynExamId}/hall-ticket.pdf`)
+      .set(H(student.token))
+      .responseType('blob');
+    expect(htWithoutSig.status).toBe(200);
+    const shaWithoutSig = htWithoutSig.headers['x-document-sha256'];
+    expect(shaWithoutSig).not.toBe(shaWithSig);
+  });
+
   it('renders answer booklet PDF after publication, proves export lock during precheck/live, and checks evidence PDF', async () => {
     const now = Date.now();
     const examRes = await req().post('/api/v1/exams').set(H(examCell.token)).send({

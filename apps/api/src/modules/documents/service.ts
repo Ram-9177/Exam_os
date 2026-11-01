@@ -1,6 +1,7 @@
 import type { Knex } from '@examos/db';
 import type { AppDeps } from '../../types.js';
 import { AppError } from '../../lib/errors.js';
+import { sha256Hex } from '../../lib/crypto.js';
 import { audit } from '../../lib/audit.js';
 import { answerBooklet } from '../candidates/service.js';
 import { assertExportAllowed } from '../exams/service.js';
@@ -144,13 +145,57 @@ export async function getOrRenderHallTicketPdf(
     throw AppError.notFound('HALL_TICKET_NOT_FOUND', 'No active hall ticket issued for this exam');
   }
 
+  // Look for active Controller of Examinations in this tenant with an uploaded e-signature
+  let controllerUser = await trx('role_grants as rg')
+    .join('users as u', 'u.id', 'rg.user_id')
+    .where({ 'rg.tenant_id': tenantId })
+    .whereIn('rg.role_code', ['CONTROLLER', 'TENANT_ADMIN'])
+    .whereNull('rg.revoked_at')
+    .whereNotNull('u.signature_data_url')
+    .orderByRaw(`
+      CASE 
+        WHEN rg.role_code = 'CONTROLLER' AND (u.email LIKE 'controller@%' OR u.full_name ILIKE '%controller%') THEN 0
+        WHEN rg.role_code = 'CONTROLLER' THEN 1
+        ELSE 2
+      END,
+      u.signature_updated_at DESC NULLS LAST,
+      rg.created_at DESC
+    `)
+    .first('u.signature_data_url as signatureDataUrl', 'u.full_name as fullName', 'u.id as userId');
+
+  if (!controllerUser) {
+    controllerUser = await trx('role_grants as rg')
+      .join('users as u', 'u.id', 'rg.user_id')
+      .where({ 'rg.tenant_id': tenantId })
+      .whereIn('rg.role_code', ['CONTROLLER', 'TENANT_ADMIN'])
+      .whereNull('rg.revoked_at')
+      .orderByRaw(`
+        CASE 
+          WHEN rg.role_code = 'CONTROLLER' AND (u.email LIKE 'controller@%' OR u.full_name ILIKE '%controller%') THEN 0
+          WHEN rg.role_code = 'CONTROLLER' THEN 1
+          ELSE 2
+        END,
+        rg.created_at DESC
+      `)
+      .first(trx.raw('NULL as "signatureDataUrl"'), 'u.full_name as fullName', 'u.id as userId');
+  }
+
+  const TEMPLATE_VERSION = 'v2_controller_only';
+  const currentSigHash = controllerUser?.signatureDataUrl
+    ? sha256Hex(controllerUser.signatureDataUrl)
+    : 'none';
+
   const storage = getDocumentStorage();
   const entityId = `${examId}:${userId}`;
   const cachedDoc = await trx('stored_documents')
     .where({ tenant_id: tenantId, doc_kind: 'HALL_TICKET_PDF', entity_id: entityId })
     .first();
 
-  if (cachedDoc) {
+  if (
+    cachedDoc &&
+    cachedDoc.metadata?.templateVersion === TEMPLATE_VERSION &&
+    cachedDoc.metadata?.sigHash === currentSigHash
+  ) {
     const fileObj = await storage.getObject(tenantId, 'documents', `hallticket_${entityId}.pdf`);
     if (fileObj) {
       return {
@@ -191,6 +236,8 @@ export async function getOrRenderHallTicketPdf(
     departmentName: dept?.departmentName,
     departmentCode: dept?.departmentCode,
     verificationHash: ht.verification_hash,
+    controllerSignatureDataUrl: controllerUser?.signatureDataUrl ?? null,
+    controllerName: controllerUser?.fullName ?? null,
   };
 
   const qrUrl = `https://${host}/student/verify/ticket/${ht.verification_hash}`;
@@ -212,7 +259,14 @@ export async function getOrRenderHallTicketPdf(
       sha256: stored.sha256,
       byte_length: stored.byteLength,
       mime_type: 'application/pdf',
-      metadata: { examId, userId, number: ht.number },
+      metadata: {
+        examId,
+        userId,
+        number: ht.number,
+        templateVersion: TEMPLATE_VERSION,
+        sigHash: currentSigHash,
+        controllerId: controllerUser?.userId ?? null,
+      },
     })
     .onConflict(['tenant_id', 'doc_kind', 'entity_id'])
     .merge();

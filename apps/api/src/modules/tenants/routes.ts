@@ -15,6 +15,7 @@ import {
   XlsxPreviewRequestSchema,
   XlsxImportRequestSchema,
   MailBounceReconcileSchema,
+  UserSignatureUploadSchema,
 } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
@@ -35,7 +36,7 @@ import {
 import { generateTemplate, previewRosterImport, executeRosterImport } from '../integration/csv-importer.js';
 import { getMailHealthMetrics } from '../notifications/health.js';
 import { reconcileBounce } from '../notifications/bounce.js';
-import { createUserWithActivation, grantRole, revokeRole, setUserStatus, staffSeats } from '../users/service.js';
+import { createUserWithActivation, grantRole, revokeRole, setUserStatus, staffSeats, updateUserSignature, removeUserSignature } from '../users/service.js';
 import { audit } from '../../lib/audit.js';
 
 const MailConfigBody = TenantMailConfigSchema.extend({
@@ -101,11 +102,61 @@ export function tenantAdminRoutes(deps: AppDeps, jwt: JwtService): Router {
             if (q) qb.andWhere((w) => w.whereILike('u.email', `%${q}%`).orWhereILike('u.full_name', `%${q}%`).orWhereILike('sp.register_number', `%${q}%`));
             if (kind) qb.where('u.kind', kind);
           })
-          .select('u.id', 'u.email', 'u.full_name as fullName', 'u.kind', 'u.status', 'sp.register_number as registerNumber', 'u.created_at as createdAt')
+          .select('u.id', 'u.email', 'u.full_name as fullName', 'u.kind', 'u.status', 'sp.register_number as registerNumber', 'u.created_at as createdAt', 'u.signature_data_url as signatureDataUrl')
           .orderBy('u.full_name')
           .limit(200),
       );
       res.json({ users: rows });
+    }),
+  );
+  r.get(
+    '/users/:id/signature',
+    user,
+    requirePermission('users:read'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const row = await tenantTx(deps, req, (trx) =>
+        trx('users').where({ tenant_id: t.id, id: uuidParam(req, 'id') }).first('signature_data_url as signatureDataUrl', 'signature_updated_at as signatureUpdatedAt'),
+      );
+      if (!row) throw AppError.notFound('USER_NOT_FOUND', 'User not found');
+      res.json(row);
+    }),
+  );
+  r.put(
+    '/users/:id/signature',
+    user,
+    requirePermission('users:write'),
+    validateBody(UserSignatureUploadSchema),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      const input = body<typeof UserSignatureUploadSchema>(req);
+      const result = await tenantTx(deps, req, (trx) =>
+        updateUserSignature(trx, {
+          tenantId: t.id,
+          userId: uuidParam(req, 'id'),
+          signatureDataUrl: input.signatureDataUrl,
+          actorId: p.userId,
+        }),
+      );
+      res.json(result);
+    }),
+  );
+  r.delete(
+    '/users/:id/signature',
+    user,
+    requirePermission('users:write'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      const result = await tenantTx(deps, req, (trx) =>
+        removeUserSignature(trx, {
+          tenantId: t.id,
+          userId: uuidParam(req, 'id'),
+          actorId: p.userId,
+        }),
+      );
+      res.json(result);
     }),
   );
   r.get(

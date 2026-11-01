@@ -54,6 +54,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
       const result = await tenantTx(deps, req, (trx) => getOrRenderHallTicketPdf(deps, trx, t.id, uuidParam(req, 'examId'), p.userId, caller, host));
       res.setHeader('Content-Type', result.contentType);
       res.setHeader('Content-Disposition', `inline; filename="${result.filename}"`);
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('X-Document-Sha256', result.sha256);
       res.send(result.data);
     }),
@@ -269,6 +270,7 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
       const result = await tenantTx(deps, req, (trx) => getOrRenderBookletPdf(deps, trx, t.id, uuidParam(req, 'id'), caller, host));
       res.setHeader('Content-Type', result.contentType);
       res.setHeader('Content-Disposition', `inline; filename="${result.filename}"`);
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('X-Document-Sha256', result.sha256);
       res.send(result.data);
     }),

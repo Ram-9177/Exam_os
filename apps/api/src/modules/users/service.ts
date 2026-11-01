@@ -157,3 +157,70 @@ export async function staffSeats(trx: Knex.Transaction, tenantId: string) {
     staff: staff.map((u) => ({ ...u, roles: grants.filter((g) => g.user_id === u.id).map((g) => ({ role: g.role_code, scopeType: g.scope_type, scopeId: g.scope_id })) })),
   };
 }
+
+export async function updateUserSignature(
+  trx: Knex.Transaction,
+  input: { tenantId: string; userId: string; signatureDataUrl: string; actorId: string }
+): Promise<{ ok: true; userId: string }> {
+  const user = await trx('users').where({ id: input.userId, tenant_id: input.tenantId }).first('id', 'kind', 'full_name');
+  if (!user) throw AppError.notFound('USER_NOT_FOUND', 'User not found in this tenant');
+
+  await trx('users')
+    .where({ id: input.userId, tenant_id: input.tenantId })
+    .update({
+      signature_data_url: input.signatureDataUrl,
+      signature_updated_at: trx.fn.now(),
+      updated_at: trx.fn.now(),
+    });
+
+  // Invalidate cached hall ticket documents in this tenant so any updated Controller signature maps dynamically
+  await trx('stored_documents')
+    .where({ tenant_id: input.tenantId, doc_kind: 'HALL_TICKET_PDF' })
+    .delete();
+
+  await audit(trx, {
+    tenantId: input.tenantId,
+    actorType: 'USER',
+    actorId: input.actorId,
+    action: 'user.signature_updated',
+    entityType: 'user',
+    entityId: input.userId,
+    metadata: { hasSignature: true },
+  });
+
+  return { ok: true, userId: input.userId };
+}
+
+export async function removeUserSignature(
+  trx: Knex.Transaction,
+  input: { tenantId: string; userId: string; actorId: string }
+): Promise<{ ok: true; userId: string }> {
+  const user = await trx('users').where({ id: input.userId, tenant_id: input.tenantId }).first('id');
+  if (!user) throw AppError.notFound('USER_NOT_FOUND', 'User not found in this tenant');
+
+  await trx('users')
+    .where({ id: input.userId, tenant_id: input.tenantId })
+    .update({
+      signature_data_url: null,
+      signature_updated_at: trx.fn.now(),
+      updated_at: trx.fn.now(),
+    });
+
+  // Invalidate cached hall ticket documents in this tenant so removal maps dynamically
+  await trx('stored_documents')
+    .where({ tenant_id: input.tenantId, doc_kind: 'HALL_TICKET_PDF' })
+    .delete();
+
+  await audit(trx, {
+    tenantId: input.tenantId,
+    actorType: 'USER',
+    actorId: input.actorId,
+    action: 'user.signature_removed',
+    entityType: 'user',
+    entityId: input.userId,
+    metadata: { hasSignature: false },
+  });
+
+  return { ok: true, userId: input.userId };
+}
+

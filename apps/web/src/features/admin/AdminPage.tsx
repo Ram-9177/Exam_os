@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useMemo, useState, useRef, type FormEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_KEY_SCOPES, MAIL_TRANSPORT_KINDS, ROLE_CODES, ROLE_PERMISSIONS, WEBHOOK_EVENT_TYPES, type Permission, type RoleCode } from '@examos/contracts';
 import { api, isApiError } from '@/lib/api';
@@ -77,6 +77,7 @@ interface UserRow {
   status: string;
   registerNumber: string | null;
   createdAt: string;
+  signatureDataUrl?: string | null;
 }
 
 function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
@@ -84,11 +85,19 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
   const [kind, setKind] = useState('');
   const [create, setCreate] = useState(false);
   const [roleFor, setRoleFor] = useState<UserRow | null>(null);
+  const [signatureFor, setSignatureFor] = useState<UserRow | null>(null);
   const users = useQuery({ queryKey: ['tenant', 'users', q, kind], queryFn: () => api.get<{ users: UserRow[] }>(`/tenant/users?q=${encodeURIComponent(q)}&kind=${kind}`) });
   const columns: Column<UserRow>[] = [
     { key: 'name', header: 'Name', render: (u) => (
         <div>
-          <p className="font-medium">{u.fullName}</p>
+          <div className="flex items-center gap-2">
+            <p className="font-medium">{u.fullName}</p>
+            {u.signatureDataUrl ? (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200" title="Digital signature mapped">
+                e-Sign
+              </span>
+            ) : null}
+          </div>
           <p className="text-sm text-ink-2">{u.email}</p>
         </div>
       ) },
@@ -96,7 +105,22 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
     { key: 'reg', header: 'Register number', hideOnMobile: true, render: (u) => <span className="font-mono">{u.registerNumber ?? '—'}</span> },
     { key: 'status', header: 'Status', render: (u) => <StatusChip tone={u.status === 'ACTIVE' ? 'ready' : u.status === 'PENDING_ACTIVATION' ? 'fix' : 'note'} icon={false}>{humanize(u.status)}</StatusChip> },
     { key: 'created', header: 'Created', hideOnMobile: true, render: (u) => formatDateTime(u.createdAt, tz) },
-    { key: 'roles', header: '', align: 'right', render: (u) => (canWrite ? <Button size="sm" onClick={() => setRoleFor(u)}>Roles</Button> : null) },
+    {
+      key: 'actions',
+      header: '',
+      align: 'right',
+      render: (u) =>
+        canWrite ? (
+          <div className="flex items-center justify-end gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setSignatureFor(u)}>
+              e-Sign
+            </Button>
+            <Button size="sm" onClick={() => setRoleFor(u)}>
+              Roles
+            </Button>
+          </div>
+        ) : null,
+    },
   ];
   return (
     <div>
@@ -123,6 +147,7 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
       {users.data ? <Table caption="Users" columns={columns} rows={users.data.users} rowKey={(u) => u.id} empty="No users match." /> : null}
       {create ? <CreateUserDialog onClose={() => setCreate(false)} /> : null}
       {roleFor ? <RoleDialog user={roleFor} onClose={() => setRoleFor(null)} /> : null}
+      {signatureFor ? <SignatureDialog user={signatureFor} onClose={() => setSignatureFor(null)} /> : null}
     </div>
   );
 }
@@ -258,6 +283,254 @@ function RoleDialog({ user, onClose }: { user: UserRow; onClose: () => void }) {
             Revoke
           </Button>
         </div>
+      </div>
+    </Dialog>
+  );
+}
+
+function SignatureDialog({ user, onClose }: { user: UserRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [dataUrl, setDataUrl] = useState<string | null>(user.signatureDataUrl ?? null);
+  const [mode, setMode] = useState<'upload' | 'draw'>('upload');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Signature image must be under 5 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') return;
+      const raw = reader.result;
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 500;
+        const maxH = 150;
+        let w = img.width;
+        let h = img.height;
+        if (w > maxW || h > maxH) {
+          const ratio = Math.min(maxW / w, maxH / h);
+          w = Math.round(w * ratio);
+          h = Math.round(h * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, w, h);
+          setDataUrl(canvas.toDataURL('image/png'));
+        } else {
+          setDataUrl(raw);
+        }
+      };
+      img.onerror = () => {
+        setDataUrl(raw);
+      };
+      img.src = raw;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    const touch = 'touches' in e ? e.touches[0] : null;
+    const clientX = touch ? touch.clientX : ('clientX' in e ? e.clientX : 0);
+    const clientY = touch ? touch.clientY : ('clientY' in e ? e.clientY : 0);
+    ctx.beginPath();
+    ctx.moveTo(clientX - rect.left, clientY - rect.top);
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#111827';
+    setIsDrawing(true);
+  };
+
+  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    const touch = 'touches' in e ? e.touches[0] : null;
+    const clientX = touch ? touch.clientX : ('clientX' in e ? e.clientX : 0);
+    const clientY = touch ? touch.clientY : ('clientY' in e ? e.clientY : 0);
+    ctx.lineTo(clientX - rect.left, clientY - rect.top);
+    ctx.stroke();
+  };
+
+  const stopDrawing = () => {
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    const canvas = canvasRef.current;
+    if (canvas) {
+      setDataUrl(canvas.toDataURL('image/png'));
+    }
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    setDataUrl(null);
+  };
+
+  const save = async () => {
+    if (!dataUrl) {
+      setError('Please choose or draw a signature before saving.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.put(`/tenant/users/${user.id}/signature`, { signatureDataUrl: dataUrl }, { quiet: ['VALIDATION_FAILED', 'VALIDATION'] });
+      toast({ tone: 'success', title: 'E-Signature mapped', description: `Digital signature saved and mapped for ${user.fullName}.` });
+      void qc.invalidateQueries({ queryKey: ['tenant', 'users'] });
+      onClose();
+    } catch (err) {
+      setError(isApiError(err) ? (err.problem.errors?.map((x) => `${x.path}: ${x.message}`).join('; ') ?? `${err.problem.title} (${err.code})`) : 'Could not save signature.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.del(`/tenant/users/${user.id}/signature`);
+      toast({ tone: 'success', title: 'Signature removed', description: `Signature unmapped from ${user.fullName}.` });
+      void qc.invalidateQueries({ queryKey: ['tenant', 'users'] });
+      onClose();
+    } catch (err) {
+      setError(isApiError(err) ? `${err.problem.title} (${err.code})` : 'Could not remove signature.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Digital E-Signature — ${user.fullName}`}
+      description="Upload or draw an official digital signature for this user. When this user holds the Controller of Examinations role, the signature automatically maps to official hall tickets and documents."
+      size="md"
+      footer={
+        <div className="flex w-full items-center justify-between">
+          <div>
+            {user.signatureDataUrl ? (
+              <Button variant="danger" size="sm" onClick={() => void remove()} loading={busy}>
+                Remove signature
+              </Button>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={() => void save()} loading={busy}>
+              Save E-Signature
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div className="flex border-b border-line pb-2 gap-4">
+          <button
+            type="button"
+            className={`text-sm font-medium pb-1 cursor-pointer transition-colors ${mode === 'upload' ? 'border-b-2 border-ink text-ink font-semibold' : 'text-ink-2 hover:text-ink'}`}
+            onClick={() => setMode('upload')}
+          >
+            Upload image
+          </button>
+          <button
+            type="button"
+            className={`text-sm font-medium pb-1 cursor-pointer transition-colors ${mode === 'draw' ? 'border-b-2 border-ink text-ink font-semibold' : 'text-ink-2 hover:text-ink'}`}
+            onClick={() => setMode('draw')}
+          >
+            Draw signature
+          </button>
+        </div>
+
+        {mode === 'upload' ? (
+          <div>
+            <label htmlFor="signature-file-input" className="block text-sm font-medium text-ink mb-1">
+              Select signature image (PNG, JPEG, WebP)
+            </label>
+            <input
+              id="signature-file-input"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={handleFileUpload}
+              className="block w-full text-sm text-ink-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border file:border-line file:text-sm file:font-semibold file:bg-surface-2 hover:file:bg-surface cursor-pointer"
+            />
+            <p className="text-xs text-ink-3 mt-1.5">
+              Transparent background PNG recommended. Max size 500 KB.
+            </p>
+          </div>
+        ) : (
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-sm font-medium text-ink">Draw in the box below</span>
+              <Button size="sm" variant="ghost" onClick={clearCanvas}>
+                Clear
+              </Button>
+            </div>
+            <div className="border-2 border-dashed border-line rounded bg-white overflow-hidden touch-none">
+              <canvas
+                ref={canvasRef}
+                width={400}
+                height={120}
+                className="w-full h-30 cursor-crosshair block"
+                onMouseDown={startDrawing}
+                onMouseMove={draw}
+                onMouseUp={stopDrawing}
+                onMouseLeave={stopDrawing}
+                onTouchStart={startDrawing}
+                onTouchMove={draw}
+                onTouchEnd={stopDrawing}
+              />
+            </div>
+            <p className="text-xs text-ink-3 mt-1.5">
+              Use mouse, pen stylus, or touch to sign inside the frame.
+            </p>
+          </div>
+        )}
+
+        {dataUrl ? (
+          <div className="p-3 border border-line rounded bg-surface-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">Signature Preview</p>
+            <div className="bg-white p-3 rounded border border-line-2 flex flex-col items-center justify-center min-h-22.5">
+              <img src={dataUrl} alt="Signature preview" className="max-h-16 max-w-full object-contain mb-1" />
+              <div className="border-t border-ink w-48 text-center text-[11px] font-semibold text-ink pt-1">
+                Controller of Examinations
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {error ? (
+          <p className="text-stop text-sm" role="alert">
+            {error}
+          </p>
+        ) : null}
       </div>
     </Dialog>
   );

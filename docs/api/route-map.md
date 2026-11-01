@@ -116,6 +116,7 @@ GET  /proctor/attempts/:id/timeline → {attempt,events,warnings,epochs,network:
 
 ## Tenant admin (TENANT_ADMIN / SYSTEM_ADMIN)
 POST /tenant/users; GET /tenant/users?q&kind; POST|DELETE /tenant/users/:id/roles {role,scopeType,scopeId}
+GET /tenant/users/:id/signature; PUT /tenant/users/:id/signature {signatureDataUrl}; DELETE /tenant/users/:id/signature (users:write)
 PUT  /tenant/mail-config {transportKind,senderAddress,senderName,endpointSecret?,tokenSecret?,callbackSecret?,category?,settings}
 GET  /tenant/mail-dispatches; PUT /tenant/sso-config; POST /tenant/api-keys; DELETE /tenant/api-keys/:id; POST /tenant/webhooks; GET /tenant/webhooks/deliveries; POST /tenant/webhooks/deliveries/:id/replay; GET /tenant/audit
 

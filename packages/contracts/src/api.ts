@@ -67,6 +67,12 @@ export const UserCreateSchema = z.object({
   sendActivation: z.boolean().default(true),
 });
 
+export const UserSignatureUploadSchema = z.object({
+  signatureDataUrl: z.string().min(20).max(4_000_000).refine((s) => s.startsWith('data:image/'), {
+    message: 'Signature must be a valid image data URL (data:image/...)',
+  }),
+});
+
 // ---------- exams ----------
 export const SecurityProfileInput = z
   .string()
