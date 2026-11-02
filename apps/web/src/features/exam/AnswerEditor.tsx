@@ -4,7 +4,8 @@ import type { AnswerDoc, Block, CanvasContent, Stroke } from '@/lib/answers';
 import { isCanvasContent, paragraphText } from '@/lib/answers';
 import { uuid } from '@/lib/ids';
 import { Button, cn } from '@/ui';
-import { DrawingSurface, emptyCanvas, undoLastStroke, type DrawingTool } from '@/features/drawing/DrawingSurface';
+import { DrawingSurface, emptyCanvas, undoLastStroke, insertDigitalSymbolOnCanvas, type DrawingTool } from '@/features/drawing/DrawingSurface';
+import { MathPalette } from '@/features/drawing/MathPalette';
 
 const INTERNAL_MIME = 'text/x-examos-internal';
 
@@ -74,7 +75,20 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
       {blocks.map((b, i) => (
         <div key={b.id} className="group">
           {b.kind === 'canvas' && isCanvasContent(b.content) ? (
-            <DiagramBlock content={b.content} onChange={(c) => update(b.id, c)} onRemove={() => remove(b.id)} disabled={disabled} index={i + 1} />
+            <DiagramBlock
+              content={b.content}
+              onChange={(c) => update(b.id, c)}
+              onRemove={() => remove(b.id)}
+              disabled={disabled}
+              index={i + 1}
+              onInsertToParagraph={(text) => {
+                const target = blocks.find((blk) => blk.kind === 'paragraph');
+                if (target) {
+                  const current = typeof target.content === 'string' ? target.content : '';
+                  update(target.id, current ? `${current} ${text}` : text);
+                }
+              }}
+            />
           ) : (
             <ParagraphBlock ref={i === 0 ? firstRef : undefined} value={paragraphText(b)} onChange={(t) => update(b.id, t)} disabled={disabled} label={`Answer paragraph ${i + 1}`} onRemove={blocks.length > 1 ? () => remove(b.id) : undefined} />
           )}
@@ -155,12 +169,28 @@ const GROW_BY = 240;
  * button so it works with a keyboard and a screen reader; state that matters
  * for marking (the items) lives in the answer document, the rest is local.
  */
-function DiagramBlock({ content, onChange, onRemove, disabled, index }: { content: CanvasContent; onChange: (c: CanvasContent) => void; onRemove: () => void; disabled: boolean; index: number }) {
+function DiagramBlock({
+  content,
+  onChange,
+  onRemove,
+  disabled,
+  index,
+  onInsertToParagraph,
+}: {
+  content: CanvasContent;
+  onChange: (c: CanvasContent) => void;
+  onRemove: () => void;
+  disabled: boolean;
+  index: number;
+  onInsertToParagraph?: (text: string) => void;
+}) {
   const [tool, setTool] = useState<DrawingTool>('pen');
   const [color, setColor] = useState<CanvasColor>('ink');
   const [width, setWidth] = useState<number>(WIDTHS[1].value);
   const [textSize, setTextSize] = useState<number>(TEXT_SIZES[1].value);
   const [fill, setFill] = useState(false);
+  const [showMath, setShowMath] = useState(false);
+  const [autoConvert, setAutoConvert] = useState(false);
   const [redo, setRedo] = useState<Stroke[]>([]);
   const [confirmClear, setConfirmClear] = useState(false);
   const [limitNote, setLimitNote] = useState(false);
@@ -195,6 +225,14 @@ function DiagramBlock({ content, onChange, onRemove, disabled, index }: { conten
   };
   const taller = () => onChange({ ...content, height: Math.min(CANVAS_LIMITS.maxHeight, content.height + GROW_BY) });
 
+  const handleInsertMath = (symbolOrFormula: string) => {
+    const next = insertDigitalSymbolOnCanvas(content, symbolOrFormula, {
+      color,
+      size: textSize,
+    });
+    draw(next);
+  };
+
   return (
     <figure className="border border-rule-2 rounded-sm overflow-hidden bg-sheet">
       <figcaption className="flex flex-col gap-2 px-3 py-2 border-b border-rule bg-sheet-2 text-sm">
@@ -207,6 +245,25 @@ function DiagramBlock({ content, onChange, onRemove, disabled, index }: { conten
                   {TOOL_LABEL[t]}
                 </Button>
               ))}
+              <span className="w-px h-5 bg-rule mx-1 self-center" aria-hidden="true" />
+              <Button
+                size="sm"
+                variant={showMath ? 'primary' : 'secondary'}
+                aria-pressed={showMath}
+                onClick={() => setShowMath((s) => !s)}
+                title="Open math formulas, keys, and calculus symbols palette"
+              >
+                ∑ fx Math
+              </Button>
+              <Button
+                size="sm"
+                variant={autoConvert ? 'primary' : 'ghost'}
+                aria-pressed={autoConvert}
+                onClick={() => setAutoConvert((a) => !a)}
+                title="Automatically convert hand-drawn shapes and math symbols (e.g. √, ∫, ∑, π, ∞) to digital items"
+              >
+                ✨ {autoConvert ? 'Auto-convert: ON' : 'Auto-convert: OFF'}
+              </Button>
             </div>
           ) : null}
           <span className="ml-auto text-ink-2 tabular">
@@ -218,6 +275,15 @@ function DiagramBlock({ content, onChange, onRemove, disabled, index }: { conten
             </Button>
           ) : null}
         </div>
+
+        {showMath && !disabled ? (
+          <MathPalette
+            onInsertToCanvas={handleInsertMath}
+            onInsertToParagraph={onInsertToParagraph}
+            onClose={() => setShowMath(false)}
+            className="my-1 border-accent/40 bg-sheet shadow-xs"
+          />
+        ) : null}
         {!disabled ? (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <div role="group" aria-label={`Diagram ${index} colour`} className="flex items-center gap-1">
@@ -298,7 +364,19 @@ function DiagramBlock({ content, onChange, onRemove, disabled, index }: { conten
           </p>
         ) : null}
       </figcaption>
-      <DrawingSurface value={content} onChange={draw} tool={tool} color={color} penWidth={width} fill={fill} textSize={textSize} readOnly={disabled} label={`Diagram ${index}`} onLimit={() => setLimitNote(true)} />
+      <DrawingSurface
+        value={content}
+        onChange={draw}
+        tool={tool}
+        color={color}
+        penWidth={width}
+        fill={fill}
+        textSize={textSize}
+        readOnly={disabled}
+        label={`Diagram ${index}`}
+        onLimit={() => setLimitNote(true)}
+        autoConvertMath={autoConvert}
+      />
     </figure>
   );
 }

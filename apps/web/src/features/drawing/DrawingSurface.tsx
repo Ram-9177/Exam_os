@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Keyb
 import { CANVAS_COLORS, CANVAS_LIMITS, DEFAULT_TEXT_SIZE, HIGHLIGHTER_OPACITY, SHAPE_FILL_OPACITY, type CanvasColor } from '@examos/contracts';
 import type { CanvasContent, Stroke, StrokePoint } from '@/lib/answers';
 import { cn } from '@/ui';
+import { recognizeMathSymbol, type RecognizedSymbol } from './strokeRecognition';
 
 export type DrawingTool = Stroke['tool'];
 export type { CanvasColor };
@@ -21,6 +22,8 @@ export interface DrawingSurfaceProps {
   className?: string;
   /** Called when a stroke was dropped because the drawing reached the contract's size limits. */
   onLimit?: () => void;
+  /** Automatically converts recognized math symbols (e.g. √, ∫, ∑) and shapes */
+  autoConvertMath?: boolean;
 }
 
 const MIN_POINT_DISTANCE = 1.5;
@@ -161,11 +164,92 @@ export function fitsLimits(content: CanvasContent, extraPoints: number): boolean
  * PDF re-render identically. Erasing appends an eraser item; nothing is ever
  * rasterised or lost.
  */
-export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth = 2.25, eraserWidth = 18, fill = false, textSize = DEFAULT_TEXT_SIZE, readOnly = false, label, className, onLimit }: DrawingSurfaceProps) {
+export function createDigitalItemFromRecognition(candidate: RecognizedSymbol, stroke: Stroke, textSize = DEFAULT_TEXT_SIZE): Stroke {
+  const color = stroke.color ?? 'ink';
+  if (candidate.tool === 'rect') {
+    return {
+      tool: 'rect',
+      width: Math.max(1.5, stroke.width),
+      color,
+      points: [
+        [candidate.bounds.minX, candidate.bounds.minY],
+        [candidate.bounds.maxX, candidate.bounds.maxY],
+      ],
+    };
+  }
+  if (candidate.tool === 'ellipse') {
+    return {
+      tool: 'ellipse',
+      width: Math.max(1.5, stroke.width),
+      color,
+      points: [
+        [candidate.bounds.minX, candidate.bounds.minY],
+        [candidate.bounds.maxX, candidate.bounds.maxY],
+      ],
+    };
+  }
+  if (candidate.tool === 'line') {
+    return {
+      tool: 'line',
+      width: Math.max(1.5, stroke.width),
+      color,
+      points: [stroke.points[0]!, stroke.points[stroke.points.length - 1]!],
+    };
+  }
+  if (candidate.tool === 'arrow') {
+    return {
+      tool: 'arrow',
+      width: Math.max(1.5, stroke.width),
+      color,
+      points: [stroke.points[0]!, stroke.points[stroke.points.length - 1]!],
+    };
+  }
+
+  // Math symbol as digital text item
+  const calculatedSize = Math.max(16, Math.min(64, Math.round(candidate.bounds.height * 0.95)));
+  return {
+    tool: 'text',
+    width: 1,
+    color,
+    points: [[Math.round(candidate.bounds.minX), Math.round(candidate.bounds.minY + candidate.bounds.height * 0.88)]],
+    text: candidate.symbol,
+    size: calculatedSize || textSize,
+  };
+}
+
+export function insertDigitalSymbolOnCanvas(
+  content: CanvasContent,
+  symbolOrFormula: string,
+  options?: { x?: number; y?: number; size?: number; color?: CanvasColor }
+): CanvasContent {
+  const x = options?.x ?? Math.round(content.width * 0.35);
+  const y = options?.y ?? Math.round(content.height * 0.45);
+  const size = options?.size ?? DEFAULT_TEXT_SIZE;
+  const color = options?.color ?? 'ink';
+  const newItem: Stroke = {
+    tool: 'text',
+    width: 1,
+    color,
+    points: [[x, y]],
+    text: symbolOrFormula,
+    size,
+  };
+  return {
+    ...content,
+    strokes: [...content.strokes, newItem],
+  };
+}
+
+export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth = 2.25, eraserWidth = 18, fill = false, textSize = DEFAULT_TEXT_SIZE, readOnly = false, label, className, onLimit, autoConvertMath = false }: DrawingSurfaceProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const liveRef = useRef<Stroke | null>(null);
   const inkColor = useRef('#1a2030');
   const [textDraft, setTextDraft] = useState<{ x: number; y: number; value: string } | null>(null);
+  const [recognitionPrompt, setRecognitionPrompt] = useState<{
+    candidate: RecognizedSymbol;
+    strokeIndex: number;
+    digitalItem: Stroke;
+  } | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   const redraw = useCallback(() => {
@@ -223,8 +307,22 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
     commit({ tool: 'text', width: 1, color, points: [[draft.x, draft.y]], text: text.slice(0, CANVAS_LIMITS.maxTextLength), size: textSize });
   };
 
+  const applyRecognition = () => {
+    if (!recognitionPrompt) return;
+    const { strokeIndex, digitalItem } = recognitionPrompt;
+    setRecognitionPrompt(null);
+    const strokes = [...value.strokes];
+    if (strokeIndex < strokes.length) {
+      strokes[strokeIndex] = digitalItem;
+      onChange({ ...value, strokes });
+    }
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (readOnly || e.button !== 0) return;
+    if (recognitionPrompt) {
+      setRecognitionPrompt(null);
+    }
     if (textDraft) {
       commitText();
       return;
@@ -301,6 +399,25 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
         return; // a click, not a shape
       }
     }
+
+    if (live.tool === 'pen' && live.points.length >= 5) {
+      const candidate = recognizeMathSymbol(live, value.strokes);
+      if (candidate) {
+        const digitalItem = createDigitalItemFromRecognition(candidate, live, textSize);
+        if (autoConvertMath) {
+          commit(digitalItem);
+          return;
+        }
+        commit(live);
+        setRecognitionPrompt({
+          candidate,
+          strokeIndex: value.strokes.length,
+          digitalItem,
+        });
+        return;
+      }
+    }
+
     commit(live);
   };
 
@@ -347,6 +464,39 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
           className="absolute bg-sheet/95 border border-accent rounded-sm px-1 text-ink outline-none resize-none"
           style={{ left: `${(textDraft.x / value.width) * 100}%`, top: `${(textDraft.y / value.height) * 100}%`, transform: 'translateY(-1.1em)', fontSize: `${Math.max(12, textSize * 0.9)}px`, minWidth: '8rem', fontFamily: FONT_FAMILY, color: resolveColor(color, inkColor.current) }}
         />
+      ) : null}
+      {recognitionPrompt && !readOnly ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="absolute z-20 flex items-center gap-1.5 bg-sheet/95 backdrop-blur-sm border border-accent/80 rounded px-2 py-1 shadow-lg text-xs animate-in fade-in select-none"
+          style={{
+            left: `${Math.max(2, Math.min(80, (recognitionPrompt.candidate.bounds.minX / value.width) * 100))}%`,
+            top: `${Math.max(2, ((recognitionPrompt.candidate.bounds.minY - 38) / value.height) * 100)}%`,
+          }}
+        >
+          <span className="font-serif font-bold text-accent text-sm select-none">
+            {recognitionPrompt.candidate.symbol}
+          </span>
+          <span className="text-ink-2 truncate max-w-32 hidden sm:inline select-none">
+            {recognitionPrompt.candidate.name}
+          </span>
+          <button
+            type="button"
+            onClick={applyRecognition}
+            className="bg-accent text-white px-2 py-0.5 rounded font-medium text-xs hover:bg-accent/90 transition-colors shadow-xs cursor-pointer"
+          >
+            Convert
+          </button>
+          <button
+            type="button"
+            onClick={() => setRecognitionPrompt(null)}
+            className="text-ink-3 hover:text-ink px-1 text-xs cursor-pointer"
+            aria-label="Dismiss symbol suggestion"
+          >
+            ✕
+          </button>
+        </div>
       ) : null}
     </div>
   );
