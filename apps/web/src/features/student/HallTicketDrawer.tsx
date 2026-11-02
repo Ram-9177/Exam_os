@@ -2,11 +2,12 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDateTime } from '@/lib/time';
 import { Button, Dialog, KeyValue, PrintIcon, Stamp } from '@/ui';
-import { EXAM_TYPE_LABEL, type StudentExam } from './api';
+import { EXAM_TYPE_LABEL, type StudentExam, useStudentSignature } from './api';
 
 /** The hall ticket: the one document a student may be asked to show at the door. Printable. */
 export function HallTicketDrawer({ exam, open, onClose, timeZone, tenantName }: { exam: StudentExam; open: boolean; onClose: () => void; timeZone: string; tenantName: string }) {
   const { user, me } = useAuth();
+  const sigQuery = useStudentSignature();
   return (
     <Dialog
       open={open}
@@ -63,6 +64,38 @@ export function HallTicketDrawer({ exam, open, onClose, timeZone, tenantName }: 
             <p className="font-mono text-xs break-all mt-1">{exam.hallTicketVerification}</p>
           </div>
         ) : null}
+
+        {/* Dynamic Dual Signatures */}
+        <div className="mt-8 pt-6 border-t border-rule grid grid-cols-2 gap-4 text-center items-end">
+          <div className="flex flex-col items-center">
+            {sigQuery.data?.signatureDataUrl ? (
+              <img
+                src={sigQuery.data.signatureDataUrl}
+                alt="Signature of Candidate"
+                className="max-h-12 max-w-full object-contain mb-1"
+              />
+            ) : (
+              <div className="h-12 flex items-center justify-center text-xs text-ink-3 italic">
+                (No signature on file)
+              </div>
+            )}
+            <div className="border-t border-ink w-36 pt-1 text-xs font-semibold text-ink">
+              Candidate's Signature
+            </div>
+            <p className="text-[11px] text-ink-2 truncate max-w-44 mt-0.5">({user?.fullName ?? me?.email ?? 'Candidate'})</p>
+          </div>
+          <div className="flex flex-col items-center">
+            <div className="h-12 flex items-center justify-center">
+              <span className="font-serif italic text-ink font-semibold text-sm tracking-wide">
+                Controller of Examinations
+              </span>
+            </div>
+            <div className="border-t border-ink w-36 pt-1 text-xs font-semibold text-ink">
+              Controller of Examinations
+            </div>
+            <p className="text-[11px] text-ink-2 mt-0.5">(St. Mary's University)</p>
+          </div>
+        </div>
       </article>
     </Dialog>
   );

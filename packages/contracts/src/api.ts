@@ -381,12 +381,27 @@ export const TenantMailConfigSchema = z.object({
 });
 
 // ---------- student profile & id card (phase 3) ----------
-export const PhotoUploadSchema = z.object({
-  consentGiven: z.literal(true, {
-    message: 'Explicit consent is required to store your profile photo for university examination records',
-  }),
-  dataUrl: z.string().trim().regex(/^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/, 'Photo must be a base64 data URL (JPEG, PNG, or WebP)'),
-});
+export const PhotoUploadSchema = z
+  .object({
+    consentGiven: z.literal(true, {
+      message: 'Explicit consent is required to store your profile photo for university examination records',
+    }),
+    dataUrl: z.string().trim().optional(),
+    photoDataUrl: z.string().trim().optional(),
+  })
+  .refine((data) => !!(data.dataUrl || data.photoDataUrl), {
+    message: 'dataUrl or photoDataUrl is required',
+  })
+  .transform((data) => {
+    let raw = (data.dataUrl ?? data.photoDataUrl)!.trim();
+    if (!raw.startsWith('data:image/')) {
+      raw = `data:image/jpeg;base64,${raw}`;
+    }
+    return {
+      consentGiven: data.consentGiven,
+      dataUrl: raw,
+    };
+  });
 export type PhotoUploadInput = z.infer<typeof PhotoUploadSchema>;
 
 export interface StudentProfileData {

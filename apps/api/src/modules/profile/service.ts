@@ -22,9 +22,19 @@ export async function getStudentProfile(
     .first('id', 'full_name', 'email');
   if (!user) throw AppError.notFound('STUDENT_NOT_FOUND', 'Student profile not found');
 
-  const profile = await trx('student_profiles')
+  let profile = await trx('student_profiles')
     .where({ tenant_id: tenantId, user_id: userId })
     .first();
+
+  if (!profile) {
+    await trx('student_profiles')
+      .insert({ tenant_id: tenantId, user_id: userId, attributes: '{}' })
+      .onConflict('user_id')
+      .ignore();
+    profile = await trx('student_profiles')
+      .where({ tenant_id: tenantId, user_id: userId })
+      .first();
+  }
 
   const [dept, prog, photoDoc, hallTickets, examRecords] = await Promise.all([
     profile?.department_id
@@ -153,9 +163,17 @@ export async function uploadStudentPhoto(
       updated_at: trx.fn.now(),
     });
 
-  await trx('student_profiles')
-    .where({ tenant_id: tenantId, user_id: userId })
-    .update({ photo_object_ref: key, updated_at: trx.fn.now() });
+  const existingProfile = await trx('student_profiles').where({ tenant_id: tenantId, user_id: userId }).first('id');
+  if (existingProfile) {
+    await trx('student_profiles')
+      .where({ tenant_id: tenantId, user_id: userId })
+      .update({ photo_object_ref: key, updated_at: trx.fn.now() });
+  } else {
+    await trx('student_profiles')
+      .insert({ tenant_id: tenantId, user_id: userId, photo_object_ref: key, updated_at: trx.fn.now() })
+      .onConflict('user_id')
+      .merge({ photo_object_ref: key, updated_at: trx.fn.now() });
+  }
 
   await audit(trx, {
     tenantId,
@@ -204,17 +222,15 @@ export async function getIdCardData(
   if (!user) throw AppError.notFound('STUDENT_NOT_FOUND', 'Student not found');
 
   const profile = await trx('student_profiles').where({ tenant_id: tenantId, user_id: userId }).first();
-  if (!profile || !profile.register_number) {
-    throw AppError.badRequest('INCOMPLETE_PROFILE', 'Student register number is required for ID card generation');
-  }
+  const regNo = profile?.register_number || 'PENDING';
 
   const [dept, prog, photo] = await Promise.all([
-    profile.department_id ? trx('departments').where({ tenant_id: tenantId, id: profile.department_id }).first('code', 'name') : null,
-    profile.programme_id ? trx('programmes').where({ tenant_id: tenantId, id: profile.programme_id }).first('code', 'name') : null,
+    profile?.department_id ? trx('departments').where({ tenant_id: tenantId, id: profile.department_id }).first('code', 'name') : null,
+    profile?.programme_id ? trx('programmes').where({ tenant_id: tenantId, id: profile.programme_id }).first('code', 'name') : null,
     trx('student_documents').where({ tenant_id: tenantId, user_id: userId, kind: 'PHOTO' }).first('id'),
   ]);
 
-  const hash = computeStudentVerificationHash(tenantId, userId, profile.register_number);
+  const hash = computeStudentVerificationHash(tenantId, userId, regNo);
   const verifyUrl = `https://${host}/student/verify-student/${hash}`;
   const qrDataUrl = await generateQrDataUrl(verifyUrl);
 
@@ -222,7 +238,7 @@ export async function getIdCardData(
     valid: true,
     tenantName: tenant?.name ?? "St. Mary's University",
     fullName: user.full_name,
-    registerNumber: profile.register_number,
+    registerNumber: profile?.register_number ?? null,
     departmentCode: dept?.code ?? null,
     departmentName: dept?.name ?? null,
     programmeCode: prog?.code ?? null,

@@ -756,6 +756,15 @@ export function ProfilePage() {
                     {formatDate(ht.windowStartAt, tz)} - {formatDate(ht.windowEndAt, tz)}
                   </p>
                 </div>
+                <div className="pt-1">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void api.download(`/student/me/exams/${ht.examId}/hall-ticket.pdf`, `hall-ticket-${ht.examCode}.pdf`)}
+                  >
+                    Download Official PDF
+                  </Button>
+                </div>
               </div>
             ))}
           </div>

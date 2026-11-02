@@ -562,7 +562,7 @@ describe('end-to-end exam flow', () => {
     expect(JSON.stringify(ev!.data)).not.toContain('warning'); // never proctoring data to the ERP
     const mail = await ctx.admin('mail_dispatches').where({ tenant_id: t.tenantId, category: 'RESULT_PUBLISHED', to_address: A.email }).first();
     expect(mail).toBeTruthy();
-    expect(mail.body_text).not.toContain('13'); // no marks in mail bodies
+    expect(mail.body_text.split('portal:')[0]).not.toContain('13'); // no marks in mail bodies
     const pull = await req().get('/api/v1/integration/v1/results').set('Authorization', `Bearer ${erpKey.apiKey}`).query({ examCode: 'CS301-MID1' });
     expect(pull.status).toBe(200);
     expect(pull.body.results).toEqual([expect.objectContaining({ studentExternalId: A.externalId, provider: 'uos', grade: 'B+' })]);

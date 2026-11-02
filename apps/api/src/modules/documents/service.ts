@@ -151,7 +151,7 @@ export async function getOrRenderHallTicketPdf(
     .where({ 'rg.tenant_id': tenantId })
     .whereIn('rg.role_code', ['CONTROLLER', 'TENANT_ADMIN'])
     .whereNull('rg.revoked_at')
-    .whereNotNull('u.signature_data_url')
+    .where(trx.raw("length(trim(COALESCE(u.signature_data_url, ''))) > 20"))
     .orderByRaw(`
       CASE 
         WHEN rg.role_code = 'CONTROLLER' AND (u.email LIKE 'controller@%' OR u.full_name ILIKE '%controller%') THEN 0
@@ -185,9 +185,12 @@ export async function getOrRenderHallTicketPdf(
     .where({ tenant_id: tenantId, id: userId })
     .first('full_name as fullName', 'email', 'signature_data_url as signatureDataUrl');
 
+  const candidateSig = candidateUser?.signatureDataUrl && candidateUser.signatureDataUrl.trim().length > 20 ? candidateUser.signatureDataUrl.trim() : null;
+  const controllerSig = controllerUser?.signatureDataUrl && controllerUser.signatureDataUrl.trim().length > 20 ? controllerUser.signatureDataUrl.trim() : null;
+
   const TEMPLATE_VERSION = 'v3_dual_signature';
   const currentSigHash = sha256Hex(
-    `${TEMPLATE_VERSION}:${controllerUser?.signatureDataUrl ?? 'no_ctrl'}:${candidateUser?.signatureDataUrl ?? 'no_cand'}`
+    `${TEMPLATE_VERSION}:${controllerSig ?? 'no_ctrl'}:${candidateSig ?? 'no_cand'}`
   );
 
   const storage = getDocumentStorage();
@@ -240,8 +243,8 @@ export async function getOrRenderHallTicketPdf(
     departmentName: dept?.departmentName,
     departmentCode: dept?.departmentCode,
     verificationHash: ht.verification_hash,
-    candidateSignatureDataUrl: candidateUser.signatureDataUrl ?? null,
-    controllerSignatureDataUrl: controllerUser?.signatureDataUrl ?? null,
+    candidateSignatureDataUrl: candidateSig,
+    controllerSignatureDataUrl: controllerSig,
     controllerName: controllerUser?.fullName ?? null,
   };
 

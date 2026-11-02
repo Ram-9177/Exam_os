@@ -236,6 +236,14 @@ function CandidateDrawer({ examId, candidate, tz, onClose }: { examId: string; c
             >
               Download Evidence Dossier (PDF)
             </Button>
+            {c?.packet.user_id ? (
+              <Button
+                variant="ghost"
+                onClick={() => void api.download(`/exams/${examId}/hall-tickets/${c.packet.user_id}/pdf`, `hall-ticket-${candidate.registerNumber ?? candidate.hallTicket ?? c.packet.user_id}.pdf`)}
+              >
+                Download Hall Ticket (PDF)
+              </Button>
+            ) : null}
             {candidate.status === 'ATTEMPT_SEALED' ? (
               <Button onClick={() => void forensics()} loading={busy}>
                 Run completeness checks
