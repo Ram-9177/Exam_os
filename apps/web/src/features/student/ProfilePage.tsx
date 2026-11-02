@@ -1,7 +1,8 @@
 import { useState, useRef, type ChangeEvent } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/time';
+import { api } from '@/lib/api';
 import {
   Button,
   Dialog,
@@ -9,15 +10,17 @@ import {
   EmptyState,
   PageTitle,
   Skeleton,
-  StatusChip,
   Badge,
+  Select,
   useToast,
-  cn,
 } from '@/ui';
 import {
   useStudentProfile,
   useStudentIdCard,
+  useStudentSignature,
   uploadStudentPhoto,
+  uploadStudentSignature,
+  deleteStudentSignature,
 } from './api';
 
 export function ProfilePage() {
@@ -26,9 +29,26 @@ export function ProfilePage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const profileQuery = useStudentProfile();
-  const idCardQuery = useStudentIdCard();
+  const isStaff = me?.kind === 'STAFF';
 
+  // For staff viewing students: load student roster
+  const studentsQuery = useQuery({
+    queryKey: ['tenant', 'students-roster-profile'],
+    queryFn: () =>
+      api.get<{ users: Array<{ id: string; fullName: string; email: string; registerNumber?: string | null }> }>(
+        '/tenant/users?kind=STUDENT'
+      ),
+    enabled: isStaff,
+  });
+  const studentsList = studentsQuery.data?.users ?? [];
+  const [selectedStudentId, setSelectedStudentId] = useState<string>('');
+  const activeStudentId = isStaff ? (selectedStudentId || (studentsList[0]?.id ?? '')) : '';
+
+  const profileQuery = useStudentProfile(activeStudentId || undefined);
+  const idCardQuery = useStudentIdCard(activeStudentId || undefined);
+  const signatureQuery = useStudentSignature(activeStudentId || undefined);
+
+  // Photo modal state
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -37,8 +57,18 @@ export function ProfilePage() {
   const [photoKey, setPhotoKey] = useState(Date.now());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // E-Signature modal state
+  const [isSigOpen, setIsSigOpen] = useState(false);
+  const [sigMode, setSigMode] = useState<'upload' | 'draw'>('upload');
+  const [sigDataUrl, setSigDataUrl] = useState<string | null>(null);
+  const [sigError, setSigError] = useState<string | null>(null);
+  const [sigBusy, setSigBusy] = useState(false);
+  const sigCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isDrawingSig, setIsDrawingSig] = useState(false);
+
   const profile = profileQuery.data?.profile;
   const idCard = idCardQuery.data?.idCard;
+  const signature = signatureQuery.data?.signatureDataUrl;
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     setFileError(null);
@@ -50,14 +80,44 @@ export function ProfilePage() {
       return;
     }
 
-    if (file.size > 2 * 1024 * 1024) {
-      setFileError('Image file size must be less than 2MB.');
+    if (file.size > 5 * 1024 * 1024) {
+      setFileError('Image file size must be less than 5MB.');
       return;
     }
 
     const reader = new FileReader();
     reader.onload = () => {
-      setPhotoDataUrl(reader.result as string);
+      if (typeof reader.result !== 'string') return;
+      const raw = reader.result;
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 400;
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, w);
+        canvas.height = Math.max(1, h);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, w, h);
+          setPhotoDataUrl(canvas.toDataURL('image/jpeg', 0.9));
+        } else {
+          setPhotoDataUrl(raw);
+        }
+      };
+      img.onerror = () => {
+        setPhotoDataUrl(raw);
+      };
+      img.src = raw;
     };
     reader.onerror = () => {
       setFileError('Failed to read the selected file.');
@@ -77,13 +137,13 @@ export function ProfilePage() {
 
     setIsSubmitting(true);
     try {
-      await uploadStudentPhoto({
-        photoDataUrl,
-        consentGiven: true,
-      });
+      await uploadStudentPhoto(
+        { photoDataUrl, consentGiven: true },
+        activeStudentId || undefined
+      );
       toast({
         title: 'Photograph uploaded successfully',
-        description: 'Your official examination photograph has been recorded.',
+        description: 'Official examination photograph has been recorded.',
         tone: 'success',
       });
       setIsUploadOpen(false);
@@ -100,6 +160,148 @@ export function ProfilePage() {
     }
   };
 
+  // Signature handlers
+  const handleSigFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    setSigError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setSigError('Signature image must be under 5 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') return;
+      const raw = reader.result;
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 500;
+        const maxH = 150;
+        let w = img.width;
+        let h = img.height;
+        if (w > maxW || h > maxH) {
+          const ratio = Math.min(maxW / w, maxH / h);
+          w = Math.round(w * ratio);
+          h = Math.round(h * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, w);
+        canvas.height = Math.max(1, h);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, w, h);
+          setSigDataUrl(canvas.toDataURL('image/png'));
+        } else {
+          setSigDataUrl(raw);
+        }
+      };
+      img.onerror = () => {
+        setSigDataUrl(raw);
+      };
+      img.src = raw;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const startDrawingSig = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = sigCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
+    const touch = 'touches' in e ? e.touches[0] : null;
+    const clientX = touch ? touch.clientX : ('clientX' in e ? e.clientX : 0);
+    const clientY = touch ? touch.clientY : ('clientY' in e ? e.clientY : 0);
+    ctx.beginPath();
+    ctx.moveTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#111827';
+    setIsDrawingSig(true);
+  };
+
+  const drawSig = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDrawingSig) return;
+    const canvas = sigCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
+    const touch = 'touches' in e ? e.touches[0] : null;
+    const clientX = touch ? touch.clientX : ('clientX' in e ? e.clientX : 0);
+    const clientY = touch ? touch.clientY : ('clientY' in e ? e.clientY : 0);
+    ctx.lineTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
+    ctx.stroke();
+  };
+
+  const stopDrawingSig = () => {
+    if (!isDrawingSig) return;
+    setIsDrawingSig(false);
+    const canvas = sigCanvasRef.current;
+    if (canvas) {
+      setSigDataUrl(canvas.toDataURL('image/png'));
+    }
+  };
+
+  const clearSigCanvas = () => {
+    const canvas = sigCanvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    setSigDataUrl(null);
+  };
+
+  const saveSignature = async () => {
+    if (!sigDataUrl) {
+      setSigError('Please draw or choose a signature image first.');
+      return;
+    }
+    setSigBusy(true);
+    setSigError(null);
+    try {
+      await uploadStudentSignature({ signatureDataUrl: sigDataUrl }, activeStudentId || undefined);
+      toast({
+        tone: 'success',
+        title: 'E-Signature recorded',
+        description: 'Candidate signature updated and dynamically mapped to examination documents.',
+      });
+      setIsSigOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ['student', 'signature'] });
+      void queryClient.invalidateQueries({ queryKey: ['student', 'profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['student', 'id-card'] });
+    } catch (err) {
+      setSigError(err instanceof Error ? err.message : 'Could not save signature.');
+    } finally {
+      setSigBusy(false);
+    }
+  };
+
+  const removeSignature = async () => {
+    setSigBusy(true);
+    setSigError(null);
+    try {
+      await deleteStudentSignature(activeStudentId || undefined);
+      toast({
+        tone: 'success',
+        title: 'Signature removed',
+        description: 'Candidate signature has been unmapped.',
+      });
+      setIsSigOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ['student', 'signature'] });
+      void queryClient.invalidateQueries({ queryKey: ['student', 'profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['student', 'id-card'] });
+    } catch (err) {
+      setSigError(err instanceof Error ? err.message : 'Could not remove signature.');
+    } finally {
+      setSigBusy(false);
+    }
+  };
+
   if (profileQuery.isLoading) {
     return (
       <div className="max-w-5xl space-y-6">
@@ -111,7 +313,27 @@ export function ProfilePage() {
 
   if (profileQuery.isError || !profile) {
     return (
-      <div className="max-w-5xl">
+      <div className="max-w-5xl space-y-4">
+        {isStaff && studentsList.length > 0 ? (
+          <div className="sheet p-4 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <span className="text-xs uppercase tracking-wider font-semibold text-ink-3">Staff Mode</span>
+              <p className="text-sm text-ink font-medium">Select a student record to inspect</p>
+            </div>
+            <div className="min-w-64">
+              <Select
+                value={activeStudentId}
+                onChange={(e) => setSelectedStudentId(e.target.value)}
+              >
+                {studentsList.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.fullName} ({s.registerNumber ?? s.email})
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+        ) : null}
         <EmptyState title="Could not load student profile">
           Your student identity records could not be retrieved. Please refresh or contact the Examination Section.
         </EmptyState>
@@ -120,15 +342,38 @@ export function ProfilePage() {
   }
 
   const { student, department, programme, documents, hallTickets, cumulative } = profile;
-  const photoSrc = documents.photo ? `/api/v1/student/profile/photo?t=${photoKey}` : null;
+  const photoSrc = documents.photo
+    ? `/api/v1/student/profile/photo?t=${photoKey}${activeStudentId ? `&userId=${activeStudentId}` : ''}`
+    : null;
 
   return (
     <div className="max-w-5xl space-y-10">
-      <div className="no-print">
+      <div className="no-print space-y-4">
         <PageTitle
           title="Student Profile & ID"
           lede="Official identity details, verifiable university examination credential, and academic progression record."
         />
+
+        {isStaff && studentsList.length > 0 ? (
+          <div className="sheet p-4 flex flex-wrap items-center justify-between gap-4 border-l-4 border-l-accent">
+            <div>
+              <span className="text-xs uppercase tracking-wider font-semibold text-accent">Staff Identity View</span>
+              <p className="text-sm text-ink font-medium">Inspecting candidate credential for examination authorization</p>
+            </div>
+            <div className="min-w-72">
+              <Select
+                value={activeStudentId}
+                onChange={(e) => setSelectedStudentId(e.target.value)}
+              >
+                {studentsList.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.fullName} ({s.registerNumber ?? s.email})
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* Main Identity & Profile Section */}
@@ -165,17 +410,29 @@ export function ProfilePage() {
             </div>
           </div>
 
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setPhotoDataUrl(null);
-              setFileError(null);
-              setConsentGiven(false);
-              setIsUploadOpen(true);
-            }}
-          >
-            {documents.photo ? 'Update Photograph' : 'Upload Photograph'}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setPhotoDataUrl(null);
+                setFileError(null);
+                setConsentGiven(false);
+                setIsUploadOpen(true);
+              }}
+            >
+              {documents.photo ? 'Update Photograph' : 'Upload Photograph'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSigDataUrl(signature ?? null);
+                setSigError(null);
+                setIsSigOpen(true);
+              }}
+            >
+              {signature ? 'Update E-Signature' : 'Upload E-Signature'}
+            </Button>
+          </div>
         </div>
 
         {/* Academic Profile Grid */}
@@ -212,6 +469,52 @@ export function ProfilePage() {
           <div>
             <span className="text-xs text-ink-3 uppercase tracking-wider block font-medium">Language Preference</span>
             <span className="text-sm text-ink mt-1 block">{student.preferredLanguage ?? 'English'}</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Official Candidate E-Signature Card */}
+      <section aria-labelledby="signature-heading" className="no-print sheet p-6">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-rule">
+          <div>
+            <h2 id="signature-heading" className="text-lg font-serif text-ink font-semibold">
+              Official Candidate E-Signature
+            </h2>
+            <p className="text-sm text-ink-2">
+              Cryptographically bound digital signature dynamically printed onto your examination hall tickets.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              setSigDataUrl(signature ?? null);
+              setSigError(null);
+              setIsSigOpen(true);
+            }}
+          >
+            {signature ? 'Manage Signature' : 'Add E-Signature'}
+          </Button>
+        </div>
+
+        <div className="pt-4 flex flex-col sm:flex-row items-center gap-6">
+          <div className="bg-white p-3 rounded-md border border-rule flex flex-col items-center justify-center min-w-56 min-h-24">
+            {signature ? (
+              <img src={signature} alt="Candidate digital signature" className="max-h-16 max-w-full object-contain mb-1" />
+            ) : (
+              <span className="text-xs text-ink-3 italic">No signature on file</span>
+            )}
+            <div className="border-t border-ink w-44 text-center text-xs font-semibold text-ink pt-1">
+              Candidate's Signature
+            </div>
+          </div>
+          <div className="text-xs text-ink-2 space-y-1">
+            <p className="font-medium text-ink">
+              Status: {signature ? <span className="text-ready font-semibold">Active &amp; Mapped</span> : <span className="text-fix font-semibold">Pending Signature</span>}
+            </p>
+            <p>
+              Your digital e-signature appears on the bottom-left of every official examination hall ticket alongside the Controller of Examinations seal.
+            </p>
           </div>
         </div>
       </section>
@@ -320,7 +623,7 @@ export function ProfilePage() {
       <section aria-labelledby="analytics-heading" className="no-print space-y-6">
         <div>
           <h2 id="analytics-heading" className="text-lg font-serif text-ink font-semibold">
-            Academic Analytics & Performance Progression
+            Academic Analytics &amp; Performance Progression
           </h2>
           <p className="text-sm text-ink-2">
             Cumulative performance metrics computed exclusively from Controller-published exam records.
@@ -349,33 +652,32 @@ export function ProfilePage() {
           </div>
           <div className="bg-sheet p-4 text-center">
             <span className="text-xs text-ink-3 uppercase block font-medium">Cumulative GPA</span>
-            <span className="text-2xl font-mono text-accent mt-1 block font-bold">
-              {cumulative.gpa.toFixed(2)}
+            <span className="text-2xl font-mono text-ink mt-1 block">
+              {(cumulative as any).gpa !== undefined && (cumulative as any).gpa !== null
+                ? Number((cumulative as any).gpa).toFixed(2)
+                : (cumulative.percentage / 10).toFixed(2)}
             </span>
           </div>
         </div>
 
-        {/* Academic Progression SVG Chart */}
+        {/* Visual Progression Graphic */}
         {cumulative.totalExams > 0 ? (
           <div className="sheet p-6 space-y-4">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-ink-2">
-              Performance Trend Across Published Exams
-            </h3>
-            <div className="w-full overflow-x-auto py-2">
-              <svg
-                viewBox="0 0 600 200"
-                className="w-full h-48 select-none"
-                aria-label="Student exam marks progression chart"
-                role="img"
-              >
-                {/* Background grid lines */}
-                <line x1="40" y1="20" x2="580" y2="20" stroke="var(--rule)" strokeDasharray="3 3" />
-                <line x1="40" y1="60" x2="580" y2="60" stroke="var(--rule)" strokeDasharray="3 3" />
-                <line x1="40" y1="100" x2="580" y2="100" stroke="var(--rule)" strokeDasharray="3 3" />
-                <line x1="40" y1="140" x2="580" y2="140" stroke="var(--rule)" strokeDasharray="3 3" />
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-ink">Overall Examination Standing Progression</h3>
+              <span className="text-xs font-mono text-ink-3">Passing Criterion: 40%</span>
+            </div>
+
+            <div className="w-full overflow-x-auto">
+              <svg viewBox="0 0 600 200" className="w-full h-48 select-none" role="img" aria-label="Student exam marks progression chart">
+                {/* Horizontal reference lines */}
+                <line x1="40" y1="20" x2="580" y2="20" stroke="var(--rule)" strokeDasharray="2 2" />
+                <line x1="40" y1="60" x2="580" y2="60" stroke="var(--rule)" strokeDasharray="2 2" />
+                <line x1="40" y1="100" x2="580" y2="100" stroke="var(--rule)" strokeDasharray="2 2" />
+                <line x1="40" y1="140" x2="580" y2="140" stroke="var(--rule)" strokeDasharray="2 2" />
                 <line x1="40" y1="180" x2="580" y2="180" stroke="var(--rule)" />
 
-                {/* Y Axis labels */}
+                {/* Y-axis labels */}
                 <text x="32" y="24" textAnchor="end" className="text-[10px] fill-ink-3 font-mono">100%</text>
                 <text x="32" y="64" textAnchor="end" className="text-[10px] fill-ink-3 font-mono">75%</text>
                 <text x="32" y="104" textAnchor="end" className="text-[10px] fill-ink-3 font-mono">50%</text>
@@ -476,7 +778,7 @@ export function ProfilePage() {
 
           <div>
             <label htmlFor="photo-file" className="block text-sm font-medium text-ink mb-1">
-              Select Image File (Max 2MB)
+              Select Image File (Max 5MB)
             </label>
             <input
               ref={fileInputRef}
@@ -521,6 +823,122 @@ export function ProfilePage() {
           </div>
         </div>
       </Dialog>
+
+      {/* Upload / Draw E-Signature Modal Dialog */}
+      {isSigOpen ? (
+        <Dialog
+          open
+          onClose={() => setIsSigOpen(false)}
+          title={`Digital E-Signature — ${student.fullName}`}
+          description="Upload or draw an official digital signature for this candidate. This signature automatically renders on examination hall tickets and authentic dossiers."
+          size="md"
+          footer={
+            <div className="flex w-full items-center justify-between">
+              <div>
+                {signature ? (
+                  <Button variant="danger" size="sm" onClick={() => void removeSignature()} loading={sigBusy}>
+                    Remove signature
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="ghost" onClick={() => setIsSigOpen(false)} disabled={sigBusy}>
+                  Cancel
+                </Button>
+                <Button variant="primary" onClick={() => void saveSignature()} loading={sigBusy}>
+                  Save E-Signature
+                </Button>
+              </div>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <div className="flex border-b border-rule pb-2 gap-4">
+              <button
+                type="button"
+                className={`text-sm font-medium pb-1 cursor-pointer transition-colors ${
+                  sigMode === 'upload' ? 'border-b-2 border-accent text-accent font-semibold' : 'text-ink-2 hover:text-ink'
+                }`}
+                onClick={() => setSigMode('upload')}
+              >
+                Upload image
+              </button>
+              <button
+                type="button"
+                className={`text-sm font-medium pb-1 cursor-pointer transition-colors ${
+                  sigMode === 'draw' ? 'border-b-2 border-accent text-accent font-semibold' : 'text-ink-2 hover:text-ink'
+                }`}
+                onClick={() => setSigMode('draw')}
+              >
+                Draw signature
+              </button>
+            </div>
+
+            {sigMode === 'upload' ? (
+              <div>
+                <label htmlFor="sig-file-input" className="block text-sm font-medium text-ink mb-1">
+                  Select signature image (PNG, JPEG, WebP)
+                </label>
+                <input
+                  id="sig-file-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handleSigFileUpload}
+                  className="block w-full text-sm text-ink-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border file:border-rule file:text-sm file:font-semibold file:bg-sheet-2 hover:file:bg-sheet cursor-pointer"
+                />
+                <p className="text-xs text-ink-3 mt-1.5">
+                  Clear, dark ink on transparent or light background recommended.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-medium text-ink">Draw signature inside the frame</span>
+                  <Button size="sm" variant="ghost" onClick={clearSigCanvas}>
+                    Clear
+                  </Button>
+                </div>
+                <div className="border-2 border-dashed border-rule rounded bg-white overflow-hidden touch-none">
+                  <canvas
+                    ref={sigCanvasRef}
+                    width={400}
+                    height={120}
+                    className="w-full h-30 cursor-crosshair block"
+                    onMouseDown={startDrawingSig}
+                    onMouseMove={drawSig}
+                    onMouseUp={stopDrawingSig}
+                    onMouseLeave={stopDrawingSig}
+                    onTouchStart={startDrawingSig}
+                    onTouchMove={drawSig}
+                    onTouchEnd={stopDrawingSig}
+                  />
+                </div>
+                <p className="text-xs text-ink-3 mt-1.5">
+                  Use your mouse, trackpad, or pen/finger to sign.
+                </p>
+              </div>
+            )}
+
+            {sigDataUrl ? (
+              <div className="p-3 border border-rule rounded bg-sheet-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">Signature Preview</p>
+                <div className="bg-white p-3 rounded border border-rule flex flex-col items-center justify-center min-h-24">
+                  <img src={sigDataUrl} alt="Signature preview" className="max-h-16 max-w-full object-contain mb-1" />
+                  <div className="border-t border-ink w-48 text-center text-xs font-semibold text-ink pt-1">
+                    Candidate's Signature
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {sigError ? (
+              <p className="text-stop text-sm" role="alert">
+                {sigError}
+              </p>
+            ) : null}
+          </div>
+        </Dialog>
+      ) : null}
     </div>
   );
 }

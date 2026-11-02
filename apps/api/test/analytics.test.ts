@@ -248,6 +248,42 @@ describe('Phase 3 — Student Profile, ID Card, and Department Analytics', () =>
     expect(fakeVerify.status).toBe(404);
   });
 
+  it('allows staff to inspect student profile without 404 and manages candidate e-signatures', async () => {
+    // 1. Staff requests student profile without userId query -> resolves to first student cleanly (200 OK)
+    const staffViewAuto = await req().get('/api/v1/student/profile').set(H(t.admin.token));
+    expect(staffViewAuto.status).toBe(200);
+    expect(staffViewAuto.body.student).toBeDefined();
+    expect(staffViewAuto.body.student.fullName).toBe('Aarav Patel');
+
+    // 2. Staff requests student profile with explicit userId query
+    const staffViewExplicit = await req().get(`/api/v1/student/profile?userId=${student1.userId}`).set(H(t.admin.token));
+    expect(staffViewExplicit.status).toBe(200);
+    expect(staffViewExplicit.body.student.id).toBe(student1.userId);
+
+    // 3. Candidate uploads digital e-signature
+    const sampleSig = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAPAAAAA8CAYAAABYfzddAAABjklEQVR4nO3bS07DQBBF0eyAIXtg/8thMYhZ+CRO4nb3q/I5EkOkorsuEna4XAAAAAAAAAAAAABgvrf3j897X6vnA65sBStmCLQnXDHDIntDFDIsMjo4IcMEMwIT8ev8ucJNsy/fwj3G8wc2rbxoS/bX6AeHzriplItNmWO10eEJubHEy0ycaYZZkQm5ieQLTJ7tCCuCEnJhFS7sDIuVEFDCDDyh2kV1XK7EaBJn4peql9NpsdJDSZ/vtKpfSPWlqhRGpVlPodNFVFysijN/E3KAjodfZam6BFB9/rI6H3xyHMmzvarLz1FGp+W5JykU71YZ4mzLkxBNwgw0cOYFWhGQcBnGEq37f+YznzkDWKSfjgjsVrjOnF0s0v/uBbd1Vlvf67wZwjJtezRG0TKVpXqOcE+gykVZrP3E2lCFS6wwIyyR/Js4eTaIkRhK4kwQLSWalDmgnJXxCBcGWPGUUrww2IyQvdKAAx317lC4MNHeT+341A8E2PvxPOFCCOFCE4IFAAAAAAAAAAAAjvcFxE2/P71/fvMAAAAASUVORK5CYII=';
+    const sigUpload = await req()
+      .put('/api/v1/student/profile/signature')
+      .set(H(student1.token))
+      .send({ signatureDataUrl: sampleSig });
+    expect(sigUpload.status).toBe(200);
+    expect(sigUpload.body.ok).toBe(true);
+
+    // 4. Candidate reads digital e-signature
+    const sigRead = await req().get('/api/v1/student/profile/signature').set(H(student1.token));
+    expect(sigRead.status).toBe(200);
+    expect(sigRead.body.signatureDataUrl).toBe(sampleSig);
+
+    // 5. Candidate removes digital e-signature
+    const sigDelete = await req().delete('/api/v1/student/profile/signature').set(H(student1.token));
+    expect(sigDelete.status).toBe(200);
+    expect(sigDelete.body.ok).toBe(true);
+
+    const sigAfterDelete = await req().get('/api/v1/student/profile/signature').set(H(student1.token));
+    expect(sigAfterDelete.status).toBe(200);
+    expect(sigAfterDelete.body.signatureDataUrl).toBeNull();
+  });
+
   it('calculates department academic rollups, enforces HOD department scoping, and respects proctoring privacy', async () => {
     // 1. Seed published exam results for CSE students
     const examId = randomUUID();

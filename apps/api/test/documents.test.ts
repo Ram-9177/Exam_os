@@ -204,11 +204,13 @@ describe('Server-side PDF and QR verification (hall ticket, booklet, evidence, e
       durationMinutes: 60,
       securityProfile: 'BASIC_BROWSER',
       verificationHash: 'vhash123',
+      candidateSignatureDataUrl: sampleSig,
       controllerSignatureDataUrl: sampleSig,
       controllerName: 'Controller Name',
     }, 'data:image/png;base64,qr');
 
-    expect(ticketHtml).not.toContain("Candidate's Signature");
+    expect(ticketHtml).toContain("Candidate's Signature");
+    expect(ticketHtml).toContain('Signature of Candidate');
     expect(ticketHtml).toContain('Controller of Examinations');
     expect(ticketHtml).toContain('Signature of Controller of Examinations');
     expect(ticketHtml).toContain(sampleSig);

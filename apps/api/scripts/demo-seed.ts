@@ -278,6 +278,20 @@ async function main() {
       studentTokens[s.email] = await activate(tenantId, s.email, 'Demo-Student!2026');
     }
 
+    // Seed candidate digital signature & profile photo for student01
+    const s1Auth = { Host: HOST, Authorization: `Bearer ${studentTokens['student01@demo.local']}` };
+    await req()
+      .put('/api/v1/student/profile/signature')
+      .set(s1Auth)
+      .send({ signatureDataUrl: DEMO_SIGNATURE_PNG });
+
+    const DEMO_STUDENT_PHOTO_PNG =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABTSURBVHhe7c4BDQAgEASxE39pG2Fw0Fw2mX1755x9e7GwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsDiygYw6E6B+2hIAAAAASUVORK5CYII=';
+    await req()
+      .post('/api/v1/student/profile/photo')
+      .set(s1Auth)
+      .send({ photoDataUrl: DEMO_STUDENT_PHOTO_PNG, consentGiven: true });
+
     // Role handles
     const E = { Host: HOST, Authorization: `Bearer ${staff['examcell@demo.local']}` };
     const S = E; // Exam Section has Question Setter duties
@@ -1085,8 +1099,8 @@ async function main() {
       return r.status === 200 && r.body.questions.length === 4 && r.body.questions[0].marks === 11;
     });
 
-    // Smoke 7: Hall Ticket PDF & Absence of Candidate Signature
-    await check('Hall ticket PDF generates with QR code, Controller signature, and NO candidate signature', async () => {
+    // Smoke 7: Hall Ticket PDF with Dual Dynamic Signatures
+    await check('Hall ticket PDF generates with QR code, Controller signature, and Candidate signature dynamically mapped', async () => {
       const r = await req().get(`/api/v1/student/me/exams/${exam2.examId}/hall-ticket.pdf`).set(s1Tok).responseType('blob');
       return (
         r.status === 200 &&

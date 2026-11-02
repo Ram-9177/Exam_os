@@ -15,8 +15,41 @@
 @import '@fontsource-variable/atkinson-hyperlegible-next/index.css';
 @import '@fontsource-variable/atkinson-hyperlegible-mono/index.css';
 
-:root {
-  color-scheme: light dark;
+/* Default Dark Theme ("the calm examination hall in deep slate") */
+:root,
+:root[data-theme='dark'],
+html.dark {
+  color-scheme: dark;
+
+  --paper: #15171b; /* slate */
+  --sheet: #1c1f25;
+  --sheet-2: #22262d;
+  --ink: #e9e8e1;
+  --ink-2: #a3a7b0;
+  --ink-3: #7f8490;
+  --rule: #2f333b;
+  --rule-2: #3c414a;
+  --rule-blue: #2c3444;
+  --margin-rose: #6e3f3d;
+  --accent: #9db0ff;
+  --accent-ink: #0f1430;
+  --accent-soft: #232a45;
+  --ready: #6ccb8a;
+  --ready-soft: #16301f;
+  --fix: #e2a93b;
+  --fix-soft: #35270a;
+  --stop: #f28b82;
+  --stop-soft: #3a1917;
+  --note: #a3a7b0;
+  --note-soft: #262a31;
+  --focus: #9db0ff;
+  --selection: #2b3660;
+}
+
+/* Explicit Light Theme (fresh desk sheet and blue-black ink) */
+:root[data-theme='light'],
+html.light {
+  color-scheme: light;
 
   --paper: #f3f4ef; /* ledger paper, faintly green-grey */
   --sheet: #fbfbf8; /* a fresh sheet lying on the desk */
@@ -41,34 +74,6 @@
   --note-soft: #e7e8e4;
   --focus: #1e3fb8;
   --selection: #d7dff5;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #15171b; /* slate */
-    --sheet: #1c1f25;
-    --sheet-2: #22262d;
-    --ink: #e9e8e1;
-    --ink-2: #a3a7b0;
-    --ink-3: #7f8490;
-    --rule: #2f333b;
-    --rule-2: #3c414a;
-    --rule-blue: #2c3444;
-    --margin-rose: #6e3f3d;
-    --accent: #9db0ff;
-    --accent-ink: #0f1430;
-    --accent-soft: #232a45;
-    --ready: #6ccb8a;
-    --ready-soft: #16301f;
-    --fix: #e2a93b;
-    --fix-soft: #35270a;
-    --stop: #f28b82;
-    --stop-soft: #3a1917;
-    --note: #a3a7b0;
-    --note-soft: #262a31;
-    --focus: #9db0ff;
-    --selection: #2b3660;
-  }
 }
 
 @theme inline {

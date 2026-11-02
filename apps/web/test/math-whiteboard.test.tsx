@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import type { Stroke, StrokePoint } from '@/lib/answers';
+import type { Stroke, StrokePoint, AnswerDoc } from '@/lib/answers';
 import { emptyCanvas, insertDigitalSymbolOnCanvas } from '@/features/drawing/DrawingSurface';
 import { MATH_CATEGORIES, COMMON_FORMULAS } from '@/features/drawing/mathSymbols';
 import { extractStrokeFeatures, recognizeMathSymbol } from '@/features/drawing/strokeRecognition';
@@ -197,7 +197,7 @@ describe('MathPalette Component', () => {
 describe('AnswerEditor Whiteboard Math Integration', () => {
   it('toggles Math Palette in Diagram block and places digital math onto canvas', () => {
     const canvas = emptyCanvas(800, 480);
-    const doc = {
+    const doc: AnswerDoc = {
       blocks: [
         { id: 'b1', kind: 'paragraph', content: 'Here is my solution:' },
         { id: 'b2', kind: 'canvas', content: canvas },
@@ -236,7 +236,7 @@ describe('AnswerEditor Whiteboard Math Integration', () => {
 
   it('toggles Auto-convert mode in the whiteboard toolbar', () => {
     const canvas = emptyCanvas(800, 480);
-    const doc = {
+    const doc: AnswerDoc = {
       blocks: [
         { id: 'b2', kind: 'canvas', content: canvas },
       ],

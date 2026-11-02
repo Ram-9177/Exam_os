@@ -6,16 +6,20 @@ import './app.css';
 import { queryClient } from './app/queries';
 import { router } from './app/router';
 import { AuthProvider } from './lib/auth';
+import { ThemeProvider } from './lib/theme';
 import { ToastProvider } from './ui';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <AuthProvider>
-          <RouterProvider router={router} />
-        </AuthProvider>
-      </ToastProvider>
+      <ThemeProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <RouterProvider router={router} />
+          </AuthProvider>
+        </ToastProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,
 );
+

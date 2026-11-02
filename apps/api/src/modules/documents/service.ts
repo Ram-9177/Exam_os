@@ -180,10 +180,15 @@ export async function getOrRenderHallTicketPdf(
       .first(trx.raw('NULL as "signatureDataUrl"'), 'u.full_name as fullName', 'u.id as userId');
   }
 
-  const TEMPLATE_VERSION = 'v2_controller_only';
-  const currentSigHash = controllerUser?.signatureDataUrl
-    ? sha256Hex(controllerUser.signatureDataUrl)
-    : 'none';
+  // Look for candidate user and signature
+  const candidateUser = await trx('users')
+    .where({ tenant_id: tenantId, id: userId })
+    .first('full_name as fullName', 'email', 'signature_data_url as signatureDataUrl');
+
+  const TEMPLATE_VERSION = 'v3_dual_signature';
+  const currentSigHash = sha256Hex(
+    `${TEMPLATE_VERSION}:${controllerUser?.signatureDataUrl ?? 'no_ctrl'}:${candidateUser?.signatureDataUrl ?? 'no_cand'}`
+  );
 
   const storage = getDocumentStorage();
   const entityId = `${examId}:${userId}`;
@@ -207,14 +212,13 @@ export async function getOrRenderHallTicketPdf(
     }
   }
 
-  const [exam, user, profile, tenant] = await Promise.all([
+  const [exam, profile, tenant] = await Promise.all([
     trx('exams').where({ tenant_id: tenantId, id: examId }).first(),
-    trx('users').where({ tenant_id: tenantId, id: userId }).first('full_name', 'email'),
     trx('student_profiles').where({ tenant_id: tenantId, user_id: userId }).first('register_number', 'current_semester'),
     trx('tenants').where('id', tenantId).first('name'),
   ]);
 
-  if (!exam || !user) throw AppError.notFound('EXAM_OR_USER_NOT_FOUND');
+  if (!exam || !candidateUser) throw AppError.notFound('EXAM_OR_USER_NOT_FOUND');
 
   const dept = exam.course_id
     ? await trx('courses as c').join('departments as d', 'd.id', 'c.department_id').where('c.id', exam.course_id).first('d.name as departmentName', 'd.code as departmentCode')
@@ -223,7 +227,7 @@ export async function getOrRenderHallTicketPdf(
   const ticketData = {
     number: ht.number,
     tenantName: tenant?.name,
-    studentName: user.full_name,
+    studentName: candidateUser.fullName,
     registerNumber: profile?.register_number,
     semester: profile?.current_semester ?? exam.semester,
     examTitle: exam.title,
@@ -236,6 +240,7 @@ export async function getOrRenderHallTicketPdf(
     departmentName: dept?.departmentName,
     departmentCode: dept?.departmentCode,
     verificationHash: ht.verification_hash,
+    candidateSignatureDataUrl: candidateUser.signatureDataUrl ?? null,
     controllerSignatureDataUrl: controllerUser?.signatureDataUrl ?? null,
     controllerName: controllerUser?.fullName ?? null,
   };

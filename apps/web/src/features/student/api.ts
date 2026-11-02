@@ -2,22 +2,49 @@ import { useQuery } from '@tanstack/react-query';
 import type { AttemptStatus, ExamStatus, ExamType, IdCardVerificationData, SecurityProfile, StudentProfileData } from '@examos/contracts';
 import { api } from '@/lib/api';
 
-export function useStudentProfile() {
+export function useStudentProfile(userId?: string) {
   return useQuery({
-    queryKey: ['student', 'profile'],
-    queryFn: () => api.get<{ profile: StudentProfileData }>('/student/profile'),
+    queryKey: ['student', 'profile', userId ?? 'me'],
+    queryFn: () =>
+      api.get<{ profile: StudentProfileData }>(
+        userId ? `/student/profile?userId=${encodeURIComponent(userId)}` : '/student/profile'
+      ),
   });
 }
 
-export function useStudentIdCard() {
+export function useStudentIdCard(userId?: string) {
   return useQuery({
-    queryKey: ['student', 'id-card'],
-    queryFn: () => api.get<{ idCard: IdCardVerificationData & { qrDataUrl: string } }>('/student/profile/id-card'),
+    queryKey: ['student', 'id-card', userId ?? 'me'],
+    queryFn: () =>
+      api.get<{ idCard: IdCardVerificationData & { qrDataUrl: string } }>(
+        userId ? `/student/profile/id-card?userId=${encodeURIComponent(userId)}` : '/student/profile/id-card'
+      ),
   });
 }
 
-export async function uploadStudentPhoto(input: { photoDataUrl: string; consentGiven: true }) {
-  return api.post<{ sha256: string; byteLength: number; mimeType: string }>('/student/profile/photo', input);
+export function useStudentSignature(userId?: string) {
+  return useQuery({
+    queryKey: ['student', 'signature', userId ?? 'me'],
+    queryFn: () =>
+      api.get<{ signatureDataUrl: string | null; signatureUpdatedAt: string | null }>(
+        userId ? `/student/profile/signature?userId=${encodeURIComponent(userId)}` : '/student/profile/signature'
+      ),
+  });
+}
+
+export async function uploadStudentPhoto(input: { photoDataUrl: string; consentGiven: true }, userId?: string) {
+  const path = userId ? `/student/profile/photo?userId=${encodeURIComponent(userId)}` : '/student/profile/photo';
+  return api.post<{ sha256: string; byteLength: number; mimeType: string }>(path, input);
+}
+
+export async function uploadStudentSignature(input: { signatureDataUrl: string }, userId?: string) {
+  const path = userId ? `/student/profile/signature?userId=${encodeURIComponent(userId)}` : '/student/profile/signature';
+  return api.put<{ ok: true; userId: string }>(path, { signatureDataUrl: input.signatureDataUrl, dataUrl: input.signatureDataUrl });
+}
+
+export async function deleteStudentSignature(userId?: string) {
+  const path = userId ? `/student/profile/signature?userId=${encodeURIComponent(userId)}` : '/student/profile/signature';
+  return api.del<{ ok: true; userId: string }>(path);
 }
 
 export async function fetchPublicStudentVerification(hash: string) {

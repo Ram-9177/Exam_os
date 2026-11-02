@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router';
 import type { RoleCode } from '@examos/contracts';
 import { useAuth } from '@/lib/auth';
+import { ThemeToggle } from '@/lib/theme';
 import { useTenant } from './queries';
 import { Button, cn } from '@/ui';
 
@@ -13,7 +14,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: '/student', label: 'My exams', roles: ['STUDENT'] },
   { to: '/student/ledger', label: 'Results', roles: ['STUDENT'] },
-  { to: '/student/profile', label: 'Profile & ID', roles: ['STUDENT'] },
+  { to: '/student/profile', label: 'Profile & ID', roles: ['STUDENT', 'TENANT_ADMIN', 'CONTROLLER', 'EXAM_CELL_OPERATOR'] },
   { to: '/examcell', label: 'Exams', roles: ['EXAM_CELL_OPERATOR', 'CONTROLLER'] },
   { to: '/evaluate', label: 'Marking', roles: ['EVALUATOR', 'MODERATOR'] },
   { to: '/proctor', label: 'Invigilation', roles: ['PROCTOR', 'CHIEF_PROCTOR'] },
@@ -50,6 +51,7 @@ export function AppShell() {
             ))}
           </nav>
           <div className="flex items-center gap-3 text-sm">
+            <ThemeToggle />
             <span className="text-ink-2 truncate max-w-48">{user?.fullName ?? me?.email}</span>
             <Button
               size="sm"

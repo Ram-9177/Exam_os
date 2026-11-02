@@ -188,6 +188,7 @@ export function extractStrokeFeatures(points: StrokePoint[]): StrokeFeatures {
     startEndDistance,
     isClosed,
     circularity,
+    cornerCount,
     xTurnCount,
     yTurnCount,
     selfIntersectionCount,

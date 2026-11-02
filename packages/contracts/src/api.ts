@@ -67,11 +67,21 @@ export const UserCreateSchema = z.object({
   sendActivation: z.boolean().default(true),
 });
 
-export const UserSignatureUploadSchema = z.object({
-  signatureDataUrl: z.string().min(20).max(4_000_000).refine((s) => s.startsWith('data:image/'), {
-    message: 'Signature must be a valid image data URL (data:image/...)',
-  }),
-});
+export const UserSignatureUploadSchema = z
+  .object({
+    signatureDataUrl: z.string().min(10).max(10_000_000).optional(),
+    dataUrl: z.string().min(10).max(10_000_000).optional(),
+  })
+  .refine((d) => Boolean(d.signatureDataUrl || d.dataUrl), {
+    message: 'Either signatureDataUrl or dataUrl must be provided',
+  })
+  .transform((d) => {
+    let url = (d.signatureDataUrl ?? d.dataUrl)!.trim();
+    if (!url.startsWith('data:')) {
+      url = `data:image/png;base64,${url}`;
+    }
+    return { signatureDataUrl: url };
+  });
 
 // ---------- exams ----------
 export const SecurityProfileInput = z

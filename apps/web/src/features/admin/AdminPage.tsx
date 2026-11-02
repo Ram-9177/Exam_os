@@ -86,6 +86,7 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
   const [create, setCreate] = useState(false);
   const [roleFor, setRoleFor] = useState<UserRow | null>(null);
   const [signatureFor, setSignatureFor] = useState<UserRow | null>(null);
+  const [photoFor, setPhotoFor] = useState<UserRow | null>(null);
   const users = useQuery({ queryKey: ['tenant', 'users', q, kind], queryFn: () => api.get<{ users: UserRow[] }>(`/tenant/users?q=${encodeURIComponent(q)}&kind=${kind}`) });
   const columns: Column<UserRow>[] = [
     { key: 'name', header: 'Name', render: (u) => (
@@ -115,6 +116,11 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
             <Button size="sm" variant="secondary" onClick={() => setSignatureFor(u)}>
               e-Sign
             </Button>
+            {u.kind === 'STUDENT' ? (
+              <Button size="sm" variant="secondary" onClick={() => setPhotoFor(u)}>
+                Photo
+              </Button>
+            ) : null}
             <Button size="sm" onClick={() => setRoleFor(u)}>
               Roles
             </Button>
@@ -148,9 +154,11 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
       {create ? <CreateUserDialog onClose={() => setCreate(false)} /> : null}
       {roleFor ? <RoleDialog user={roleFor} onClose={() => setRoleFor(null)} /> : null}
       {signatureFor ? <SignatureDialog user={signatureFor} onClose={() => setSignatureFor(null)} /> : null}
+      {photoFor ? <StudentPhotoDialog user={photoFor} onClose={() => setPhotoFor(null)} /> : null}
     </div>
   );
 }
+
 
 function CreateUserDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
@@ -402,7 +410,7 @@ function SignatureDialog({ user, onClose }: { user: UserRow; onClose: () => void
     setBusy(true);
     setError(null);
     try {
-      await api.put(`/tenant/users/${user.id}/signature`, { signatureDataUrl: dataUrl }, { quiet: ['VALIDATION_FAILED', 'VALIDATION'] });
+      await api.put(`/tenant/users/${user.id}/signature`, { signatureDataUrl: dataUrl, dataUrl }, { quiet: ['VALIDATION_FAILED', 'VALIDATION'] });
       toast({ tone: 'success', title: 'E-Signature mapped', description: `Digital signature saved and mapped for ${user.fullName}.` });
       void qc.invalidateQueries({ queryKey: ['tenant', 'users'] });
       onClose();
@@ -524,7 +532,7 @@ function SignatureDialog({ user, onClose }: { user: UserRow; onClose: () => void
             <div className="bg-white p-3 rounded border border-line-2 flex flex-col items-center justify-center min-h-22.5">
               <img src={dataUrl} alt="Signature preview" className="max-h-16 max-w-full object-contain mb-1" />
               <div className="border-t border-ink w-48 text-center text-xs font-semibold text-ink pt-1">
-                Controller of Examinations
+                {user.kind === 'STUDENT' ? "Candidate's Signature" : 'Controller of Examinations'}
               </div>
             </div>
           </div>
@@ -539,6 +547,131 @@ function SignatureDialog({ user, onClose }: { user: UserRow; onClose: () => void
     </Dialog>
   );
 }
+
+function StudentPhotoDialog({ user, onClose }: { user: UserRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Image file must be under 5 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') return;
+      const raw = reader.result;
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 400;
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, w);
+        canvas.height = Math.max(1, h);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, w, h);
+          setPhotoDataUrl(canvas.toDataURL('image/jpeg', 0.9));
+        } else {
+          setPhotoDataUrl(raw);
+        }
+      };
+      img.onerror = () => {
+        setPhotoDataUrl(raw);
+      };
+      img.src = raw;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const save = async () => {
+    if (!photoDataUrl) {
+      setError('Please select a photograph to upload.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(`/student/profile/photo?userId=${user.id}`, { photoDataUrl, consentGiven: true }, { quiet: ['VALIDATION_FAILED', 'VALIDATION'] });
+      toast({ tone: 'success', title: 'Photograph saved', description: `Official photograph uploaded for ${user.fullName}.` });
+      void qc.invalidateQueries({ queryKey: ['tenant', 'users'] });
+      void qc.invalidateQueries({ queryKey: ['student', 'profile'] });
+      onClose();
+    } catch (err) {
+      setError(isApiError(err) ? (err.problem.errors?.map((x) => `${x.path}: ${x.message}`).join('; ') ?? `${err.problem.title} (${err.code})`) : 'Could not save photograph.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Candidate Photograph — ${user.fullName}`}
+      description="Upload an official photograph for this student. This photograph appears on the student's examination ID card, attendance register, and hall tickets."
+      size="md"
+      footer={
+        <div className="flex w-full items-center justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={() => void save()} loading={busy} disabled={!photoDataUrl}>
+            Save Photograph
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <label htmlFor="photo-upload-input" className="block text-sm font-medium text-ink mb-1">
+            Select student photograph (PNG, JPEG, WebP)
+          </label>
+          <input
+            id="photo-upload-input"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={handleFileChange}
+            className="block w-full text-sm text-ink-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border file:border-line file:text-sm file:font-semibold file:bg-surface-2 hover:file:bg-surface cursor-pointer"
+          />
+          <p className="text-xs text-ink-3 mt-1.5">
+            Passport-style front-facing photo recommended. Max 5 MB.
+          </p>
+        </div>
+
+        {photoDataUrl ? (
+          <div className="p-3 border border-line rounded bg-surface-2 flex flex-col items-center">
+            <p className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">Photograph Preview</p>
+            <img src={photoDataUrl} alt="Photograph preview" className="w-32 h-36 rounded object-cover border border-line shadow-sm" />
+          </div>
+        ) : null}
+
+        {error ? (
+          <p className="text-stop text-sm" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </Dialog>
+  );
+}
+
 
 // ---------------------------------------------------------------- mail
 const TRANSPORT_HELP: Record<string, string> = {

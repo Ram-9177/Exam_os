@@ -218,7 +218,7 @@ export function renderHallTicketHtml(ticket: any, qrDataUrl: string): string {
     .rules { margin-top: 24px; padding: 16px; border: 1px solid #e5e7eb; border-radius: 6px; background: #f9fafb; font-size: 12px; }
     .rules ul { margin: 6px 0 0; padding-left: 18px; }
     .rules li { margin-bottom: 4px; }
-    .signature-area { margin-top: 40px; display: flex; justify-content: flex-end; }
+    .signature-area { margin-top: 40px; display: flex; justify-content: space-between; align-items: flex-end; }
     .sig-block { text-align: center; width: 220px; }
     .sig-img { max-height: 55px; max-width: 200px; display: block; margin: 0 auto 6px auto; object-fit: contain; }
     .sig-space { height: 45px; }
@@ -284,6 +284,11 @@ export function renderHallTicketHtml(ticket: any, qrDataUrl: string): string {
     </div>
 
     <div class="signature-area">
+      <div class="sig-block">
+        ${t.candidateSignatureDataUrl ? `<img src="${t.candidateSignatureDataUrl}" class="sig-img" alt="Signature of Candidate" />` : '<div class="sig-space"></div>'}
+        <div class="sig-line">Candidate's Signature</div>
+        ${t.studentName ? `<div class="sig-name">(${escapeHtml(t.studentName)})</div>` : ''}
+      </div>
       <div class="sig-block">
         ${t.controllerSignatureDataUrl ? `<img src="${t.controllerSignatureDataUrl}" class="sig-img" alt="Signature of Controller of Examinations" />` : '<div class="sig-space"></div>'}
         <div class="sig-line">Controller of Examinations</div>
