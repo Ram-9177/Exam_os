@@ -86,6 +86,9 @@ async function main() {
     return r.body;
   }
 
+  const smokePass: string[] = [];
+  const smokeFail: string[] = [];
+
   try {
     console.log('\n===============================================================');
     console.log('   SMRU ExamOS — Comprehensive End-to-End Dummy Data Seeder   ');
@@ -369,6 +372,17 @@ async function main() {
         ],
       }),
       'exam1:sets',
+    );
+    must(
+      await req().post(`/api/v1/exams/${exam1.examId}/seb-config`).set(E).send({
+        allowQuit: true,
+        quitPassword: 'Demo-Quit!2026',
+        kioskMode: true,
+        blockVirtualMachines: true,
+        blockScreenCapture: true,
+        blockClipboard: true,
+      }),
+      'exam1:seb-config',
     );
     must(await req().post(`/api/v1/exams/${exam1.examId}/allocations`).set(E).send({ studentExternalIds: students.map((s) => s.externalId), provider: 'uos' }), 'exam1:alloc');
     must(await req().post(`/api/v1/exams/${exam1.examId}/hall-tickets`).set(E).send({}), 'exam1:hall-tickets');
@@ -1019,6 +1033,7 @@ async function main() {
 
     // Process outbox and workers
     console.log('[Phase 5] Processing notification dispatches, outbox events, and workers...');
+    await admin('mail_dispatches').where({ tenant_id: tenantId, status: 'QUEUED' }).update({ next_attempt_at: new Date() });
     await runMailWorkerOnce(deps, 'TRANSACTIONAL');
     await runMailWorkerOnce(deps, 'BULK');
     await runWebhookWorkerOnce(deps);
@@ -1028,8 +1043,6 @@ async function main() {
     // Phase 6: End-to-End API Smoke Verification & Assertions
     // =========================================================================
     console.log('[Phase 6] Running automated end-to-end smoke verification across all surfaces...\n');
-    const smokePass: string[] = [];
-    const smokeFail: string[] = [];
 
     async function check(name: string, fn: () => Promise<boolean>, detail?: string) {
       try {
@@ -1060,39 +1073,180 @@ async function main() {
       const r = await req().get(`/api/v1/tenant/users/${adminUser.id}/signature`).set(A);
       return r.status === 200 && typeof r.body.signatureDataUrl === 'string' && r.body.signatureDataUrl.length > 50;
     });
+    const s1Tok = { Host: HOST, Authorization: `Bearer ${studentTokens['student01@demo.local']}` };
+    await check('Student authentication & session token verification', async () => {
+      const r = await req().get('/api/v1/auth/me').set(s1Tok);
+      return r.status === 200 && r.body.email === 'student01@demo.local' && r.body.kind === 'STUDENT';
+    });
 
-    // Smoke 2: Exams & Lifecycles
-    await check('Exams list shows all 5 distinct phases', async () => {
+    // Smoke 2: Student Identity & Profile Subsystem
+    await check('Student Profile endpoint returns full profile with photo and registration number', async () => {
+      const r = await req().get('/api/v1/student/profile').set(s1Tok);
+      const data = r.body.student ? r.body : r.body.profile;
+      return (
+        r.status === 200 &&
+        data.student?.fullName === 'Aarav Sharma' &&
+        data.student?.registerNumber === '22CSE001' &&
+        data.department?.code === 'CSE' &&
+        data.documents?.photo !== null
+      );
+    });
+    await check('Student ID Card verification data and dynamic QR data URL generated', async () => {
+      const r = await req().get('/api/v1/student/profile/id-card').set(s1Tok);
+      const data = r.body.valid !== undefined ? r.body : r.body.idCard;
+      return (
+        r.status === 200 &&
+        data.valid === true &&
+        data.registerNumber === '22CSE001' &&
+        typeof data.qrDataUrl === 'string' &&
+        data.qrDataUrl.startsWith('data:image/png;base64,')
+      );
+    });
+    await check('Candidate Digital E-Signature endpoint returns signature data URL', async () => {
+      const r = await req().get('/api/v1/student/profile/signature').set(s1Tok);
+      return (
+        r.status === 200 &&
+        typeof r.body.signatureDataUrl === 'string' &&
+        r.body.signatureDataUrl.length > 50
+      );
+    });
+
+    // Smoke 3: Safe Exam Browser (SEB) Lifecycle
+    await check('Safe Exam Browser (.seb) config generated and downloadable by staff and candidate', async () => {
+      const rStaff = await req().get(`/api/v1/exams/${exam1.examId}/seb-config`).set(E);
+      const rStudent = await req().get(`/api/v1/student/me/exams/${exam1.examId}/seb-config`).set(s1Tok);
+      return (
+        rStaff.status === 200 &&
+        rStudent.status === 200 &&
+        Boolean(rStaff.headers['content-type']?.includes('application/seb')) &&
+        typeof rStaff.headers['x-seb-configkey'] === 'string'
+      );
+    });
+
+    // Smoke 4: Exams & Lifecycles
+    await check('Exams list shows all 5 distinct phases (SCHEDULED, PRECHECK, LIVE, CLOSED, PUBLISHED)', async () => {
       const r = await req().get('/api/v1/exams').set(E);
       const codes = r.body.exams.map((x: any) => x.code);
       return r.status === 200 && ['CS301-MID1', 'CS302-SEM', 'CS303-LIVE', 'CS304-EVAL', 'CS305-PUB'].every((c) => codes.includes(c));
     });
+    await check('Question paper contains multi-section descriptive questions with scoring rubrics', async () => {
+      const r = await req().get(`/api/v1/exams/${exam1.examId}/paper`).set(E);
+      const paper = r.body.paper ?? r.body;
+      return (
+        r.status === 200 &&
+        Array.isArray(paper.sections) &&
+        paper.sections.length === 2 &&
+        Array.isArray(paper.questions) &&
+        paper.questions.length === 4
+      );
+    });
 
-    // Smoke 3: Readiness Board (CS301-MID1)
+    // Smoke 5: Readiness Board & Controller Waivers (CS301-MID1)
     await check('Readiness Board displays live candidate distribution and exceptions', async () => {
       const r = await req().get(`/api/v1/exams/${exam2.examId}/readiness`).set(E);
       return r.status === 200 && r.body.summary.ready >= 7 && r.body.summary.total === 12;
     });
+    await check('Controller admission exception waived precheck block for dual monitor candidate', async () => {
+      const r = await req().get(`/api/v1/exams/${exam2.examId}/readiness`).set(E);
+      const s09 = r.body.candidates?.find((c: any) => c.email === 'student09@demo.local');
+      return r.status === 200 && s09 && s09.status === 'READY';
+    });
 
-    // Smoke 4: Live Proctoring (CS303-LIVE)
+    // Smoke 6: Live Proctoring, Autosaves & Device Security (CS303-LIVE)
+    const s01_e3 = e3Map['student01@demo.local']!;
     const s02_e3 = e3Map['student02@demo.local']!;
+    const s04_e3 = e3Map['student04@demo.local']!;
+    await check('Live Autosave OT records answer document with vector canvas diagram strokes', async () => {
+      const r = await req().get(`/api/v1/student/attempts/${s01_e3.att.id}/answers/Q1`).set(s1Tok);
+      const blocks = (r.body?.content as any)?.blocks ?? r.body?.document?.blocks ?? r.body?.blocks;
+      return (
+        r.status === 200 &&
+        Array.isArray(blocks) &&
+        blocks.some((b: any) => b.kind === 'canvas' && Array.isArray(b.content?.strokes))
+      );
+    });
+    await check('Autosave idempotency: repeating clientOperationId returns original receipt', async () => {
+      const q1Blocks = [{ id: 'p1', kind: 'paragraph', content: 'Idempotency test payload' }];
+      const opId = randomUUID();
+      const r1 = await req()
+        .put(`/api/v1/student/attempts/${s01_e3.att.id}/answers/Q2`)
+        .set(s1Tok)
+        .set('x-device-session', exam3DeviceSessions[0]!)
+        .send({
+          clientOperationId: opId,
+          baseRevision: 0,
+          answerFormat: 'hybrid-v1',
+          ops: [{ op: 'upsert-block', blockId: 'p1', kind: 'paragraph', content: 'Idempotency test payload' }],
+          contentSha256: answerHash(q1Blocks),
+        });
+      const r2 = await req()
+        .put(`/api/v1/student/attempts/${s01_e3.att.id}/answers/Q2`)
+        .set(s1Tok)
+        .set('x-device-session', exam3DeviceSessions[0]!)
+        .send({
+          clientOperationId: opId,
+          baseRevision: 0,
+          answerFormat: 'hybrid-v1',
+          ops: [{ op: 'upsert-block', blockId: 'p1', kind: 'paragraph', content: 'Idempotency test payload' }],
+          contentSha256: answerHash(q1Blocks),
+        });
+      return r1.status === 200 && r2.status === 200 && r1.body.revision === r2.body.revision;
+    });
+    await check('Concurrent session from unapproved device refused with DEVICE_SESSION_MISMATCH', async () => {
+      const rogueDev = randomUUID();
+      const q1Blocks = [{ id: 'p1', kind: 'paragraph', content: 'Rogue session payload' }];
+      const r = await req()
+        .put(`/api/v1/student/attempts/${s01_e3.att.id}/answers/Q1`)
+        .set(s1Tok)
+        .set('x-device-session', rogueDev)
+        .send({
+          clientOperationId: randomUUID(),
+          baseRevision: 1,
+          answerFormat: 'hybrid-v1',
+          ops: [{ op: 'upsert-block', blockId: 'p1', kind: 'paragraph', content: 'Rogue session payload' }],
+          contentSha256: answerHash(q1Blocks),
+        });
+      return r.status === 409 && (r.body.code === 'DEVICE_SESSION_MISMATCH' || r.body.error === 'DEVICE_SESSION_MISMATCH');
+    });
     await check('Proctoring queue and timeline events populated', async () => {
       const q = await req().get(`/api/v1/proctor/incidents?examId=${exam3.examId}`).set(P);
       const t = await req().get(`/api/v1/proctor/attempts/${s02_e3.att.id}/timeline`).set(P);
       return q.status === 200 && t.status === 200 && t.body.events.length > 0;
     });
+    await check('Warning threshold suspends candidate and Chief Proctor resume extends deadline', async () => {
+      const timeline = await req().get(`/api/v1/proctor/attempts/${s04_e3.att.id}/timeline`).set(P);
+      const events = timeline.body?.events ?? [];
+      const hasSuspended = events.some((e: any) => e.event_type === 'attempt.suspended');
+      const hasResumed = events.some((e: any) => e.event_type === 'attempt.resumed');
+      return timeline.status === 200 && hasSuspended && hasResumed;
+    });
 
-    // Smoke 5: Evaluation Queue (CS304-EVAL)
+    // Smoke 7: Evaluation Queue & Integrity Hold (CS304-EVAL)
     const s01_e4 = e4Map['student01@demo.local']!;
+    const s03_e4 = e4Map['student03@demo.local']!;
     await check('Evaluator queue and candidate paper viewing with rubrics', async () => {
       const q = await req().get(`/api/v1/candidates/queue?examId=${exam4.examId}`).set(EV);
       const p = await req().get(`/api/v1/candidates/${s01_e4.att.id}/paper`).set(EV);
       return q.status === 200 && p.status === 200 && Array.isArray(q.body.candidates);
     });
+    await check('Candidate integrity hold blocks publication checklist for flagged candidate', async () => {
+      const r = await req().get(`/api/v1/candidates/${s03_e4.att.id}/checklist`).set(E);
+      return (
+        r.status === 200 &&
+        r.body.publishable === false &&
+        r.body.packet?.status === 'INTEGRITY_HOLD'
+      );
+    });
 
-    // Smoke 6: Student Portal, Ledgers & Answer Booklets (CS305-PUB)
-    const s1Tok = { Host: HOST, Authorization: `Bearer ${studentTokens['student01@demo.local']}` };
+    // Smoke 8: Approvals, Publication & Student Ledger (CS305-PUB)
     const s01_e5 = e5Map['student01@demo.local']!;
+    await check('Exam Cell candidate approvals and Controller publication authorizations confirmed', async () => {
+      const r = await req().get(`/api/v1/exams/${exam5.examId}`).set(E);
+      const packets = await admin('candidate_review_packets')
+        .where({ tenant_id: tenantId, exam_id: exam5.examId })
+        .whereIn('status', ['PUBLISHED', 'REVALUATION_PENDING']);
+      return r.status === 200 && r.body.exam?.status === 'CLOSED' && packets.length === 6;
+    });
     await check('Student Lifelong Ledger displays published grades (A+, B+, etc.)', async () => {
       const r = await req().get('/api/v1/student/me/ledger').set(s1Tok);
       return r.status === 200 && r.body.records.length >= 1 && ['O', 'A+'].includes(r.body.records[0].grade);
@@ -1102,7 +1256,7 @@ async function main() {
       return r.status === 200 && r.body.questions.length === 4 && r.body.questions[0].marks === 11;
     });
 
-    // Smoke 7: Hall Ticket PDF with Dual Dynamic Signatures
+    // Smoke 9: Hall Ticket PDF with Dual Dynamic Signatures
     await check('Hall ticket PDF generates with QR code, Controller signature, and Candidate signature dynamically mapped', async () => {
       const r = await req().get(`/api/v1/student/me/exams/${exam2.examId}/hall-ticket.pdf`).set(s1Tok).responseType('blob');
       return (
@@ -1113,7 +1267,7 @@ async function main() {
       );
     });
 
-    // Smoke 8: Revaluation Workflow
+    // Smoke 10: Revaluation Workflow
     const s02_e5 = e5Map['student02@demo.local']!;
     await check('Revaluation request recorded for student02 and listed for Exam Cell', async () => {
       const s2Tok = { Host: HOST, Authorization: `Bearer ${studentTokens['student02@demo.local']}` };
@@ -1127,7 +1281,7 @@ async function main() {
       );
     });
 
-    // Smoke 9: Analytics Engine
+    // Smoke 11: Analytics Engine & Outbox Dispatch
     await check('Analytics overview computes pass rate and grade distribution from published ledger', async () => {
       const r = await req().get('/api/v1/analytics/overview').set(A);
       const deptSummary = r.body.departments?.[0]?.summary;
@@ -1137,6 +1291,11 @@ async function main() {
         deptSummary.totalPublishedResults === 6 &&
         deptSummary.passRate === 100
       );
+    });
+    await check('Outbox mail workers processed account activations and exam notifications', async () => {
+      const queued = await admin('mail_dispatches').where({ tenant_id: tenantId, status: 'QUEUED' });
+      const accepted = await admin('mail_dispatches').where({ tenant_id: tenantId, status: 'ACCEPTED' });
+      return queued.length === 0 && accepted.length > 0;
     });
 
     // Summary output
@@ -1174,6 +1333,7 @@ ERP API Key: ${erpKey.apiKey}
   } finally {
     await admin.destroy();
     await closeDeps(deps);
+    process.exit(smokeFail.length > 0 ? 1 : 0);
   }
 }
 

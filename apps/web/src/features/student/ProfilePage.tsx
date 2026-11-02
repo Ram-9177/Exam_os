@@ -1,4 +1,5 @@
 import { useState, useRef, type ChangeEvent } from 'react';
+import type { StudentProfileData, IdCardVerificationData } from '@examos/contracts';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/time';
@@ -66,8 +67,10 @@ export function ProfilePage() {
   const sigCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawingSig, setIsDrawingSig] = useState(false);
 
-  const profile = profileQuery.data?.profile;
-  const idCard = idCardQuery.data?.idCard;
+  const profile: StudentProfileData | undefined =
+    (profileQuery.data as any)?.profile ?? (profileQuery.data as unknown as StudentProfileData);
+  const idCard: (IdCardVerificationData & { qrDataUrl: string }) | undefined =
+    (idCardQuery.data as any)?.idCard ?? (idCardQuery.data as unknown as (IdCardVerificationData & { qrDataUrl: string }));
   const signature = signatureQuery.data?.signatureDataUrl;
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {

@@ -45,7 +45,10 @@ export function profileRoutes(deps: AppDeps, jwt: JwtService): Router {
       const targetUserId = await tenantTx(deps, req, (trx) =>
         resolveTargetStudentId(trx, t.id, p, req.query['userId'])
       );
-      res.json(await tenantTx(deps, req, (trx) => getStudentProfile(deps, trx, t.id, targetUserId)));
+      const profileData = await tenantTx(deps, req, (trx) =>
+        getStudentProfile(deps, trx, t.id, targetUserId),
+      );
+      res.json({ profile: profileData, ...profileData });
     }),
   );
 
@@ -152,7 +155,10 @@ export function profileRoutes(deps: AppDeps, jwt: JwtService): Router {
       const targetUserId = await tenantTx(deps, req, (trx) =>
         resolveTargetStudentId(trx, t.id, p, req.query['userId'])
       );
-      res.json(await tenantTx(deps, req, (trx) => getIdCardData(deps, trx, t.id, targetUserId, host)));
+      const idCardData = await tenantTx(deps, req, (trx) =>
+        getIdCardData(deps, trx, t.id, targetUserId, host),
+      );
+      res.json({ idCard: idCardData, ...idCardData });
     }),
   );
 
