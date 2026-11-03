@@ -1,6 +1,6 @@
 import { promptText } from '@examos/contracts';
 import type { ReactNode } from 'react';
-import { isCanvasContent, paragraphText, type AnswerDoc } from '@/lib/answers';
+import { isCanvasContent, paragraphText, type AnswerDoc, type Block, type CanvasContent } from '@/lib/answers';
 import { formatDateTime } from '@/lib/time';
 import { cn } from '@/ui';
 import { StrokesSvg } from '@/features/drawing/StrokesSvg';
@@ -9,6 +9,93 @@ import type { ExamType } from '@examos/contracts';
 
 function examTypeLabel(t: string): string {
   return (EXAM_TYPE_LABEL as Record<string, string>)[t as ExamType] ?? t.replace(/_/g, ' ').toLowerCase();
+}
+
+export function parseAnswerBlocks(input: unknown): Block[] {
+  if (!input) return [];
+  let obj = input;
+  if (typeof obj === 'string') {
+    const trimmed = obj.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        obj = JSON.parse(trimmed);
+      } catch {
+        return [{ id: 'b-fallback', kind: 'paragraph', content: obj }];
+      }
+    } else {
+      return [{ id: 'b-fallback', kind: 'paragraph', content: obj }];
+    }
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map((b, i) => normalizeSingleBlock(b, `b-${i}`));
+  }
+
+  if (typeof obj === 'object' && obj !== null) {
+    const record = obj as Record<string, any>;
+    if (Array.isArray(record.blocks)) {
+      return record.blocks.map((b: any, i: number) => normalizeSingleBlock(b, `b-${i}`));
+    }
+    if (record.content && typeof record.content === 'object') {
+      if (Array.isArray(record.content.blocks)) {
+        return record.content.blocks.map((b: any, i: number) => normalizeSingleBlock(b, `b-${i}`));
+      }
+      if (Array.isArray(record.content.strokes)) {
+        return [{ id: 'b-c0', kind: 'canvas', content: record.content }];
+      }
+    }
+    if (Array.isArray(record.strokes)) {
+      return [{ id: 'b-c0', kind: 'canvas', content: record }];
+    }
+    if (typeof record.text === 'string') {
+      return [{ id: 'b-t0', kind: 'paragraph', content: record.text }];
+    }
+  }
+
+  return [];
+}
+
+function normalizeSingleBlock(b: any, fallbackId: string): Block {
+  if (!b || typeof b !== 'object') {
+    return { id: fallbackId, kind: 'paragraph', content: String(b ?? '') };
+  }
+  const id = typeof b.id === 'string' && b.id ? b.id : fallbackId;
+  const kind = typeof b.kind === 'string' ? b.kind : 'paragraph';
+  let content = b.content !== undefined ? b.content : (b.value ?? b.text ?? null);
+  if (typeof content === 'string' && (kind === 'canvas' || kind === 'drawing')) {
+    try {
+      content = JSON.parse(content);
+    } catch {
+      // keep
+    }
+  }
+  return { id, kind: kind as any, content };
+}
+
+export function normalizeCanvasContent(content: unknown): CanvasContent | null {
+  if (!content) return null;
+  let c = content as any;
+  if (typeof c === 'string') {
+    try {
+      c = JSON.parse(c);
+    } catch {
+      return null;
+    }
+  }
+  if (!c || typeof c !== 'object') return null;
+  if (!Array.isArray(c.strokes)) {
+    if (c.content && Array.isArray(c.content.strokes)) {
+      c = c.content;
+    } else {
+      return null;
+    }
+  }
+  return {
+    width: typeof c.width === 'number' && c.width > 0 ? c.width : 800,
+    height: typeof c.height === 'number' && c.height > 0 ? c.height : 480,
+    background: c.background || 'blank',
+    strokes: c.strokes,
+  };
 }
 
 export interface BookletQuestion {
@@ -42,26 +129,70 @@ export function questionLabel(id: string, index: number): string {
   return m ? `Question ${m[1]}` : `Question ${index + 1} (${id})`;
 }
 
-/** The answer rendered as it was written: paragraphs on ruled paper, diagrams from their strokes. */
-export function AnswerRender({ doc, className }: { doc: AnswerDoc; className?: string }) {
-  const blocks = doc.blocks ?? [];
-  if (blocks.length === 0 || blocks.every((b) => b.kind === 'paragraph' && !paragraphText(b).trim())) {
-    return <p className={cn('ruled ruled-inset text-ink-3 italic min-h-16', className)}>No answer was written.</p>;
+/** The answer rendered as it was written: paragraphs on ruled paper, diagrams from their strokes, equations and code. */
+export function AnswerRender({ doc, className }: { doc: AnswerDoc | unknown; className?: string }) {
+  const blocks = parseAnswerBlocks(doc);
+
+  const hasContent = blocks.some((b) => {
+    if (b.kind === 'paragraph') return typeof b.content === 'string' && b.content.trim().length > 0;
+    if (b.kind === 'canvas' || (b.kind as string) === 'drawing') {
+      const c = normalizeCanvasContent(b.content);
+      return c !== null && c.strokes.length > 0;
+    }
+    return b.content != null && b.content !== '';
+  });
+
+  if (!hasContent) {
+    return <p className={cn('ruled ruled-inset text-ink-3 italic min-h-16 flex items-center', className)}>No answer was written.</p>;
   }
+
   return (
     <div className={cn('flex flex-col gap-3', className)}>
-      {blocks.map((b, i) =>
-        b.kind === 'canvas' && isCanvasContent(b.content) ? (
-          <figure key={b.id} className="border border-rule-2 rounded-sm bg-sheet p-2 text-ink">
-            <StrokesSvg content={b.content} label={`Diagram ${i + 1}`} />
-            <figcaption className="text-xs text-ink-2 mt-1">Diagram, drawn by the candidate</figcaption>
-          </figure>
-        ) : (
-          <div key={b.id} className="ruled ruled-inset whitespace-pre-wrap text-[17px] min-h-16">
-            {paragraphText(b) || ' '}
+      {blocks.map((b, i) => {
+        const isCanvas = b.kind === 'canvas' || (b.kind as string) === 'drawing' || (b.content && typeof b.content === 'object' && 'strokes' in (b.content as any));
+        if (isCanvas) {
+          const canvas = normalizeCanvasContent(b.content);
+          if (canvas) {
+            return (
+              <figure key={b.id || `canvas-${i}`} className="border border-rule-2 rounded-sm bg-sheet p-2 text-ink shadow-xs">
+                <StrokesSvg content={canvas} label={`Diagram ${i + 1}`} />
+                <figcaption className="text-xs text-ink-2 mt-1">Diagram, drawn by the candidate</figcaption>
+              </figure>
+            );
+          }
+        }
+
+        if (b.kind === 'equation' || (b.kind as string) === 'formula') {
+          const formulaText = typeof b.content === 'string' ? b.content : (b.content as any)?.formula || (b.content as any)?.latex || JSON.stringify(b.content);
+          return (
+            <div key={b.id || `eq-${i}`} className="my-2 p-3 bg-sheet-2 border border-rule-2 rounded-sm text-center">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-3 mb-1">Mathematical Formula</div>
+              <div className="font-mono text-base text-ink font-medium tracking-wide py-1 px-3 bg-sheet rounded inline-block border border-rule max-w-full overflow-x-auto">
+                {formulaText}
+              </div>
+            </div>
+          );
+        }
+
+        if ((b.kind as string) === 'code') {
+          const codeText = typeof b.content === 'string' ? b.content : (b.content as any)?.code || JSON.stringify(b.content, null, 2);
+          return (
+            <div key={b.id || `code-${i}`} className="my-2 p-3 bg-sheet-2 border border-rule-2 rounded-sm font-mono text-sm">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-3 mb-1">Code Solution</div>
+              <pre className="overflow-x-auto p-2 bg-sheet rounded border border-rule whitespace-pre text-ink text-xs sm:text-sm">
+                <code>{codeText}</code>
+              </pre>
+            </div>
+          );
+        }
+
+        const text = typeof b.content === 'string' ? b.content : paragraphText(b) || (b.content != null ? String(b.content) : '');
+        return (
+          <div key={b.id || `p-${i}`} className="ruled ruled-inset whitespace-pre-wrap text-[17px] min-h-16">
+            {text || ' '}
           </div>
-        ),
-      )}
+        );
+      })}
     </div>
   );
 }

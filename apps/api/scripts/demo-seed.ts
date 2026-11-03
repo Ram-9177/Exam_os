@@ -930,6 +930,53 @@ async function main() {
 
     const e5Map = await getExamAttemptsMap(exam5.examId);
 
+    const microservicesDiagram = {
+      width: 800,
+      height: 400,
+      background: 'grid' as const,
+      strokes: [
+        { tool: 'rect' as const, width: 2, color: 'blue' as const, fill: true, points: [[50, 80], [210, 160]] },
+        { tool: 'text' as const, width: 2, color: 'blue' as const, text: 'Order Service', size: 16, points: [[70, 125]] },
+        { tool: 'arrow' as const, width: 2, color: 'blue' as const, points: [[210, 120], [330, 120]] },
+        { tool: 'text' as const, width: 2, color: 'ink' as const, text: 'orders.v1 (OrderPlaced)', size: 12, points: [[205, 105]] },
+        { tool: 'rect' as const, width: 2, color: 'orange' as const, fill: true, points: [[330, 40], [470, 280]] },
+        { tool: 'text' as const, width: 2, color: 'orange' as const, text: 'Kafka Event Bus', size: 16, points: [[345, 120]] },
+        { tool: 'text' as const, width: 2, color: 'ink' as const, text: 'Partitioned Log', size: 12, points: [[350, 150]] },
+        { tool: 'text' as const, width: 2, color: 'ink' as const, text: 'Pub/Sub Broker', size: 12, points: [[350, 175]] },
+        { tool: 'arrow' as const, width: 2, color: 'green' as const, points: [[470, 100], [590, 100]] },
+        { tool: 'text' as const, width: 2, color: 'ink' as const, text: 'Reserve Stock', size: 12, points: [[485, 88]] },
+        { tool: 'rect' as const, width: 2, color: 'green' as const, fill: true, points: [[590, 60], [750, 140]] },
+        { tool: 'text' as const, width: 2, color: 'green' as const, text: 'Inventory Service', size: 16, points: [[605, 105]] },
+        { tool: 'arrow' as const, width: 2, color: 'purple' as const, points: [[470, 220], [590, 220]] },
+        { tool: 'text' as const, width: 2, color: 'ink' as const, text: 'Process Card', size: 12, points: [[485, 208]] },
+        { tool: 'rect' as const, width: 2, color: 'purple' as const, fill: true, points: [[590, 180], [750, 260]] },
+        { tool: 'text' as const, width: 2, color: 'purple' as const, text: 'Payment Service', size: 16, points: [[610, 225]] },
+        { tool: 'arrow' as const, width: 2, color: 'red' as const, points: [[590, 245], [470, 245]] },
+        { tool: 'text' as const, width: 2, color: 'red' as const, text: 'Saga Compensating Rollback (PaymentFailed)', size: 12, points: [[460, 268]] },
+        { tool: 'pen' as const, width: 1.5, color: 'ink' as const, points: [[30, 20], [770, 20], [770, 310], [30, 310], [30, 20]] },
+        { tool: 'text' as const, width: 2, color: 'ink' as const, text: 'Bounded Context: E-Commerce Order Fulfillment & Distributed Saga', size: 13, points: [[45, 335]] },
+      ],
+    };
+
+    const testPyramidDiagram = {
+      width: 800,
+      height: 400,
+      background: 'grid' as const,
+      strokes: [
+        { tool: 'rect' as const, width: 2, color: 'red' as const, fill: true, points: [[300, 50], [500, 110]] },
+        { tool: 'text' as const, width: 2, color: 'red' as const, text: 'E2E Tests (10%)', size: 15, points: [[335, 85]] },
+        { tool: 'rect' as const, width: 2, color: 'orange' as const, fill: true, points: [[200, 130], [600, 210]] },
+        { tool: 'text' as const, width: 2, color: 'orange' as const, text: 'Integration & API Contracts (20%)', size: 15, points: [[255, 175]] },
+        { tool: 'rect' as const, width: 2, color: 'green' as const, fill: true, points: [[100, 230], [700, 320]] },
+        { tool: 'text' as const, width: 2, color: 'green' as const, text: 'Unit Tests (70% - Fast, Isolated, Deterministic)', size: 16, points: [[195, 280]] },
+        { tool: 'arrow' as const, width: 2, color: 'red' as const, points: [[60, 320], [60, 60]] },
+        { tool: 'text' as const, width: 2, color: 'red' as const, text: 'Cost & Latency', size: 12, points: [[20, 190]] },
+        { tool: 'arrow' as const, width: 2, color: 'green' as const, points: [[740, 60], [740, 320]] },
+        { tool: 'text' as const, width: 2, color: 'green' as const, text: 'Speed & Volume', size: 12, points: [[745, 190]] },
+        { tool: 'text' as const, width: 2, color: 'ink' as const, text: 'Mike Cohn Agile Test Automation Pyramid & CI/CD Fast Feedback Loop', size: 14, points: [[130, 360]] },
+      ],
+    };
+
     // Students 01..06 answer and submit
     for (let i = 0; i < 6; i++) {
       const { att, sTok } = e5Map[students[i]!.email]!;
@@ -947,21 +994,65 @@ async function main() {
       const grant = must(await req().post(`/api/v1/student/attempts/${att.id}/entry-grants`).set(sTok), `e5:grant:${i}`);
       const admit = must(await req().post(`/api/v1/student/attempts/${att.id}/admit`).set(sTok).send({ grantToken: grant.grantToken }), `e5:admit:${i}`);
 
-      for (const [qId, text] of [
-        ['Q1', 'Scrum operates in timeboxed 2-4 week sprints, whereas Waterfall uses sequential phases (Requirements -> Design -> Code -> Test). The Product Owner prioritizes the backlog and defines user story acceptance criteria.'],
-        ['Q2', 'Microservices partition domains into bounded contexts. Asynchronous messaging decouples producer and consumer lifecycles, ensuring resilient eventual consistency without distributed locks.'],
-        ['Q3', 'The Test Pyramid emphasizes a broad base of fast unit tests, a middle layer of integration tests, and fewer end-to-end tests. CI/CD runs these checks automatically on every commit.'],
-        ['Q4', 'GitFlow employs develop, feature, release, and main branches. Trunk-based development merges short-lived branches to trunk with feature flags. PR reviews enforce pair verification and architectural standards.'],
-      ] as const) {
-        const blocks = [{ id: 'b', kind: 'paragraph', content: text }];
-        await req().put(`/api/v1/student/attempts/${att.id}/answers/${qId}`).set(sTok).set('x-device-session', admit.deviceSessionId).send({
-          clientOperationId: randomUUID(),
-          baseRevision: 0,
-          answerFormat: 'hybrid-v1',
-          ops: [{ op: 'upsert-block', blockId: 'b', kind: 'paragraph', content: text }],
-          contentSha256: answerHash(blocks),
-        });
-      }
+      // Q1: Scrum vs Waterfall
+      const q1Blocks = [
+        { id: 'b1', kind: 'paragraph', content: 'Scrum operates in timeboxed 2-4 week sprints, whereas Waterfall uses sequential phases (Requirements -> Design -> Code -> Test). The Product Owner prioritizes the backlog and defines user story acceptance criteria.' },
+      ];
+      await req().put(`/api/v1/student/attempts/${att.id}/answers/Q1`).set(sTok).set('x-device-session', admit.deviceSessionId).send({
+        clientOperationId: randomUUID(),
+        baseRevision: 0,
+        answerFormat: 'hybrid-v1',
+        ops: [{ op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: q1Blocks[0]!.content }],
+        contentSha256: answerHash(q1Blocks),
+      });
+
+      // Q2: Microservices & Event Bus Architecture with Saga pattern
+      const q2Blocks = [
+        { id: 'b1', kind: 'paragraph', content: 'Microservices partition domains into bounded contexts. Asynchronous messaging decouples producer and consumer lifecycles, ensuring resilient eventual consistency without distributed locks.' },
+        { id: 'b2', kind: 'canvas', content: microservicesDiagram },
+        { id: 'b3', kind: 'paragraph', content: 'The Saga pattern coordinates distributed transactions across services. In case of payment failure, compensating events rollback previous state transitions without 2-phase commit locks.' },
+      ];
+      await req().put(`/api/v1/student/attempts/${att.id}/answers/Q2`).set(sTok).set('x-device-session', admit.deviceSessionId).send({
+        clientOperationId: randomUUID(),
+        baseRevision: 0,
+        answerFormat: 'hybrid-v1',
+        ops: [
+          { op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: q2Blocks[0]!.content },
+          { op: 'upsert-block', blockId: 'b2', kind: 'canvas', content: q2Blocks[1]!.content },
+          { op: 'upsert-block', blockId: 'b3', kind: 'paragraph', content: q2Blocks[2]!.content },
+        ],
+        contentSha256: answerHash(q2Blocks),
+      });
+
+      // Q3: Test Pyramid & CI/CD Pipeline
+      const q3Blocks = [
+        { id: 'b1', kind: 'paragraph', content: 'The Test Pyramid emphasizes a broad base of fast unit tests, a middle layer of integration tests, and fewer end-to-end tests. CI/CD runs these checks automatically on every commit.' },
+        { id: 'b2', kind: 'canvas', content: testPyramidDiagram },
+        { id: 'b3', kind: 'paragraph', content: 'Automated CI/CD stages: 1. Lint & Static Analysis -> 2. Unit Testing -> 3. Contract & Integration Testing -> 4. Container Build & Push -> 5. Canary Staging Deployment.' },
+      ];
+      await req().put(`/api/v1/student/attempts/${att.id}/answers/Q3`).set(sTok).set('x-device-session', admit.deviceSessionId).send({
+        clientOperationId: randomUUID(),
+        baseRevision: 0,
+        answerFormat: 'hybrid-v1',
+        ops: [
+          { op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: q3Blocks[0]!.content },
+          { op: 'upsert-block', blockId: 'b2', kind: 'canvas', content: q3Blocks[1]!.content },
+          { op: 'upsert-block', blockId: 'b3', kind: 'paragraph', content: q3Blocks[2]!.content },
+        ],
+        contentSha256: answerHash(q3Blocks),
+      });
+
+      // Q4: GitFlow vs Trunk-based
+      const q4Blocks = [
+        { id: 'b1', kind: 'paragraph', content: 'GitFlow employs develop, feature, release, and main branches. Trunk-based development merges short-lived branches to trunk with feature flags. PR reviews enforce pair verification and architectural standards.' },
+      ];
+      await req().put(`/api/v1/student/attempts/${att.id}/answers/Q4`).set(sTok).set('x-device-session', admit.deviceSessionId).send({
+        clientOperationId: randomUUID(),
+        baseRevision: 0,
+        answerFormat: 'hybrid-v1',
+        ops: [{ op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: q4Blocks[0]!.content }],
+        contentSha256: answerHash(q4Blocks),
+      });
 
       must(await req().post(`/api/v1/student/attempts/${att.id}/submit`).set(sTok).send({ idempotencyKey: randomUUID() }), `e5:submit:${i}`);
     }
@@ -1251,9 +1342,11 @@ async function main() {
       const r = await req().get('/api/v1/student/me/ledger').set(s1Tok);
       return r.status === 200 && r.body.records.length >= 1 && ['O', 'A+'].includes(r.body.records[0].grade);
     });
-    await check('Student Answer Booklet available with verified examiner marks', async () => {
+    await check('Student Answer Booklet available with vector diagrams and downloadable PDF', async () => {
       const r = await req().get(`/api/v1/student/attempts/${s01_e5.att.id}/booklet`).set(s1Tok);
-      return r.status === 200 && r.body.questions.length === 4 && r.body.questions[0].marks === 11;
+      const hasDiagram = r.body.questions[1]?.answer?.blocks?.some((b: any) => b.kind === 'canvas' && b.content?.strokes?.length > 0);
+      const rPdf = await req().get(`/api/v1/student/attempts/${s01_e5.att.id}/booklet.pdf`).set(s1Tok).responseType('blob');
+      return r.status === 200 && r.body.questions.length === 4 && hasDiagram && rPdf.status === 200 && rPdf.headers['content-type'] === 'application/pdf';
     });
 
     // Smoke 9: Hall Ticket PDF with Dual Dynamic Signatures

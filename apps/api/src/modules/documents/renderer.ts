@@ -51,11 +51,43 @@ function escapeHtml(str: unknown): string {
 
 let canvasSeq = 0;
 /** Same vector renderer as the web booklet (packages/contracts canvas-render), so print and screen agree. */
-function renderCanvasToSvg(content: unknown): string {
-  const c = content as CanvasContentWire;
-  if (!c || !c.width || !c.height || !Array.isArray(c.strokes)) return '';
+function renderCanvasToSvg(content: unknown, diagramSeq?: number): string {
+  if (!content) return '';
+  let c = content as any;
+  if (typeof c === 'string') {
+    try {
+      c = JSON.parse(c);
+    } catch {
+      return '';
+    }
+  }
+  if (!c || typeof c !== 'object') return '';
+  const strokes = Array.isArray(c.strokes) ? c.strokes : [];
+  if (strokes.length === 0) return '';
+  const safeContent: CanvasContentWire = {
+    width: typeof c.width === 'number' && c.width > 0 ? c.width : 800,
+    height: typeof c.height === 'number' && c.height > 0 ? c.height : 480,
+    background: c.background || 'grid',
+    strokes,
+  };
   canvasSeq = (canvasSeq + 1) % 1_000_000;
-  return canvasToSvg(c, { idPrefix: `d${canvasSeq}`, style: 'width: 100%; max-height: 400px; display: block; border: 1px solid #e5e7eb; background: #ffffff; border-radius: 4px; padding: 4px;' });
+  const svg = canvasToSvg(safeContent, {
+    idPrefix: `d${canvasSeq}`,
+    style: 'width: 100%; max-height: 440px; display: block; background: #ffffff;',
+    label: `Diagram ${diagramSeq ?? 1}`,
+  });
+  return `
+    <div style="border: 1px solid #d1d5db; border-radius: 6px; padding: 12px; margin: 12px 0; background: #ffffff;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; margin-bottom: 8px; font-size: 11px; color: #4b5563; text-transform: uppercase; font-weight: 600;">
+        <span>Candidate Architectural / Whiteboard Diagram ${diagramSeq ? `#${diagramSeq}` : ''}</span>
+        <span class="mono">${safeContent.strokes.length} strokes · ${safeContent.width}×${safeContent.height}</span>
+      </div>
+      <div style="width: 100%; overflow: hidden;">
+        ${svg}
+      </div>
+      <p style="margin: 8px 0 0; font-size: 10px; color: #6b7280; font-style: italic; text-align: center;">Vector diagram authored during examination</p>
+    </div>
+  `;
 }
 
 export function renderBookletHtml(booklet: any, qrDataUrl: string): string {
@@ -154,9 +186,54 @@ export function renderBookletHtml(booklet: any, qrDataUrl: string): string {
   <!-- Questions and Answers -->
   <h2 style="font-size: 18px; border-bottom: 2px solid #111827; padding-bottom: 6px; margin-bottom: 16px;">Answer Scripts &amp; Evaluation</h2>
   ${(b.questions || []).map((q: any, i: number) => {
-    const blocks = q.answer?.blocks || [];
-    const textBlocks = blocks.filter((bl: any) => bl.kind === 'paragraph' && typeof bl.content === 'string' && bl.content.trim());
-    const canvasBlocks = blocks.filter((bl: any) => bl.kind === 'canvas');
+    let answerObj = q.answer;
+    if (typeof answerObj === 'string') {
+      try { answerObj = JSON.parse(answerObj); } catch { answerObj = { blocks: [{ id: 'b0', kind: 'paragraph', content: answerObj }] }; }
+    }
+    let blocks: any[] = [];
+    if (Array.isArray(answerObj)) {
+      blocks = answerObj;
+    } else if (answerObj && Array.isArray(answerObj.blocks)) {
+      blocks = answerObj.blocks;
+    } else if (answerObj && answerObj.content && Array.isArray(answerObj.content.blocks)) {
+      blocks = answerObj.content.blocks;
+    } else if (answerObj && Array.isArray(answerObj.strokes)) {
+      blocks = [{ id: 'b0', kind: 'canvas', content: answerObj }];
+    }
+
+    let diagramCount = 0;
+    const renderedBlocks = blocks.map((bl: any) => {
+      const kind = bl.kind || 'paragraph';
+      if (kind === 'canvas' || kind === 'drawing' || (bl.content && Array.isArray(bl.content.strokes))) {
+        diagramCount++;
+        return renderCanvasToSvg(bl.content, diagramCount);
+      }
+      if (kind === 'paragraph') {
+        const text = typeof bl.content === 'string' ? bl.content : '';
+        if (!text.trim()) return '';
+        return `<div class="ruled">${escapeHtml(text)}</div>`;
+      }
+      if (kind === 'equation' || kind === 'formula') {
+        const formula = typeof bl.content === 'string' ? bl.content : (bl.content?.formula || bl.content?.latex || JSON.stringify(bl.content));
+        return `
+          <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 12px; margin: 10px 0; text-align: center;">
+            <span style="display: block; font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 600; margin-bottom: 4px;">Mathematical Formula</span>
+            <span class="mono" style="font-size: 15px; font-weight: 600; color: #0f172a; padding: 4px 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 4px; display: inline-block;">${escapeHtml(formula)}</span>
+          </div>
+        `;
+      }
+      if (kind === 'code') {
+        const code = typeof bl.content === 'string' ? bl.content : (bl.content?.code || JSON.stringify(bl.content, null, 2));
+        return `
+          <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 10px; margin: 10px 0;">
+            <span style="display: block; font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 600; margin-bottom: 4px;">Source Code Listing</span>
+            <pre class="mono" style="margin: 0; padding: 8px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 3px; font-size: 12px; overflow-x: auto;"><code>${escapeHtml(code)}</code></pre>
+          </div>
+        `;
+      }
+      return `<div class="ruled">${escapeHtml(typeof bl.content === 'string' ? bl.content : JSON.stringify(bl.content))}</div>`;
+    }).filter(Boolean).join('');
+
     return `
       <div class="question-card">
         <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px;">
@@ -170,8 +247,7 @@ export function renderBookletHtml(booklet: any, qrDataUrl: string): string {
 
         <div style="margin-top: 10px;">
           <strong style="font-size: 12px; color: #374151; text-transform: uppercase;">Candidate's Answer:</strong>
-          ${textBlocks.length > 0 ? textBlocks.map((bl: any) => `<div class="ruled">${escapeHtml(bl.content)}</div>`).join('') : '<p style="color: #9ca3af; font-style: italic;">No text answer submitted.</p>'}
-          ${canvasBlocks.map((bl: any) => renderCanvasToSvg(bl.content)).join('')}
+          ${renderedBlocks.trim() ? renderedBlocks : '<p style="color: #9ca3af; font-style: italic;">No answer was written.</p>'}
         </div>
 
         ${q.explanation ? `

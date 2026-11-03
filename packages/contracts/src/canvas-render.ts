@@ -46,7 +46,9 @@ export function buildCanvasScene(content: CanvasContentWire): CanvasScene {
   const segments: CanvasSceneSegment[] = [];
   let visibleCount = 0;
   let current: CanvasSceneSegment | null = null;
-  for (const item of content.strokes) {
+  const strokes = Array.isArray(content?.strokes) ? content.strokes : [];
+  for (const item of strokes) {
+    if (!item || !Array.isArray(item.points) || item.points.length === 0) continue;
     if (item.tool === 'eraser') {
       for (const seg of segments) seg.erasers.push(item);
       current = null;
@@ -59,10 +61,12 @@ export function buildCanvasScene(content: CanvasContentWire): CanvasScene {
     current.items.push(item);
     visibleCount++;
   }
-  const kind = content.background ?? 'blank';
+  const kind = content?.background ?? 'blank';
+  const width = typeof content?.width === 'number' && content.width > 0 ? content.width : 800;
+  const height = typeof content?.height === 'number' && content.height > 0 ? content.height : 480;
   return {
-    width: content.width,
-    height: content.height,
+    width,
+    height,
     background: { kind, spacing: kind === 'blank' ? 0 : BACKGROUND_SPACING[kind], color: '#d6dae3' },
     segments,
     visibleCount,
@@ -102,6 +106,7 @@ function num(n: number): string {
 
 /** SVG markup for one visible item. */
 export function canvasItemSvg(item: CanvasItem, inkColor?: string): string {
+  if (!item || !Array.isArray(item.points) || item.points.length === 0) return '';
   const color = canvasColorHex(item.color, inkColor);
   const common = `stroke="${color}" stroke-width="${num(item.width)}" stroke-linecap="round" stroke-linejoin="round"`;
   const p0 = item.points[0]!;
