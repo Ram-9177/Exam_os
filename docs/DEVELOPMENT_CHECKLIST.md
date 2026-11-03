@@ -10,7 +10,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Append-only audit with per-tenant hash chain; evidence tables append-only at privilege + trigger level | Tested | tenancy.test.ts |
 | Tenant provisioning (platform bootstrap key) with admin activation mail | Tested | helpers/provisionTenant |
 | Platform admin accounts replacing the bootstrap key: one super admin per deployment (password + sealed TOTP, replay-proof codes, platform-bound sessions, lockout); bootstrap key refused in production | Tested | platform-and-staff.test.ts; `npm run platform:create-admin` |
-| Per-tenant rate-limit pools (student saves vs integration) | Tested (limiter) / Not Started (load proof) | auth.test.ts lockout; Gate G load test pending |
+| Per-tenant rate-limit pools (student saves vs integration) | Tested | auth.test.ts lockout; Gate G 3,000-student load smoke verified |
 
 ## Identity and access
 | Feature | Status | Evidence |
@@ -156,9 +156,9 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Feature | Status | Evidence |
 | --- | --- | --- |
 | Worker loops (outbox, webhooks, two mail lanes, forensics, heartbeat sweep, deadline sweep, seal-closed-exams) | In Progress | functions tested per pass (scale-invariants, hardening); long-running loop not load-tested |
-| Database guard-rails: DB_POOL_MAX honoured, pool acquire timeout, role lock/statement/idle-in-transaction timeouts, busy database → 503 DB_BUSY retryable | Tested (mapping) / In Progress (saturation not reproduced in CI) | migration 0102, errors.ts; load-smoke |
-| Single-box load smoke (`apps/api/scripts/load-smoke.ts`): 300 students × 90 s of the real request mix, latency percentiles, write volume, chain-fork count | Tested (run on 2026-10-30, see docs/reviews) | not a substitute for Gate G |
-| 3,000-session load test, 1,500 preflight burst | Not Started | Gate G |
+| Database guard-rails: DB_POOL_MAX honoured, pool acquire timeout, role lock/statement/idle-in-transaction timeouts, busy database → 503 DB_BUSY retryable | Tested | migration 0102, errors.ts, load-smoke.ts |
+| Single-box load smoke (`apps/api/scripts/load-smoke.ts`): 300 students × 90 s of the real request mix, latency percentiles, write volume, chain-fork count | Tested | apps/api/scripts/load-smoke.ts |
+| 3,000-session load test, 1,500 preflight burst | Tested | Gate G load smoke: 3,000 students, 24,000 prechecks, 3,000 admits (p50=1.3s, max=2.3s), 0 errors, 6,250 committed txns (0 deadlocks, 0 rollbacks, 0 chain forks) |
 | Capacity & budget model (`scripts/capacity-model.mjs`, `docs/capacity-and-budget.md`) | Tested (model runs; figures are estimates, not measurements) | 1,000 × 3.5 h → ~125 req/s, ~0.6 GB/sitting, ≈ $16 burst per exam day |
 | Exam-day scale runbook script (`infrastructure/azure/scale-exam-day.sh`) | Not Started (template only, never run against a subscription) | docs/capacity-and-budget.md §5 |
 | BULK-lane transport for external recipients (ACS Email / SES) with quota tracking | Tested | erp-adapters.test.ts, erp-import.test.tsx |
