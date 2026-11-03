@@ -9,3 +9,4 @@ coverage
 dump.rdb
 .storage
 *.tsbuildinfo
+.load-state.json

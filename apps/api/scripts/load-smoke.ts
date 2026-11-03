@@ -56,16 +56,27 @@ interface Res { status: number; json: any; ms: number }
 async function call(method: string, path: string, opts: { token?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<Res> {
   const headers: Record<string, string> = { 'content-type': 'application/json', 'user-agent': 'ExamOS-LoadSmoke/1.0', ...(opts.headers ?? {}) };
   if (opts.token) headers['authorization'] = `Bearer ${opts.token}`;
-  const t0 = performance.now();
-  try {
-    const res = await fetch(`${BASE}/api/v1${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
-    const text = await res.text();
-    let json: any = null;
-    try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text.slice(0, 200) }; }
-    return { status: res.status, json, ms: performance.now() - t0 };
-  } catch (e) {
-    return { status: 0, json: { code: 'NETWORK', message: e instanceof Error ? e.message : String(e) }, ms: performance.now() - t0 };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const t0 = performance.now();
+    try {
+      const res = await fetch(`${BASE}/api/v1${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
+      const text = await res.text();
+      let json: any = null;
+      try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text.slice(0, 200) }; }
+      if (res.status === 503 && json?.code === 'DB_BUSY' && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1) + Math.random() * 200));
+        continue;
+      }
+      return { status: res.status, json, ms: performance.now() - t0 };
+    } catch (e) {
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+        continue;
+      }
+      return { status: 0, json: { code: 'NETWORK', message: e instanceof Error ? e.message : String(e) }, ms: performance.now() - t0 };
+    }
   }
+  return { status: 503, json: { code: 'DB_BUSY' }, ms: 0 };
 }
 function must(r: Res, what: string): any {
   if (r.status < 200 || r.status >= 300) throw new Error(`${what}: ${r.status} ${JSON.stringify(r.json).slice(0, 300)}`);
