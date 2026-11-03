@@ -1124,11 +1124,11 @@ async function main() {
 
     // Process outbox and workers
     console.log('[Phase 5] Processing notification dispatches, outbox events, and workers...');
-    await admin('mail_dispatches').where({ tenant_id: tenantId, status: 'QUEUED' }).update({ next_attempt_at: new Date() });
-    await runMailWorkerOnce(deps, 'TRANSACTIONAL');
-    await runMailWorkerOnce(deps, 'BULK');
-    await runWebhookWorkerOnce(deps);
     await runOutboxDispatcherOnce(deps);
+    await runWebhookWorkerOnce(deps);
+    await admin('mail_dispatches').where({ tenant_id: tenantId, status: 'QUEUED' }).update({ next_attempt_at: new Date() });
+    while ((await runMailWorkerOnce(deps, 'TRANSACTIONAL', 100)).claimed > 0) {}
+    while ((await runMailWorkerOnce(deps, 'BULK', 100)).claimed > 0) {}
 
     // =========================================================================
     // Phase 6: End-to-End API Smoke Verification & Assertions
