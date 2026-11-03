@@ -43,8 +43,13 @@ export const router = createBrowserRouter([
             children: [
               { path: '/student', element: <MyExamsPage /> },
               { path: '/student/ledger', element: <LedgerPage /> },
-              { path: '/student/profile', element: <ProfilePage /> },
               { path: '/student/attempts/:attemptId/readiness', element: <ReadinessPage /> },
+            ],
+          },
+          {
+            element: <RequireRole roles={['STUDENT', 'TENANT_ADMIN', 'CONTROLLER', 'EXAM_CELL_OPERATOR']} />,
+            children: [
+              { path: '/student/profile', element: <ProfilePage /> },
             ],
           },
           {
