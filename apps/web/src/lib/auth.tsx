@@ -134,6 +134,7 @@ export function homeFor(roles: ReadonlySet<RoleCode>): string {
   if (roles.has('EXAM_CELL_OPERATOR') || roles.has('CONTROLLER')) return '/examcell';
   if (roles.has('CHIEF_PROCTOR') || roles.has('PROCTOR')) return '/proctor';
   if (roles.has('EVALUATOR') || roles.has('MODERATOR')) return '/evaluate';
+  if (roles.has('QUESTION_SETTER') || roles.has('PAPER_REVIEWER')) return '/examcell';
   if (roles.has('HOD') || roles.has('REPORT_VIEWER')) return '/analytics';
   if (roles.has('TENANT_ADMIN') || roles.has('SYSTEM_ADMIN') || roles.has('INTEGRATION_ADMIN')) return '/admin';
   if (roles.has('STUDENT')) return '/student';

@@ -13,8 +13,9 @@ import { EXAM_STATUS_LABEL, useExams, type ExamFilters, type ExamListItem } from
  * adding columns.
  */
 export function ExamListPage() {
-  const { me } = useAuth();
+  const { me, hasRole } = useAuth();
   const tz = me?.tenant.timezone ?? 'Asia/Kolkata';
+  const canCreate = hasRole('EXAM_CELL_OPERATOR', 'CONTROLLER');
   const [filters, setFilters] = useState<ExamFilters>({});
   const [q, setQ] = useState('');
   const exams = useExams({ ...filters, q: q.trim() || undefined });
@@ -67,9 +68,11 @@ export function ExamListPage() {
         title="Exams"
         lede={liveCount || precheckCount ? `${liveCount} live, ${precheckCount} with the readiness check open.` : 'Every exam the Examination Section runs, by school and department.'}
         actions={
-          <LinkButton to="/examcell/exams/new" variant="primary">
-            New exam
-          </LinkButton>
+          canCreate ? (
+            <LinkButton to="/examcell/exams/new" variant="primary">
+              New exam
+            </LinkButton>
+          ) : null
         }
       />
 
@@ -154,7 +157,7 @@ export function ExamListPage() {
       {exams.isLoading ? <Skeleton lines={6} /> : null}
       {exams.isError ? <EmptyState title="The exam list could not be loaded">Reload the page or try again in a moment.</EmptyState> : null}
       {exams.data && list.length === 0 ? (
-        <EmptyState title="No exams match" action={<LinkButton to="/examcell/exams/new">Create the first exam</LinkButton>}>
+        <EmptyState title="No exams match" action={canCreate ? <LinkButton to="/examcell/exams/new">Create the first exam</LinkButton> : undefined}>
           Clear a filter, or create an exam. Exams need a course from the roster first.
         </EmptyState>
       ) : null}

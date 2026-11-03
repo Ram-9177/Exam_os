@@ -53,15 +53,20 @@ export const router = createBrowserRouter([
             ],
           },
           {
-            element: <RequireRole roles={['STUDENT', 'EVALUATOR', 'MODERATOR', 'EXAM_CELL_OPERATOR', 'CONTROLLER', 'HOD']} />,
+            element: <RequireRole roles={['STUDENT', 'EVALUATOR', 'MODERATOR', 'EXAM_CELL_OPERATOR', 'CONTROLLER', 'HOD', 'TENANT_ADMIN', 'SYSTEM_ADMIN', 'SECURITY_AUDITOR', 'PROCTOR', 'CHIEF_PROCTOR', 'QUESTION_SETTER', 'PAPER_REVIEWER']} />,
             children: [{ path: '/student/attempts/:attemptId/booklet', element: <BookletPage /> }],
+          },
+          {
+            element: <RequireRole roles={['EXAM_CELL_OPERATOR', 'CONTROLLER', 'QUESTION_SETTER', 'PAPER_REVIEWER', 'HOD']} />,
+            children: [
+              { path: '/examcell', lazy: () => import('@/features/examcell/ExamListPage').then((m) => ({ Component: m.ExamListPage })) },
+              { path: '/examcell/exams/:id', lazy: () => import('@/features/examcell/ExamDetailPage').then((m) => ({ Component: m.ExamDetailPage })) },
+            ],
           },
           {
             element: <RequireRole roles={['EXAM_CELL_OPERATOR', 'CONTROLLER']} />,
             children: [
-              { path: '/examcell', lazy: () => import('@/features/examcell/ExamListPage').then((m) => ({ Component: m.ExamListPage })) },
               { path: '/examcell/exams/new', lazy: () => import('@/features/examcell/ExamNewPage').then((m) => ({ Component: m.ExamNewPage })) },
-              { path: '/examcell/exams/:id', lazy: () => import('@/features/examcell/ExamDetailPage').then((m) => ({ Component: m.ExamDetailPage })) },
             ],
           },
           {
@@ -72,11 +77,11 @@ export const router = createBrowserRouter([
             ],
           },
           {
-            element: <RequireRole roles={['PROCTOR', 'CHIEF_PROCTOR']} />,
+            element: <RequireRole roles={['PROCTOR', 'CHIEF_PROCTOR', 'EXAM_CELL_OPERATOR', 'CONTROLLER']} />,
             children: [{ path: '/proctor', lazy: () => import('@/features/proctor/ProctorPage').then((m) => ({ Component: m.ProctorPage })) }],
           },
           {
-            element: <RequireRole roles={['HOD', 'REPORT_VIEWER', 'EXAM_CELL_OPERATOR', 'CONTROLLER', 'SYSTEM_ADMIN']} />,
+            element: <RequireRole roles={['HOD', 'REPORT_VIEWER', 'EXAM_CELL_OPERATOR', 'CONTROLLER', 'TENANT_ADMIN', 'SYSTEM_ADMIN']} />,
             children: [{ path: '/analytics', lazy: () => import('@/features/analytics/AnalyticsPage').then((m) => ({ Component: m.AnalyticsPage })) }],
           },
           {

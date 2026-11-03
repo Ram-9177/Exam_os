@@ -38,7 +38,7 @@ const CONDUCT: Conduct[] = [
 
 export function ExamDetailPage() {
   const { id = '' } = useParams();
-  const { me } = useAuth();
+  const { me, hasRole } = useAuth();
   const tz = me?.tenant.timezone ?? 'Asia/Kolkata';
   const exam = useExam(id);
   const qc = useQueryClient();
@@ -51,8 +51,9 @@ export function ExamDetailPage() {
   if (exam.isError || !exam.data) return <EmptyState title="This exam could not be loaded">Check the link, or go back to the exam list.</EmptyState>;
   const e = exam.data.exam;
   const counts = exam.data.attemptCounts;
+  const canConduct = hasRole('EXAM_CELL_OPERATOR', 'CONTROLLER');
   const allowed = new Set(EXAM_TRANSITIONS[e.status]);
-  const actions = CONDUCT.filter((c) => allowed.has(c.to));
+  const actions = canConduct ? CONDUCT.filter((c) => allowed.has(c.to)) : [];
 
   const runConduct = async () => {
     if (!confirm) return;

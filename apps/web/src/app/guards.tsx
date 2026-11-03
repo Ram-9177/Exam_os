@@ -1,7 +1,7 @@
 import { Navigate, Outlet, useLocation } from 'react-router';
 import type { RoleCode } from '@examos/contracts';
 import { homeFor, useAuth } from '@/lib/auth';
-import { EmptyState, Skeleton } from '@/ui';
+import { EmptyState, LinkButton, Skeleton } from '@/ui';
 
 export function RequireAuth() {
   const { status } = useAuth();
@@ -17,13 +17,20 @@ export function RequireAuth() {
   return <Outlet />;
 }
 
-export function RequireRole({ roles }: { roles: RoleCode[] }) {
-  const { hasRole, me, status } = useAuth();
+export function RequireRole({ roles: requiredRoles }: { roles: RoleCode[] }) {
+  const { hasRole, me, status, roles } = useAuth();
   if (status === 'loading' || !me) return <Skeleton lines={3} className="p-10" />;
-  if (!hasRole(...roles)) {
+  if (!hasRole(...requiredRoles)) {
     return (
       <div className="mx-auto max-w-xl py-16">
-        <EmptyState title="This section is not part of your role">
+        <EmptyState
+          title="This section is not part of your role"
+          action={
+            <LinkButton to={homeFor(roles)} variant="primary">
+              Return to your dashboard
+            </LinkButton>
+          }
+        >
           Your account is signed in, but it has no access here. If you believe it should, ask the Examination Section to update your role.
         </EmptyState>
       </div>
