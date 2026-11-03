@@ -52,16 +52,16 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 ## Exam lifecycle and conduct
 | Feature | Status | Evidence |
 | --- | --- | --- |
-| Exam create with type/year/semester/profile (aliases normalised), hierarchy filters | Tested | exam-flow.e2e.test.ts |
-| Human-triggered conduct: submit-for-review → approve → schedule → open readiness → start → close; illegal transitions refused | Tested | exam-flow |
-| Allocation of eligible students only; locked while PRECHECK/LIVE | Tested | exam-flow |
-| Hall tickets per exam, PDF with signed verification QR, visible per exam to the student | Tested | exam-flow, documents.test.ts |
+| Exam create with type/year/semester/profile (aliases normalised), hierarchy filters | Tested | exam-flow.e2e.test.ts, all-personas-e2e.test.ts |
+| Human-triggered conduct: submit-for-review → approve → schedule → open readiness → start → close; illegal transitions refused | Tested | exam-flow, all-personas-e2e.test.ts |
+| Allocation of eligible students only; locked while PRECHECK/LIVE | Tested | exam-flow, all-personas-e2e.test.ts |
+| Hall tickets per exam, PDF with signed verification QR, visible per exam to the student | Tested | exam-flow, documents.test.ts, all-personas-e2e.test.ts |
 | Export lock during PRECHECK/LIVE with audit + alert mail | Tested | exam-flow |
-| Question paper authoring, sections, kinds, rubrics, draft/review/approved lifecycle | Tested | paper.test.ts, paper-tab.test.tsx |
-| Question paper encryption at rest (AES-256-GCM), canonical SHA-256 seal, exam approval gate (marks match) | Tested | paper.test.ts |
+| Question paper authoring, sections, kinds, rubrics, draft/review/approved lifecycle | Tested | paper.test.ts, paper-tab.test.tsx, all-personas-e2e.test.ts |
+| Question paper encryption at rest (AES-256-GCM), canonical SHA-256 seal, exam approval gate (marks match) | Tested | paper.test.ts, all-personas-e2e.test.ts |
 | Question paper sets generation (Set A/B question shuffling) | Tested | paper.test.ts |
-| Student paper release (gate exam LIVE, expected_answer & rubric stripped, paper_releases append-only audit) | Tested | paper.test.ts |
-| Candidate paper view & answer booklet question prompts & evaluator marking validation | Tested | paper.test.ts, booklet.test.tsx |
+| Student paper release (gate exam LIVE, expected_answer & rubric stripped, paper_releases append-only audit) | Tested | paper.test.ts, all-personas-e2e.test.ts |
+| Candidate paper view & answer booklet question prompts & evaluator marking validation | Tested | paper.test.ts, booklet.test.tsx, all-personas-e2e.test.ts |
 | Question paper ingestion (DOCX/PDF), question bank | Not Started | spec §5, §12 |
 | Rooms, benches, seat assignments | Not Started | spec §40, §50 |
 
@@ -116,22 +116,22 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 ## Post-exam
 | Feature | Status | Evidence |
 | --- | --- | --- |
-| Forensic completeness checks (manifest, ledger, timeline chain, incidents) | Tested | exam-flow |
-| Examiner marks with one explanation per question; range/criteria validation | Tested | exam-flow |
-| Exam Cell checklist + approval bound to result version; invalidation on new version | Tested | exam-flow |
-| Holds and release with student notice and ERP event | Tested | exam-flow |
-| Controller authorization + publication; idempotent | Tested | exam-flow |
-| Lifelong student ledger; semester and overall rollups | Tested | exam-flow |
-| Digital answer booklet JSON + verification endpoint | Tested | exam-flow |
+| Forensic completeness checks (manifest, ledger, timeline chain, incidents) | Tested | exam-flow, all-personas-e2e.test.ts |
+| Examiner marks with one explanation per question; range/criteria validation | Tested | exam-flow, all-personas-e2e.test.ts |
+| Exam Cell checklist + approval bound to result version; invalidation on new version | Tested | exam-flow, all-personas-e2e.test.ts |
+| Holds and release with student notice and ERP event | Tested | exam-flow, all-personas-e2e.test.ts |
+| Controller authorization + publication; idempotent | Tested | exam-flow, all-personas-e2e.test.ts |
+| Lifelong student ledger; semester and overall rollups | Tested | exam-flow, all-personas-e2e.test.ts |
+| Digital answer booklet JSON + verification endpoint | Tested | exam-flow, all-personas-e2e.test.ts |
 | Booklet PDF rendering (server-side), hall tickets, and restricted evidence PDF with verification QR codes | Tested | documents.test.ts |
 | Student document storage (photo, ID card), explicit consent gate, SHA-256 hash, and audit trail | Tested | analytics.test.ts |
 | Verifiable student examination ID card with signed QR and safe public verification endpoint | Tested | analytics.test.ts |
-| Department academic analytics (pass rate, semester rollups, exam distribution, HOD department scoping, strict proctoring privacy) | Tested | analytics.test.ts |
-| Evaluator workload balancing and batch assignment | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
-| Anonymized candidate marking for external exams (masks student identity) | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
+| Department academic analytics (pass rate, semester rollups, exam distribution, HOD department scoping, strict proctoring privacy) | Tested | analytics.test.ts, all-personas-e2e.test.ts |
+| Evaluator workload balancing and batch assignment | Tested | evaluation-scale.test.ts, evaluation.test.tsx, all-personas-e2e.test.ts |
+| Anonymized candidate marking for external exams (masks student identity) | Tested | evaluation-scale.test.ts, evaluation.test.tsx, all-personas-e2e.test.ts |
 | Double evaluation with divergence threshold (15%) and moderator resolution | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
-| Revaluation lifecycle (student request, window check, exam cell decision, re-marking, ledger supersede, and result.corrected event) | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
-| AI rubric-based evaluation proposals | Tested | evaluation-scale.test.ts, evaluation.test.tsx |
+| Revaluation lifecycle (student request, window check, exam cell decision, re-marking, ledger supersede, and result.corrected event) | Tested | evaluation-scale.test.ts, evaluation.test.tsx, all-personas-e2e.test.ts |
+| AI rubric-based evaluation proposals | Tested | evaluation-scale.test.ts, evaluation.test.tsx, all-personas-e2e.test.ts |
 | Answer similarity analysis and adjudication (MinHash/shingles, integrity hold) | Tested | evaluation-scale.test.ts |
 
 ## Web application (apps/web) — React 19, Vite, Tailwind 4, TanStack Query, React Router 7, custom components
