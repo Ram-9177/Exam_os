@@ -35,10 +35,18 @@ export function idempotent(deps: AppDeps): RequestHandler {
         trx('idempotency_keys').insert({ tenant_id: tenant.id, scope, key, request_hash: requestHash, expires_at: new Date(deps.clock.now().getTime() + TTL_HOURS * 3600_000) }).onConflict(['tenant_id', 'scope', 'key']).ignore(),
       );
       const originalJson = res.json.bind(res);
-      res.json = ((body: unknown) => {
+      res.json = (function (body: unknown) {
         const status = res.statusCode;
-        void withTenantTx(deps.db, tenant.id, (trx) => trx('idempotency_keys').where({ tenant_id: tenant.id, scope, key }).update({ response_status: status, response_body: JSON.stringify(body) })).catch((e) => deps.logger.warn({ err: e }, 'idempotency store failed'));
-        return originalJson(body);
+        withTenantTx(deps.db, tenant.id, (trx) =>
+          trx('idempotency_keys')
+            .where({ tenant_id: tenant.id, scope, key })
+            .update({ response_status: status, response_body: JSON.stringify(body) }),
+        )
+          .catch((e) => deps.logger.warn({ err: e }, 'idempotency store failed'))
+          .finally(() => {
+            originalJson(body);
+          });
+        return res;
       }) as typeof res.json;
       next();
     } catch (e) {
