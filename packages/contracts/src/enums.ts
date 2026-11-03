@@ -465,3 +465,15 @@ export const MANDATORY_CHECKS_BY_PROFILE: Record<SecurityProfile, readonly Prech
   SECURE_BYOD: ['IDENTITY_SESSION', 'ELIGIBILITY', 'CLIENT_VERSION', 'NETWORK_SAVE_ROUNDTRIP', 'CLOCK_SYNC', 'KEYBOARD_INPUT', 'CONSENT', 'SYSTEM_SCAN'],
   MANAGED_ENDPOINT: ['IDENTITY_SESSION', 'ELIGIBILITY', 'CLIENT_VERSION', 'NETWORK_SAVE_ROUNDTRIP', 'CLOCK_SYNC', 'KEYBOARD_INPUT', 'CONSENT', 'SYSTEM_SCAN'],
 };
+
+/** Official university academic 10-point scale (COE standard scale, configurable per exam policy). */
+export const DEFAULT_GRADING_BANDS = [
+  { min: 90, grade: 'O', label: 'Outstanding', points: 10 },
+  { min: 80, grade: 'A+', label: 'Excellent', points: 9 },
+  { min: 70, grade: 'A', label: 'Very Good', points: 8 },
+  { min: 60, grade: 'B+', label: 'Good', points: 7 },
+  { min: 55, grade: 'B', label: 'Above Average', points: 6 },
+  { min: 50, grade: 'C', label: 'Average', points: 5 },
+  { min: 0, grade: 'F', label: 'Fail', points: 0 },
+] as const;
+export type GradingBand = (typeof DEFAULT_GRADING_BANDS)[number];

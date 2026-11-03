@@ -1,5 +1,5 @@
 import { withTenantTx, withWorkerTx, type Knex } from '@examos/db';
-import { CANDIDATE_TRANSITIONS, assertTransition, type CandidateStatus } from '@examos/contracts';
+import { CANDIDATE_TRANSITIONS, assertTransition, type CandidateStatus, DEFAULT_GRADING_BANDS } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { AppError } from '../../lib/errors.js';
 import { audit, logAttemptEvent } from '../../lib/audit.js';
@@ -392,7 +392,7 @@ export async function controllerAuthorizeAndPublish(trx: Knex.Transaction, tenan
 function gradeFor(marks: number, max: number, policy: Record<string, unknown>): string | null {
   const pct = max > 0 ? (marks / max) * 100 : 0;
   const grading = policy['grading'] as { bands?: Array<{ min: number; grade: string }> } | undefined;
-  const bands = grading?.bands ?? [{ min: 90, grade: 'O' }, { min: 80, grade: 'A+' }, { min: 70, grade: 'A' }, { min: 60, grade: 'B+' }, { min: 50, grade: 'B' }, { min: 40, grade: 'C' }, { min: 0, grade: 'F' }];
+  const bands = grading?.bands ?? DEFAULT_GRADING_BANDS;
   const band = [...bands].sort((a, b) => b.min - a.min).find((b) => pct >= b.min);
   return band?.grade ?? null;
 }

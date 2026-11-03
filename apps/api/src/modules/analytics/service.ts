@@ -52,10 +52,11 @@ export async function getDepartmentAnalytics(
   const totalMaxMarks = records.reduce((sum, r) => sum + Number(r.maxMarks), 0);
   const avgPercentage = totalMaxMarks > 0 ? round2((totalMarks / totalMaxMarks) * 100) : 0;
 
-  // Passing threshold: marks >= 40% of max_marks and grade != 'F'
-  const passCount = records.filter(
-    (r) => Number(r.marks) >= 0.4 * Number(r.maxMarks) && r.grade !== 'F',
-  ).length;
+  // Passing threshold: authoritative grade != 'F' or >= 50% threshold on academic 10-point scale
+  const isPassing = (r: { marks: unknown; maxMarks: unknown; grade?: string | null }) =>
+    r.grade ? r.grade !== 'F' : Number(r.marks) >= 0.5 * Number(r.maxMarks);
+
+  const passCount = records.filter(isPassing).length;
   const failCount = totalPublishedResults - passCount;
   const passRate = totalPublishedResults > 0 ? round2((passCount / totalPublishedResults) * 100) : 0;
 
@@ -74,9 +75,7 @@ export async function getDepartmentAnalytics(
     const gMarks = group.reduce((sum, r) => sum + Number(r.marks), 0);
     const gMax = group.reduce((sum, r) => sum + Number(r.maxMarks), 0);
     const gAvgPct = gMax > 0 ? round2((gMarks / gMax) * 100) : 0;
-    const gPass = group.filter(
-      (r) => Number(r.marks) >= 0.4 * Number(r.maxMarks) && r.grade !== 'F',
-    ).length;
+    const gPass = group.filter(isPassing).length;
     const gPassRate = group.length > 0 ? round2((gPass / group.length) * 100) : 0;
     const students = new Set(group.map((r) => r.userId)).size;
     const exams = new Set(group.map((r) => r.examId)).size;
@@ -107,9 +106,7 @@ export async function getDepartmentAnalytics(
     const avg = round2(sum / marksArr.length);
     const highest = Math.max(...marksArr);
     const lowest = Math.min(...marksArr);
-    const ePass = group.filter(
-      (r) => Number(r.marks) >= 0.4 * maxMarks && r.grade !== 'F',
-    ).length;
+    const ePass = group.filter(isPassing).length;
     const ePassRate = round2((ePass / group.length) * 100);
 
     return {
