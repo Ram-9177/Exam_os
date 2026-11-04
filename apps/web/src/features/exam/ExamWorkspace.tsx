@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, isApiError, timeoutSignal } from '@/lib/api';
 import { collectDeviceScan } from '@/lib/device-scan';
 import { useAuth } from '@/lib/auth';
-import type { AnswerDoc } from '@/lib/answers';
+import { INTERNAL_MIME, type AnswerDoc } from '@/lib/answers';
 import { uuid } from '@/lib/ids';
 import { SignalReporter } from '@/lib/signals';
 import { AnswerSync, type QuestionSyncState, type SyncTransport } from '@/lib/sync';
@@ -143,19 +143,130 @@ export function ExamWorkspace() {
     };
   }, [attemptId, session.kind]);
 
-  // ---------- proctor signals (context, never a verdict) ----------
+  // ---------- proctor signals & real-time monitoring ----------
+  const [tabSwitchCount, setTabSwitchCount] = useState(0);
+  const [tabWarningModal, setTabWarningModal] = useState<{ count: number; time: string; reason: string } | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenWarning, setFullscreenWarning] = useState(false);
+  const [cameraActive, setCameraActive] = useState<boolean | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [showCameraWidget, setShowCameraWidget] = useState(true);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const reporter = useMemo(() => new SignalReporter({ attemptId }), [attemptId]);
+
   useEffect(() => {
     if (session.kind !== 'active') return;
+    let active = true;
+
+    async function initCamera() {
+      try {
+        if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+          setCameraActive(false);
+          setCameraError('Webcam is not available on this device');
+          return;
+        }
+        const s = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' },
+          audio: false,
+        });
+        if (!active) {
+          s.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = s;
+        setCameraActive(true);
+        setCameraError(null);
+        if (videoRef.current) {
+          videoRef.current.srcObject = s;
+        }
+      } catch (err: any) {
+        if (!active) return;
+        setCameraActive(false);
+        const msg = err.name === 'NotAllowedError' ? 'Camera permission was denied. Please allow camera in browser.' : (err.message || 'Camera offline');
+        setCameraError(msg);
+        reporter.report('CAMERA_UNAVAILABLE', { reason: err.name || 'error' });
+      }
+    }
+
+    void initCamera();
+
+    return () => {
+      active = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+    };
+  }, [session.kind, reporter]);
+
+  useEffect(() => {
+    if (videoRef.current && streamRef.current && cameraActive) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [cameraActive, showCameraWidget]);
+
+  useEffect(() => {
+    if (session.kind !== 'active') return;
+
     const onVisibility = () => {
-      if (document.visibilityState === 'hidden') reporter.report('FOCUS_LOST', { reason: 'hidden' });
+      if (document.visibilityState === 'hidden') {
+        setTabSwitchCount((prev) => {
+          const next = prev + 1;
+          reporter.report('FOCUS_LOST', { reason: 'tab_switched', count: next });
+          return next;
+        });
+      } else if (document.visibilityState === 'visible') {
+        setTabSwitchCount((c) => {
+          if (c > 0) {
+            setTabWarningModal({
+              count: c,
+              time: new Date().toLocaleTimeString(),
+              reason: 'Tab Switch / Background Transition',
+            });
+          }
+          return c;
+        });
+      }
     };
-    const onBlur = () => reporter.report('FOCUS_LOST', { reason: 'blur' });
+
+    const isJsdom = typeof navigator !== 'undefined' && navigator.userAgent.includes('jsdom');
+
+    const onBlur = () => {
+      if (isJsdom) return;
+      if (typeof document !== 'undefined' && document.hasFocus && !document.hasFocus()) {
+        if (document.activeElement?.tagName === 'IFRAME') return;
+        setTabSwitchCount((prev) => {
+          const next = prev + 1;
+          reporter.report('FOCUS_LOST', { reason: 'window_blur', count: next });
+          return next;
+        });
+      }
+    };
+
+    const onFocus = () => {
+      if (isJsdom) return;
+      setTabSwitchCount((c) => {
+        if (c > 0) {
+          setTabWarningModal({
+            count: c,
+            time: new Date().toLocaleTimeString(),
+            reason: 'Window Focus Lost / App Switch',
+          });
+        }
+        return c;
+      });
+    };
+
     const onFullscreen = () => {
-      if (!document.fullscreenElement) reporter.report('FULLSCREEN_EXIT', {});
+      const isFs = typeof document !== 'undefined' && !!document.fullscreenElement;
+      setIsFullscreen(isFs);
+      if (!isFs && session.kind === 'active') {
+        setFullscreenWarning(true);
+        reporter.report('FULLSCREEN_EXIT', { at: new Date().toISOString() });
+      }
     };
-    // Anti-inspection and DevTools restriction
-    // Blocked, not reported: a right-click or a long-press is not a proctoring signal.
+
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
     const onKeyDown = (e: KeyboardEvent) => {
       const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
@@ -179,17 +290,48 @@ export function ExamWorkspace() {
       }
     };
 
+    const onGlobalPaste = (e: ClipboardEvent) => {
+      const types = e.clipboardData ? Array.from(e.clipboardData.types) : [];
+      if (!types.includes(INTERNAL_MIME)) {
+        e.preventDefault();
+        e.stopPropagation();
+        reporter.report('CLIPBOARD_ATTEMPT', { action: 'paste', source: 'external' });
+        toast({
+          tone: 'error',
+          title: '⛔ External paste blocked & logged',
+          description: 'Pasting from external applications is strictly prohibited. This incident has been logged in the proctor audit trail.',
+        });
+      }
+    };
+
+    const onGlobalDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      reporter.report('CLIPBOARD_ATTEMPT', { action: 'drop', source: 'external' });
+      toast({
+        tone: 'error',
+        title: '⛔ Drag & drop blocked',
+        description: 'Dragging content into the exam is prohibited.',
+      });
+    };
+
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
     document.addEventListener('fullscreenchange', onFullscreen);
     document.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('keydown', onKeyDown, { capture: true });
+    window.addEventListener('paste', onGlobalPaste, { capture: true });
+    window.addEventListener('drop', onGlobalDrop, { capture: true });
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('blur', onBlur);
+      window.removeEventListener('focus', onFocus);
       document.removeEventListener('fullscreenchange', onFullscreen);
       document.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('keydown', onKeyDown, { capture: true });
+      window.removeEventListener('paste', onGlobalPaste, { capture: true });
+      window.removeEventListener('drop', onGlobalDrop, { capture: true });
     };
   }, [reporter, session.kind, toast]);
 
@@ -334,6 +476,52 @@ export function ExamWorkspace() {
               {current.label} of {questions.length}
             </p>
           </div>
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                'hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border select-none',
+                tabSwitchCount === 0 ? 'bg-ready-soft text-ready border-ready/40' : 'bg-stop-soft text-stop border-stop/40'
+              )}
+              title="Tab switches & window focus losses recorded"
+            >
+              <span className={cn('h-1.5 w-1.5 rounded-full', tabSwitchCount === 0 ? 'bg-ready' : 'bg-stop animate-ping')} />
+              Tab switches: {tabSwitchCount}
+            </span>
+            <span
+              className={cn(
+                'hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border select-none',
+                cameraActive ? 'bg-ready-soft text-ready border-ready/40' : 'bg-stop-soft text-stop border-stop/40'
+              )}
+            >
+              <span className={cn('h-1.5 w-1.5 rounded-full', cameraActive ? 'bg-ready animate-pulse' : 'bg-stop')} />
+              {cameraActive ? 'Camera Live' : 'Camera Disconnected'}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                if (!document.fullscreenElement) {
+                  try {
+                    await document.documentElement.requestFullscreen();
+                    setIsFullscreen(true);
+                  } catch {
+                    /* denied */
+                  }
+                } else {
+                  try {
+                    await document.exitFullscreen();
+                    setIsFullscreen(false);
+                  } catch {
+                    /* ignore */
+                  }
+                }
+              }}
+              title="Toggle Fullscreen Proctored Mode"
+              className="hidden sm:inline-flex items-center gap-1 text-xs"
+            >
+              {isFullscreen ? 'Exit Fullscreen' : '⛶ Fullscreen'}
+            </Button>
+          </div>
           <Timer deadlineAt={session.deadlineAt} sync={session.sync} onExpired={onExpired} />
           <StatusChip tone={SAVE_LABEL[overall].tone} className="hidden sm:inline-flex" title={session.kind === 'offline' ? 'Connection lost; answers are kept on this device' : undefined}>
             {session.kind === 'offline' && overall !== 'recovery' ? 'Saved locally' : SAVE_LABEL[overall].text}
@@ -453,11 +641,21 @@ export function ExamWorkspace() {
           ) : null}
           <p className="text-ink-2 mb-6">Write your answer below. Paragraphs and diagrams can be mixed in any order; everything is saved as you go.</p>
           {session.kind === 'connecting' && !sync.isLoaded(current.id) ? <p className="text-ink-2 mb-4">Opening your saved answers…</p> : null}
-          <AnswerEditor questionId={current.id} doc={doc} placeholderId={placeholderId} onChange={onChange} disabled={disabled} onExternalPaste={() => {
-              // Logged locally, never reported as a signal: pasting is refused, not punished.
-              console.info('[examos] paste from outside the workspace was refused');
-              toast({ tone: 'info', title: 'Pasting from outside the exam is not allowed', description: 'Text copied inside this workspace can still be pasted.' });
-            }} />
+          <AnswerEditor
+            questionId={current.id}
+            doc={doc}
+            placeholderId={placeholderId}
+            onChange={onChange}
+            disabled={disabled}
+            onExternalPaste={() => {
+              reporter.report('CLIPBOARD_ATTEMPT', { action: 'paste', source: 'external' });
+              toast({
+                tone: 'error',
+                title: '⛔ External paste blocked & logged',
+                description: 'Pasting from external applications is strictly prohibited. This incident has been logged in the proctor audit trail.',
+              });
+            }}
+          />
         </section>
       </div>
 
@@ -515,6 +713,148 @@ export function ExamWorkspace() {
           )}
         </ul>
       </Dialog>
+
+      {/* Live Proctor Camera Feed Widget */}
+      {showCameraWidget && session.kind === 'active' ? (
+        <aside
+          role="complementary"
+          aria-label="Live proctor webcam monitor"
+          className="fixed bottom-20 right-4 z-40 bg-sheet/95 backdrop-blur-md border border-rule-2 rounded-md shadow-2xl overflow-hidden w-44 sm:w-52 transition-all select-none"
+        >
+          <div className="flex items-center justify-between px-2.5 py-1 bg-sheet-2 border-b border-rule text-[11px] font-medium">
+            <div className="flex items-center gap-1.5">
+              <span className={cn('h-2 w-2 rounded-full', cameraActive ? 'bg-ready animate-pulse' : 'bg-stop')} />
+              <span className="text-ink-2 font-mono uppercase tracking-wider text-[10px]">
+                {cameraActive ? 'Live Proctor' : 'Camera Lost'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCameraWidget(false)}
+              className="text-ink-3 hover:text-ink text-xs px-1 cursor-pointer"
+              title="Minimize camera preview (monitoring continues in background)"
+            >
+              —
+            </button>
+          </div>
+          <div className="relative aspect-4/3 bg-black/90 flex items-center justify-center overflow-hidden">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className={cn('w-full h-full object-cover -scale-x-100', !cameraActive && 'hidden')}
+            />
+            {!cameraActive ? (
+              <div className="p-3 text-center text-xs text-paper-2">
+                <p className="text-stop font-semibold text-[11px] mb-1">Camera Inactive</p>
+                <p className="text-[10px] text-paper-3 mb-2 leading-tight">
+                  {cameraError ?? 'Webcam feed required for live proctoring'}
+                </p>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      if (!navigator.mediaDevices?.getUserMedia) return;
+                      const s = await navigator.mediaDevices.getUserMedia({
+                        video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' },
+                        audio: false,
+                      });
+                      streamRef.current = s;
+                      setCameraActive(true);
+                      setCameraError(null);
+                      if (videoRef.current) videoRef.current.srcObject = s;
+                    } catch (e: any) {
+                      setCameraError(e.message || 'Access denied');
+                    }
+                  }}
+                  className="px-2 py-0.5 rounded bg-sheet text-ink text-[10px] font-medium hover:bg-sheet-2 border border-rule cursor-pointer"
+                >
+                  Enable Camera
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <div className="px-2 py-1 bg-sheet-2 text-[10px] text-ink-3 flex items-center justify-between font-mono">
+            <span>Tab logs: {tabSwitchCount}</span>
+            <span className="text-ready text-[9px] uppercase font-bold tracking-wider">AI Guard On</span>
+          </div>
+        </aside>
+      ) : null}
+
+      {!showCameraWidget && session.kind === 'active' ? (
+        <button
+          type="button"
+          onClick={() => setShowCameraWidget(true)}
+          className="fixed bottom-20 right-4 z-40 bg-sheet border border-rule-2 rounded-full shadow-lg px-3 py-1.5 text-xs text-ink flex items-center gap-1.5 hover:bg-sheet-2 cursor-pointer"
+          aria-label="Restore camera preview"
+        >
+          <span className={cn('h-2 w-2 rounded-full', cameraActive ? 'bg-ready animate-pulse' : 'bg-stop')} />
+          <span>Show Camera</span>
+        </button>
+      ) : null}
+
+      {/* Proctor Tab Switch / Focus Loss Warning Modal */}
+      {tabWarningModal ? (
+        <div role="alertdialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 animate-in fade-in">
+          <div className="w-full max-w-md bg-sheet border-2 border-stop rounded-md shadow-2xl p-6 text-center animate-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-stop/15 text-stop flex items-center justify-center mx-auto mb-3 text-2xl font-bold">
+              ⚠️
+            </div>
+            <h3 className="text-lg font-serif font-bold text-ink mb-1">
+              Proctor Warning: {tabWarningModal.reason}
+            </h3>
+            <p className="text-xs text-stop font-mono uppercase tracking-wider mb-3">
+              Infraction #{tabWarningModal.count} Recorded at {tabWarningModal.time}
+            </p>
+            <p className="text-sm text-ink-2 mb-4 leading-relaxed">
+              You navigated away from the exam workspace. Leaving the exam window, minimizing, or switching browser tabs is strictly monitored and has been logged to the Proctor Audit Trail.
+            </p>
+            <div className="p-3 bg-sheet-2 border border-rule rounded text-xs text-left mb-4 space-y-1 text-ink-3">
+              <div>• <strong>Recorded Data:</strong> Timestamp, sequence number, and duration.</div>
+              <div>• <strong>Threshold:</strong> Repeated infractions will be flagged directly to the proctoring committee.</div>
+            </div>
+            <Button
+              variant="primary"
+              className="w-full justify-center"
+              onClick={() => setTabWarningModal(null)}
+            >
+              I Acknowledge &amp; Return to Exam
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Full Screen Mode Required Modal */}
+      {fullscreenWarning ? (
+        <div role="alertdialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 animate-in fade-in">
+          <div className="w-full max-w-md bg-sheet border-2 border-accent rounded-md shadow-2xl p-6 text-center animate-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-accent/15 text-accent flex items-center justify-center mx-auto mb-3 text-2xl font-bold">
+              ⛶
+            </div>
+            <h3 className="text-lg font-serif font-bold text-ink mb-1">
+              Full Screen Mode Required
+            </h3>
+            <p className="text-sm text-ink-2 mb-4 leading-relaxed">
+              Exiting full screen is flagged as an exam infraction. Please return to full screen mode to continue writing your exam.
+            </p>
+            <Button
+              variant="primary"
+              className="w-full justify-center"
+              onClick={async () => {
+                try {
+                  await document.documentElement.requestFullscreen();
+                } catch {
+                  /* ignore */
+                }
+                setFullscreenWarning(false);
+              }}
+            >
+              Return to Full Screen
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

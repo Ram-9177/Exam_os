@@ -5,7 +5,7 @@ import { cn } from '@/ui';
 import { recognizeMathSymbol, type RecognizedSymbol } from './strokeRecognition';
 
 export type DrawingTool = Stroke['tool'];
-export type { CanvasColor };
+export type { CanvasColor, Stroke, StrokePoint };
 
 export type EraserMode = 'area' | 'stroke';
 
@@ -135,7 +135,7 @@ export function renderStrokes(ctx: CanvasRenderingContext2D, content: CanvasCont
 }
 
 /** CSS background for the ruled/grid/dot paper; kept out of the bitmap so erasers never punch through it. */
-export function backgroundStyle(kind: CanvasContent['background'], scale = 1): CSSProperties {
+function backgroundStyle(kind: CanvasContent['background'], scale = 1): CSSProperties {
   const c = 'color-mix(in srgb, var(--ink, #1a2030) 11%, transparent)';
   const s = (n: number) => `${n * scale}px`;
   switch (kind) {

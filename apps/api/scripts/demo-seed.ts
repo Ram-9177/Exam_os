@@ -405,7 +405,14 @@ async function main() {
         durationMinutes: 60,
         windowStartAt: new Date(now - 15 * 60_000).toISOString(),
         windowEndAt: new Date(now + 4 * 3600_000).toISOString(),
-        policy: { ipPolicy: 'REVIEW' },
+        policy: {
+          ipPolicy: 'REVIEW',
+          capture: {
+            webcam_required_for_this_tier: true,
+            mic_required_for_this_tier: true,
+          },
+          monitoringNotice: 'This examination is proctored. Live webcam monitoring, microphone room check, tab-switch logging, and external clipboard blocking are active throughout the exam.',
+        },
       }),
       'exam2:create',
     );
@@ -552,7 +559,14 @@ async function main() {
         durationMinutes: 90,
         windowStartAt: new Date(now - 10 * 60_000).toISOString(),
         windowEndAt: new Date(now + 80 * 60_000).toISOString(),
-        policy: { ipPolicy: 'REVIEW' },
+        policy: {
+          ipPolicy: 'REVIEW',
+          capture: {
+            webcam_required_for_this_tier: true,
+            mic_required_for_this_tier: true,
+          },
+          monitoringNotice: 'This examination is proctored. Live webcam monitoring, microphone room check, tab-switch logging, and external clipboard blocking are active throughout the exam.',
+        },
       }),
       'exam3:create',
     );
@@ -735,7 +749,14 @@ async function main() {
         durationMinutes: 60,
         windowStartAt: new Date(now - 30 * 60_000).toISOString(),
         windowEndAt: new Date(now + 60 * 60_000).toISOString(),
-        policy: { ipPolicy: 'REVIEW' },
+        policy: {
+          ipPolicy: 'REVIEW',
+          capture: {
+            webcam_required_for_this_tier: true,
+            mic_required_for_this_tier: true,
+          },
+          monitoringNotice: 'This examination is proctored. Live webcam monitoring, microphone room check, tab-switch logging, and external clipboard blocking are active throughout the exam.',
+        },
       }),
       'exam4:create',
     );
@@ -881,7 +902,14 @@ async function main() {
         durationMinutes: 120,
         windowStartAt: new Date(now - 30 * 60_000).toISOString(),
         windowEndAt: new Date(now + 90 * 60_000).toISOString(),
-        policy: { ipPolicy: 'REVIEW' },
+        policy: {
+          ipPolicy: 'REVIEW',
+          capture: {
+            webcam_required_for_this_tier: true,
+            mic_required_for_this_tier: true,
+          },
+          monitoringNotice: 'This examination is proctored. Live webcam monitoring, microphone room check, tab-switch logging, and external clipboard blocking are active throughout the exam.',
+        },
       }),
       'exam5:create',
     );

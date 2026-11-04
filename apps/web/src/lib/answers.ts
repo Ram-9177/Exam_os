@@ -38,6 +38,8 @@ export interface AnswerOp {
 
 export const EMPTY_DOC: AnswerDoc = { blocks: [] };
 
+export const INTERNAL_MIME = 'text/x-examos-internal';
+
 export function isCanvasContent(v: unknown): v is CanvasContent {
   return !!v && typeof v === 'object' && Array.isArray((v as CanvasContent).strokes);
 }

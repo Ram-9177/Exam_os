@@ -1,13 +1,11 @@
 import { forwardRef, useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 import { CANVAS_BACKGROUNDS, CANVAS_COLORS, CANVAS_LIMITS, CANVAS_TOOLS, type CanvasColor } from '@examos/contracts';
 import type { AnswerDoc, Block, CanvasContent, Stroke } from '@/lib/answers';
-import { isCanvasContent, paragraphText, codeText } from '@/lib/answers';
+import { isCanvasContent, paragraphText, codeText, INTERNAL_MIME } from '@/lib/answers';
 import { uuid } from '@/lib/ids';
 import { Button, cn } from '@/ui';
 import { DrawingSurface, emptyCanvas, undoLastStroke, insertDigitalSymbolOnCanvas, type DrawingTool, type EraserMode } from '@/features/drawing/DrawingSurface';
 import { MathPalette } from '@/features/drawing/MathPalette';
-
-const INTERNAL_MIME = 'text/x-examos-internal';
 
 export function newParagraph(text = ''): Block {
   return { id: `b-${uuid()}`, kind: 'paragraph', content: text };
@@ -152,21 +150,48 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
     return () => window.removeEventListener('keydown', onDocKey);
   }, [disabled, docHistory.length, docFuture.length, move, undoDoc, redoDoc]);
 
-  const onCopy = (e: ClipboardEvent) => {
-    const sel = typeof window !== 'undefined' ? window.getSelection()?.toString() : '';
+  const handleCopy = (e: ClipboardEvent<any>) => {
+    let sel = '';
+    const target = e.currentTarget as HTMLTextAreaElement | null;
+    if (target && typeof target.selectionStart === 'number' && typeof target.selectionEnd === 'number') {
+      sel = target.value.substring(target.selectionStart, target.selectionEnd);
+    }
+    if (!sel && typeof window !== 'undefined') {
+      sel = window.getSelection()?.toString() ?? '';
+    }
     if (!sel) return;
-    e.clipboardData.setData('text/plain', sel);
-    e.clipboardData.setData(INTERNAL_MIME, '1');
-    e.preventDefault();
+    if (e.clipboardData) {
+      e.clipboardData.setData('text/plain', sel);
+      e.clipboardData.setData(INTERNAL_MIME, '1');
+      e.preventDefault();
+    }
   };
-  const onPaste = (e: ClipboardEvent) => {
-    if (e.clipboardData.types.includes(INTERNAL_MIME)) return;
-    e.preventDefault();
-    onExternalPaste?.();
+
+  const handleCut = (e: ClipboardEvent<any>) => {
+    handleCopy(e);
+    const target = e.currentTarget as HTMLTextAreaElement | null;
+    if (target && typeof target.selectionStart === 'number' && typeof target.selectionEnd === 'number') {
+      const start = target.selectionStart;
+      const end = target.selectionEnd;
+      if (start !== end) {
+        const next = target.value.substring(0, start) + target.value.substring(end);
+        target.value = next;
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
+  };
+
+  const handlePaste = (e: ClipboardEvent<any>) => {
+    const types = e.clipboardData ? Array.from(e.clipboardData.types) : [];
+    if (!types.includes(INTERNAL_MIME)) {
+      e.preventDefault();
+      e.stopPropagation();
+      onExternalPaste?.();
+    }
   };
 
   return (
-    <div className="flex flex-col gap-4" onCopy={onCopy} onCut={onCopy} onPaste={onPaste}>
+    <div className="flex flex-col gap-4" onCopy={handleCopy} onCut={handleCut} onPaste={handlePaste}>
       {(docHistory.length > 0 || docFuture.length > 0) && !disabled ? (
         <div className="flex items-center gap-2 text-xs text-ink-3">
           <Button size="sm" variant="ghost" onClick={undoDoc} disabled={docHistory.length === 0} title="Undo block action (Ctrl+Z / ⌘Z)">
@@ -209,6 +234,10 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
               isLast={i === blocks.length - 1}
               onMoveUp={() => move(b.id, 'up')}
               onMoveDown={() => move(b.id, 'down')}
+              onExternalPaste={onExternalPaste}
+              onCopy={handleCopy}
+              onCut={handleCut}
+              onPaste={handlePaste}
             />
           ) : (
             <ParagraphBlock
@@ -223,6 +252,10 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
               onMoveUp={() => move(b.id, 'up')}
               onMoveDown={() => move(b.id, 'down')}
               onRemove={blocks.length > 1 ? () => remove(b.id) : undefined}
+              onExternalPaste={onExternalPaste}
+              onCopy={handleCopy}
+              onCut={handleCut}
+              onPaste={handlePaste}
             />
           )}
           <div className={cn('flex flex-wrap items-center gap-2 mt-2 text-sm', disabled && 'hidden')}>
@@ -258,8 +291,12 @@ const ParagraphBlock = forwardRef<
     onMoveUp?: () => void;
     onMoveDown?: () => void;
     onRemove?: () => void;
+    onExternalPaste?: () => void;
+    onCopy?: (e: ClipboardEvent<any>) => void;
+    onCut?: (e: ClipboardEvent<any>) => void;
+    onPaste?: (e: ClipboardEvent<any>) => void;
   }
->(function ParagraphBlock({ value, onChange, disabled, label, index, isFirst, isLast, onMoveUp, onMoveDown, onRemove }, ref) {
+>(function ParagraphBlock({ value, onChange, disabled, label, index, isFirst, isLast, onMoveUp, onMoveDown, onRemove, onExternalPaste, onCopy, onCut, onPaste }, ref) {
   const innerRef = useRef<HTMLTextAreaElement | null>(null);
   const setRefs = (el: HTMLTextAreaElement | null) => {
     innerRef.current = el;
@@ -300,13 +337,22 @@ const ParagraphBlock = forwardRef<
         ref={setRefs}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onPaste={onPaste}
+        onCopy={onCopy}
+        onCut={onCut}
+        onContextMenu={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onExternalPaste?.();
+        }}
         disabled={disabled}
         aria-label={label}
         spellCheck={false}
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="sentences"
-        className="ruled ruled-inset w-full resize-none border-0 py-2 text-[17px] text-ink outline-none disabled:opacity-70"
+        className="ruled ruled-inset w-full resize-none border-0 pt-0 pb-0 text-[16px] leading-[2rem] text-ink outline-none disabled:opacity-70"
         style={{ fontFamily: 'var(--font-sans)', minHeight: 160 }}
       />
     </div>
@@ -316,7 +362,7 @@ const ParagraphBlock = forwardRef<
 // ---------------------------------------------------------------------------
 // Code listing block
 // ---------------------------------------------------------------------------
-export const CODE_LANGUAGES = [
+const CODE_LANGUAGES = [
   { value: 'python', label: 'Python' },
   { value: 'c_cpp', label: 'C / C++' },
   { value: 'java', label: 'Java' },
@@ -335,6 +381,10 @@ function CodeBlock({
   isLast,
   onMoveUp,
   onMoveDown,
+  onExternalPaste,
+  onCopy,
+  onCut,
+  onPaste,
 }: {
   content: unknown;
   onChange: (next: unknown) => void;
@@ -345,6 +395,10 @@ function CodeBlock({
   isLast: boolean;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
+  onExternalPaste?: () => void;
+  onCopy?: (e: ClipboardEvent<any>) => void;
+  onCut?: (e: ClipboardEvent<any>) => void;
+  onPaste?: (e: ClipboardEvent<any>) => void;
 }) {
   const code = typeof content === 'string' ? content : (content as any)?.code ?? '';
   const language = (content as any)?.language ?? 'python';
@@ -437,6 +491,15 @@ function CodeBlock({
           value={code}
           onChange={(e) => handleCodeChange(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={onPaste}
+          onCopy={onCopy}
+          onCut={onCut}
+          onContextMenu={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onExternalPaste?.();
+          }}
           disabled={disabled}
           placeholder="// Write your code or algorithm here... (Tab indents 2 spaces)"
           aria-label={`Code editor ${index}`}
@@ -455,8 +518,8 @@ function CodeBlock({
 // ---------------------------------------------------------------------------
 // Whiteboard block
 // ---------------------------------------------------------------------------
-export const TOOL_LABEL: Record<DrawingTool, string> = { pen: 'Pen', highlighter: 'Highlighter', eraser: 'Eraser', line: 'Line', arrow: 'Arrow', rect: 'Rectangle', ellipse: 'Ellipse', text: 'Text' };
-export const COLOR_LABEL: Record<CanvasColor, string> = { ink: 'Ink', blue: 'Blue', red: 'Red', green: 'Green', orange: 'Orange', purple: 'Purple' };
+const TOOL_LABEL: Record<DrawingTool, string> = { pen: 'Pen', highlighter: 'Highlighter', eraser: 'Eraser', line: 'Line', arrow: 'Arrow', rect: 'Rectangle', ellipse: 'Ellipse', text: 'Text' };
+const COLOR_LABEL: Record<CanvasColor, string> = { ink: 'Ink', blue: 'Blue', red: 'Red', green: 'Green', orange: 'Orange', purple: 'Purple' };
 const BACKGROUND_LABEL: Record<(typeof CANVAS_BACKGROUNDS)[number], string> = { blank: 'Plain', grid: 'Grid', ruled: 'Ruled', dots: 'Dots' };
 
 const WIDTHS = [
