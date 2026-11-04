@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AnswerEditor } from '@/features/exam/AnswerEditor';
-import { INTERNAL_MIME } from '@/lib/answers';
+import { INTERNAL_MIME, type AnswerDoc } from '@/lib/answers';
 
 describe('Proctor Security & Integrity Controls', () => {
   it('blocks external paste on answer textarea and fires onExternalPaste callback', async () => {
     let externalPasteFired = false;
-    let doc = { blocks: [{ id: 'b1', kind: 'paragraph' as const, content: 'Initial text' }] };
+    let doc: AnswerDoc = { blocks: [{ id: 'b1', kind: 'paragraph', content: 'Initial text' }] };
 
     render(
       <AnswerEditor
@@ -43,7 +43,7 @@ describe('Proctor Security & Integrity Controls', () => {
 
   it('allows internal paste when INTERNAL_MIME is present in clipboard types', async () => {
     let externalPasteFired = false;
-    let doc = { blocks: [{ id: 'b1', kind: 'paragraph' as const, content: 'Initial text' }] };
+    let doc: AnswerDoc = { blocks: [{ id: 'b1', kind: 'paragraph', content: 'Initial text' }] };
 
     render(
       <AnswerEditor
