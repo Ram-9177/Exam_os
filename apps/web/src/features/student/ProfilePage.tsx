@@ -1,9 +1,9 @@
-import { useState, useRef, type ChangeEvent } from 'react';
+import { useState, useRef, useEffect, type ChangeEvent } from 'react';
 import type { StudentProfileData, IdCardVerificationData } from '@examos/contracts';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/time';
-import { api } from '@/lib/api';
+import { api, getTokens } from '@/lib/api';
 import {
   Button,
   Dialog,
@@ -19,6 +19,7 @@ import {
   useStudentProfile,
   useStudentIdCard,
   useStudentSignature,
+  useStudentPhoto,
   uploadStudentPhoto,
   uploadStudentSignature,
   deleteStudentSignature,
@@ -72,6 +73,16 @@ export function ProfilePage() {
   const idCard: (IdCardVerificationData & { qrDataUrl: string }) | undefined =
     (idCardQuery.data as any)?.idCard ?? (idCardQuery.data as unknown as (IdCardVerificationData & { qrDataUrl: string }));
   const signature = signatureQuery.data?.signatureDataUrl;
+
+  const hasPhotoDoc = !!profile?.documents?.photo;
+  const photoBlobQuery = useStudentPhoto(activeStudentId || undefined, hasPhotoDoc);
+  const [uploadedPhotoPreview, setUploadedPhotoPreview] = useState<string | null>(null);
+  const [photoLoadError, setPhotoLoadError] = useState(false);
+
+  useEffect(() => {
+    setUploadedPhotoPreview(null);
+    setPhotoLoadError(false);
+  }, [activeStudentId]);
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     setFileError(null);
@@ -144,6 +155,8 @@ export function ProfilePage() {
         { photoDataUrl, consentGiven: true },
         activeStudentId || undefined
       );
+      setUploadedPhotoPreview(photoDataUrl);
+      setPhotoLoadError(false);
       toast({
         title: 'Photograph uploaded successfully',
         description: 'Official examination photograph has been recorded.',
@@ -155,6 +168,7 @@ export function ProfilePage() {
       setPhotoKey(Date.now());
       void queryClient.invalidateQueries({ queryKey: ['student', 'profile'] });
       void queryClient.invalidateQueries({ queryKey: ['student', 'id-card'] });
+      void queryClient.invalidateQueries({ queryKey: ['student', 'photo'] });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Upload failed. Please try again.';
       setFileError(msg);
@@ -345,9 +359,11 @@ export function ProfilePage() {
   }
 
   const { student, department, programme, documents, hallTickets, cumulative } = profile;
-  const photoSrc = documents.photo
-    ? `/api/v1/student/profile/photo?t=${photoKey}${activeStudentId ? `&userId=${activeStudentId}` : ''}`
+  const token = getTokens()?.accessToken;
+  const fallbackPhotoSrc = (documents.photo || uploadedPhotoPreview)
+    ? `/api/v1/student/profile/photo?t=${photoKey}${token ? `&token=${encodeURIComponent(token)}` : ''}${activeStudentId ? `&userId=${encodeURIComponent(activeStudentId)}` : ''}`
     : null;
+  const photoSrc = uploadedPhotoPreview || photoBlobQuery.data || fallbackPhotoSrc;
 
   return (
     <div className="max-w-5xl space-y-10">
@@ -384,11 +400,12 @@ export function ProfilePage() {
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 pb-6 border-b border-rule">
           <div className="flex items-center gap-5">
             <div className="relative">
-              {photoSrc ? (
+              {photoSrc && !photoLoadError ? (
                 <img
                   src={photoSrc}
                   alt={`${student.fullName} profile photo`}
                   className="w-24 h-24 rounded-full object-cover border-2 border-rule bg-sheet-2 shadow-sm"
+                  onError={() => setPhotoLoadError(true)}
                 />
               ) : (
                 <div
@@ -408,7 +425,7 @@ export function ProfilePage() {
               </div>
               <p className="text-sm text-ink-2 mt-0.5">{student.email}</p>
               <p className="text-xs text-ink-3 mt-1">
-                {documents.photo ? 'Official Photo Verified' : 'Photograph Required'}
+                {documents.photo || uploadedPhotoPreview ? 'Official Photo Verified' : 'Photograph Required'}
               </p>
             </div>
           </div>
@@ -423,7 +440,7 @@ export function ProfilePage() {
                 setIsUploadOpen(true);
               }}
             >
-              {documents.photo ? 'Update Photograph' : 'Upload Photograph'}
+              {documents.photo || uploadedPhotoPreview ? 'Update Photograph' : 'Upload Photograph'}
             </Button>
             <Button
               variant="secondary"
@@ -559,11 +576,12 @@ export function ProfilePage() {
             {/* ID Card Content */}
             <div className="flex flex-col sm:flex-row gap-5 items-center">
               <div className="shrink-0 text-center">
-                {photoSrc ? (
+                {photoSrc && !photoLoadError ? (
                   <img
                     src={photoSrc}
                     alt={`${student.fullName} ID Photo`}
                     className="w-28 h-32 rounded-md object-cover border border-rule bg-sheet-2 shadow-inner"
+                    onError={() => setPhotoLoadError(true)}
                   />
                 ) : (
                   <div className="w-28 h-32 rounded-md bg-sheet-2 border border-dashed border-rule flex items-center justify-center text-ink-3 text-3xl font-serif">

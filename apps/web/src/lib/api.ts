@@ -261,10 +261,38 @@ export async function downloadBlob(path: string, fallbackFilename: string, opts:
   URL.revokeObjectURL(url);
 }
 
+export async function getBlob(path: string, opts: RequestOptions = {}): Promise<Blob> {
+  const headers: Record<string, string> = { ...(opts.headers ?? {}) };
+  const auth = opts.auth ?? true;
+  const t = getTokens();
+  if (auth && t) headers['authorization'] = `Bearer ${t.accessToken}`;
+  const ds = getDeviceSession();
+  if (ds) headers['x-device-session'] = ds;
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { method: 'GET', headers, signal: opts.signal });
+  } catch (e) {
+    const problem: Problem = { type: 'urn:examos:error:NETWORK', title: 'Could not reach the server', status: 0, code: 'NETWORK', requestId: '', retryable: true };
+    if (opts.quiet !== true && !(Array.isArray(opts.quiet) && opts.quiet.includes('NETWORK'))) apiEvents.emit('problem', problem);
+    throw Object.assign(new ApiError(problem), { cause: e });
+  }
+
+  if (!res.ok) {
+    const problem = await toProblem(res);
+    const silenced = opts.quiet === true || (Array.isArray(opts.quiet) && opts.quiet.includes(problem.code));
+    if (!silenced) apiEvents.emit('problem', problem);
+    throw new ApiError(problem);
+  }
+
+  return res.blob();
+}
+
 export const api = {
   get: <T>(path: string, opts?: RequestOptions) => request<T>('GET', path, opts),
   post: <T>(path: string, body?: unknown, opts?: RequestOptions) => request<T>('POST', path, { ...opts, body: body ?? {} }),
   put: <T>(path: string, body?: unknown, opts?: RequestOptions) => request<T>('PUT', path, { ...opts, body: body ?? {} }),
   del: <T>(path: string, body?: unknown, opts?: RequestOptions) => request<T>('DELETE', path, { ...opts, ...(body !== undefined ? { body } : {}) }),
   download: (path: string, fallbackFilename: string, opts?: RequestOptions) => downloadBlob(path, fallbackFilename, opts),
+  getBlob: (path: string, opts?: RequestOptions) => getBlob(path, opts),
 };

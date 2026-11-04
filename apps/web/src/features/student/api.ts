@@ -22,6 +22,19 @@ export function useStudentIdCard(userId?: string) {
   });
 }
 
+export function useStudentPhoto(userId?: string, hasPhoto = true) {
+  return useQuery({
+    queryKey: ['student', 'photo', userId ?? 'me'],
+    queryFn: async () => {
+      const path = userId ? `/student/profile/photo?userId=${encodeURIComponent(userId)}` : '/student/profile/photo';
+      const blob = await api.getBlob(path);
+      return URL.createObjectURL(blob);
+    },
+    enabled: hasPhoto,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useStudentSignature(userId?: string) {
   return useQuery({
     queryKey: ['student', 'signature', userId ?? 'me'],

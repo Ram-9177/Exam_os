@@ -612,6 +612,7 @@ function StudentPhotoDialog({ user, onClose }: { user: UserRow; onClose: () => v
       toast({ tone: 'success', title: 'Photograph saved', description: `Official photograph uploaded for ${user.fullName}.` });
       void qc.invalidateQueries({ queryKey: ['tenant', 'users'] });
       void qc.invalidateQueries({ queryKey: ['student', 'profile'] });
+      void qc.invalidateQueries({ queryKey: ['student', 'photo'] });
       onClose();
     } catch (err) {
       setError(isApiError(err) ? (err.problem.errors?.map((x) => `${x.path}: ${x.message}`).join('; ') ?? `${err.problem.title} (${err.code})`) : 'Could not save photograph.');

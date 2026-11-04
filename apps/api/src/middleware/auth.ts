@@ -22,7 +22,12 @@ export function requireUser({ deps, jwt }: AuthDeps): RequestHandler {
       const tenant = req.ctx.tenant;
       if (!tenant) throw AppError.notFound('TENANT_NOT_FOUND', 'No tenant in context');
       const header = req.header('authorization') ?? '';
-      const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+      const queryToken = typeof req.query['token'] === 'string'
+        ? req.query['token']
+        : typeof req.query['access_token'] === 'string'
+          ? req.query['access_token']
+          : '';
+      const token = header.startsWith('Bearer ') ? header.slice(7).trim() : queryToken.trim();
       if (!token) throw AppError.unauthorized();
       let claims;
       try {

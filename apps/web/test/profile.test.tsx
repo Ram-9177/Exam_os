@@ -131,4 +131,36 @@ describe('Student Profile and ID Card UI', () => {
     const submitBtn = screen.getByRole('button', { name: 'Confirm & Save Photo' });
     expect(submitBtn).toBeDisabled();
   });
+
+  it('renders student photo when document is verified and allows updating', async () => {
+    signInAs(['STUDENT']);
+    const profileWithPhoto = {
+      ...mockProfile,
+      documents: {
+        photo: {
+          sha256: 'abc123',
+          createdAt: '2026-10-30T10:00:00Z',
+          mimeType: 'image/png',
+        },
+      },
+    };
+
+    mockFetch((call) => {
+      if (call.path === '/tenants/me') return { json: TENANT };
+      if (call.path === '/auth/me') return { json: { userId: 'u1', email: 'test@demo.local', kind: 'STUDENT', grants: [{ role: 'STUDENT', scopeType: 'TENANT', scopeId: null }], tenant: TENANT } };
+      if (call.path === '/student/profile') return { json: { profile: profileWithPhoto } };
+      if (call.path === '/student/profile/id-card') return { json: { idCard: mockIdCard } };
+      if (call.path === '/student/profile/photo') return { body: new Blob(['fake-image'], { type: 'image/png' }) };
+      return undefined;
+    });
+
+    renderApp([{ path: '/student/profile', element: <ProfilePage /> }], '/student/profile');
+
+    expect(await screen.findByText('Official Photo Verified')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update Photograph' })).toBeInTheDocument();
+    const imgs = screen.getAllByRole('img');
+    const photoImg = imgs.find((img) => img.getAttribute('alt')?.includes('profile photo'));
+    expect(photoImg).toBeDefined();
+    expect(photoImg?.getAttribute('src')).toBeTruthy();
+  });
 });
