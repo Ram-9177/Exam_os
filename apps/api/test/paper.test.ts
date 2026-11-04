@@ -352,6 +352,13 @@ describe('Question paper module (authoring, review, encrypted seal, release, mar
     expect(unknownQ.status).toBe(422);
     expect(unknownQ.body.code).toBe('UNKNOWN_QUESTION_ID');
 
+    // Every question on the paper must be marked, so a partial sheet cannot become a result
+    const partial = await req().post(`/api/v1/candidates/${student.attemptId}/result-versions`).set(H(evaluator.token)).send({
+      items: [{ questionId: 'q1', marks: 8, maxMarks: 10, explanation: 'Only the first question' }],
+    });
+    expect(partial.status).toBe(422);
+    expect(partial.body.code).toBe('MARKS_INCOMPLETE');
+
     // Evaluator marks with valid marks respecting paper maxMarks
     const validMark = await req().post(`/api/v1/candidates/${student.attemptId}/result-versions`).set(H(evaluator.token)).send({
       items: [
@@ -362,6 +369,8 @@ describe('Question paper module (authoring, review, encrypted seal, release, mar
           explanation: 'Clear explanation of potential method',
           criteria: [{ code: 'DEF', max: 5, awarded: 4 }, { code: 'EX', max: 5, awarded: 4 }],
         },
+        { questionId: 'q2', marks: 0, maxMarks: 10, explanation: 'Not attempted' },
+        { questionId: 'q3', marks: 0, maxMarks: 5, explanation: 'Not attempted' },
       ],
     });
     expect(validMark.status).toBe(201);

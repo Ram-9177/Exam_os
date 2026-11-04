@@ -6,7 +6,7 @@ import { canonicalJson, sha256Hex } from './canonical';
  * carry plain text; canvas blocks carry vector strokes. Equation and table
  * kinds are accepted by the API but the editor does not create them yet.
  */
-export type BlockKind = 'paragraph' | 'equation' | 'table' | 'canvas' | 'code';
+export type BlockKind = 'paragraph' | 'equation' | 'table' | 'canvas' | 'code' | 'choice';
 
 export interface Block {
   id: string;

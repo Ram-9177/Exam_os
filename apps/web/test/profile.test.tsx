@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProfilePage } from '@/features/student/ProfilePage';
@@ -134,6 +134,8 @@ describe('Student Profile and ID Card UI', () => {
 
   it('renders student photo when document is verified and allows updating', async () => {
     signInAs(['STUDENT']);
+    // The photo is fetched with the bearer header and shown from a blob; it never travels with a token in its URL.
+    URL.createObjectURL = vi.fn(() => 'blob:photo');
     const profileWithPhoto = {
       ...mockProfile,
       documents: {
@@ -150,7 +152,7 @@ describe('Student Profile and ID Card UI', () => {
       if (call.path === '/auth/me') return { json: { userId: 'u1', email: 'test@demo.local', kind: 'STUDENT', grants: [{ role: 'STUDENT', scopeType: 'TENANT', scopeId: null }], tenant: TENANT } };
       if (call.path === '/student/profile') return { json: { profile: profileWithPhoto } };
       if (call.path === '/student/profile/id-card') return { json: { idCard: mockIdCard } };
-      if (call.path === '/student/profile/photo') return { body: new Blob(['fake-image'], { type: 'image/png' }) };
+      if (call.path.startsWith('/student/profile/photo')) return { json: {} };
       return undefined;
     });
 
@@ -158,9 +160,7 @@ describe('Student Profile and ID Card UI', () => {
 
     expect(await screen.findByText('Official Photo Verified')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Update Photograph' })).toBeInTheDocument();
-    const imgs = screen.getAllByRole('img');
-    const photoImg = imgs.find((img) => img.getAttribute('alt')?.includes('profile photo'));
-    expect(photoImg).toBeDefined();
+    const photoImg = await screen.findByAltText(/profile photo/);
     expect(photoImg?.getAttribute('src')).toBeTruthy();
   });
 });

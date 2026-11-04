@@ -78,6 +78,37 @@ export async function issueActivation(deps: AppDeps, trx: Knex.Transaction, u: {
   return dispatchId;
 }
 
+const RESET_TTL_MINUTES = 60;
+
+/** Single-use reset link by mail. Earlier unused links stop working as soon as a new one is issued. */
+export async function issuePasswordReset(deps: AppDeps, trx: Knex.Transaction, u: { tenantId: string; userId: string; email: string; fullName: string }): Promise<void> {
+  await trx('one_time_tokens').where({ tenant_id: u.tenantId, user_id: u.userId, purpose: 'PASSWORD_RESET' }).whereNull('consumed_at').update({ consumed_at: trx.fn.now() });
+  const token = randomToken(32);
+  const [t] = await trx('one_time_tokens')
+    .insert({ tenant_id: u.tenantId, user_id: u.userId, purpose: 'PASSWORD_RESET', token_hash: sha256Hex(token), expires_at: new Date(deps.clock.now().getTime() + RESET_TTL_MINUTES * 60_000) })
+    .returning('id');
+  const host = await tenantPrimaryHost(trx, u.tenantId);
+  const tenant = await trx('tenants').where('id', u.tenantId).first('name');
+  await enqueueMail(trx, {
+    tenantId: u.tenantId,
+    category: 'PASSWORD_RESET',
+    to: { address: u.email, name: u.fullName },
+    dedupeKey: `password-reset:${u.userId}:${t.id}`,
+    vars: { fullName: u.fullName, tenantName: tenant?.name ?? 'ExamOS', expiresInMinutes: RESET_TTL_MINUTES, resetUrl: `https://${host}/reset-password?token=${encodeURIComponent(token)}` },
+  });
+}
+
+/** A fresh activation link for someone whose first one expired or went astray. */
+export async function resendActivation(deps: AppDeps, trx: Knex.Transaction, tenantId: string, userId: string, actorId: string): Promise<{ dispatchId: string | null }> {
+  const u = await trx('users').where({ tenant_id: tenantId, id: userId }).forNoKeyUpdate().first('id', 'email', 'full_name', 'status');
+  if (!u) throw AppError.notFound('USER_NOT_FOUND');
+  if (u.status !== 'PENDING_ACTIVATION') throw AppError.conflict('ALREADY_ACTIVATED', 'This account has already set a password');
+  await trx('one_time_tokens').where({ tenant_id: tenantId, user_id: userId, purpose: 'ACTIVATION' }).whereNull('consumed_at').update({ consumed_at: trx.fn.now() });
+  const dispatchId = await issueActivation(deps, trx, { tenantId, userId, email: u.email, fullName: u.full_name });
+  await audit(trx, { tenantId, actorType: 'USER', actorId, action: 'user.activation_resent', entityType: 'user', entityId: userId });
+  return { dispatchId };
+}
+
 /** Tenant-wide role list for a staff duty bundle; the first admin login always keeps TENANT_ADMIN. */
 export function bundleRoles(bundle: StaffBundle, withTenantAdmin = false): Array<{ role: RoleCode; scopeType: ScopeType; scopeId: null }> {
   const roles = new Set<RoleCode>(STAFF_BUNDLES[bundle]);
@@ -137,6 +168,8 @@ export async function setUserStatus(trx: Knex.Transaction, input: { tenantId: st
   if (input.status === 'ACTIVE' && user.kind === 'STAFF') await assertStaffCapacity(trx, input.tenantId, user.id);
   await trx('users').where('id', user.id).update({ status: input.status, updated_at: trx.fn.now() });
   if (input.status !== 'ACTIVE') {
+    // A link mailed earlier must not bring a disabled account back.
+    await trx('one_time_tokens').where({ tenant_id: input.tenantId, user_id: user.id }).whereNull('consumed_at').update({ consumed_at: trx.fn.now() });
     await trx('auth_sessions').where({ tenant_id: input.tenantId, user_id: user.id }).whereNull('revoked_at').update({ revoked_at: trx.fn.now(), revoked_reason: 'account_disabled' });
   }
   await audit(trx, { tenantId: input.tenantId, actorType: 'USER', actorId: input.actorId, action: 'user.status_changed', entityType: 'user', entityId: user.id, metadata: { from: user.status, to: input.status, reason: input.reason ?? null } });

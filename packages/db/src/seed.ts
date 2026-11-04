@@ -67,6 +67,12 @@ export const DEFAULT_MAIL_TEMPLATES: ReadonlyArray<{ code: string; subject: stri
     text: '{{examTitle}} candidate status at {{generatedAtLocal}}: {{ready}} ready, {{needsReview}} need review, {{onHold}} on hold.',
   },
   {
+    code: 'PASSWORD_RESET',
+    subject: '{{tenantName}} ExamOS: reset your password',
+    html: '<p>Dear {{fullName}},</p><p>Reset your password within {{expiresInMinutes}} minutes using the link below.</p><p><a href="{{resetUrl}}">Reset password</a></p><p>If you did not ask for this, ignore this message; your password has not changed.</p><p>{{tenantName}} Examination Cell</p>',
+    text: 'Dear {{fullName}},\n\nReset your password within {{expiresInMinutes}} minutes: {{resetUrl}}\n\nIf you did not ask for this, ignore this message; your password has not changed.\n\n{{tenantName}} Examination Cell',
+  },
+  {
     code: 'REVALUATION_DECISION',
     subject: 'Revaluation Decision for {{examTitle}}: {{decision}}',
     html: '<p>Dear {{fullName}},</p><p>Your revaluation request for <strong>{{examTitle}}</strong> has been <strong>{{decision}}</strong>.</p><p>{{decisionNote}}</p><p>View your updated status on the student portal: <a href="{{portalUrl}}">{{portalUrl}}</a></p>',

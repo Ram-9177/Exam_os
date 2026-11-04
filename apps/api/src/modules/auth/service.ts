@@ -6,6 +6,8 @@ import type { AppDeps } from '../../types.js';
 import { AppError } from '../../lib/errors.js';
 import { randomToken, sha256Hex } from '../../lib/crypto.js';
 import { audit } from '../../lib/audit.js';
+import { USER_TRANSITIONS, assertTransition } from '@examos/contracts';
+import { issueActivation, issuePasswordReset } from '../users/service.js';
 import type { JwtService } from './jwt.js';
 
 const BCRYPT_ROUNDS = 12;
@@ -43,11 +45,15 @@ export class AuthService {
       if (user) {
         // Failure bookkeeping commits in its own transaction; the refusal below must not roll it back.
         await withTenantTx(this.deps.db, tenantId, async (trx) => {
-          const failed = (user.failed_login_count ?? 0) + 1;
-          await trx('users')
-            .where('id', user.id)
-            .update({ failed_login_count: failed, locked_until: failed >= MAX_FAILED_LOGINS ? new Date(now.getTime() + LOCKOUT_MINUTES * 60_000) : user.locked_until, updated_at: trx.fn.now() });
-          await audit(trx, { tenantId, actorType: 'USER', actorId: user.id, action: 'auth.login_failed', entityType: 'user', entityId: user.id, requestId, metadata: { locked: failed >= MAX_FAILED_LOGINS, ip: net?.ip ?? null } });
+          // Attempts during a lock do not extend it, and an expired lock starts the count again.
+          const failed = locked ? (user.failed_login_count ?? 0) : (user.locked_until ? 0 : (user.failed_login_count ?? 0)) + 1;
+          if (!locked) {
+            const lockNow = failed >= MAX_FAILED_LOGINS;
+            await trx('users')
+              .where('id', user.id)
+              .update({ failed_login_count: failed, locked_until: lockNow ? new Date(now.getTime() + LOCKOUT_MINUTES * 60_000) : null, updated_at: trx.fn.now() });
+          }
+          await audit(trx, { tenantId, actorType: 'USER', actorId: user.id, action: 'auth.login_failed', entityType: 'user', entityId: user.id, requestId, metadata: { locked: locked || failed >= MAX_FAILED_LOGINS, ip: net?.ip ?? null } });
         });
       }
       throw AppError.unauthorized('INVALID_CREDENTIALS', 'Invalid e-mail or password');
@@ -131,6 +137,42 @@ export class AuthService {
     });
   }
 
+  /**
+   * Always answers the same way, known address or not. Someone who never
+   * activated gets a new activation link instead, which is what they need.
+   */
+  async forgotPassword(tenantId: string, email: string, requestId: string): Promise<void> {
+    await withTenantTx(this.deps.db, tenantId, async (trx) => {
+      const u = await trx('users').where({ tenant_id: tenantId, email: email.toLowerCase() }).first('id', 'email', 'full_name', 'status');
+      if (!u) return;
+      const target = { tenantId, userId: u.id as string, email: u.email as string, fullName: u.full_name as string };
+      if (u.status === 'ACTIVE') await issuePasswordReset(this.deps, trx, target);
+      else if (u.status === 'PENDING_ACTIVATION') await issueActivation(this.deps, trx, target);
+      else return;
+      await audit(trx, { tenantId, actorType: 'USER', actorId: u.id, action: 'auth.password_reset_requested', entityType: 'user', entityId: u.id, requestId });
+    });
+  }
+
+  /** Consumes a single-use reset token, clears any lockout and ends every session of the account. */
+  async resetPassword(tenantId: string, token: string, password: string, requestId: string): Promise<void> {
+    const passwordHash = await this.hashPassword(password);
+    await withTenantTx(this.deps.db, tenantId, async (trx) => {
+      const rows = await trx('one_time_tokens')
+        .where({ tenant_id: tenantId, token_hash: sha256Hex(token), purpose: 'PASSWORD_RESET' })
+        .whereNull('consumed_at')
+        .where('expires_at', '>', this.deps.clock.now())
+        .update({ consumed_at: trx.fn.now() })
+        .returning(['user_id']);
+      const t = rows[0];
+      const user = t ? await trx('users').where({ id: t.user_id, tenant_id: tenantId }).forNoKeyUpdate().first('status') : null;
+      if (!t || user?.status !== 'ACTIVE') throw AppError.unauthorized('RESET_INVALID', 'This reset link is invalid, used or expired');
+      await trx('users').where({ id: t.user_id, tenant_id: tenantId }).update({ password_hash: passwordHash, failed_login_count: 0, locked_until: null, updated_at: trx.fn.now() });
+      const families = await trx('auth_sessions').where({ tenant_id: tenantId, user_id: t.user_id }).whereNull('revoked_at').distinct('family_id');
+      for (const f of families) await this.revokeFamily(trx, tenantId, f.family_id, 'password_reset');
+      await audit(trx, { tenantId, actorType: 'USER', actorId: t.user_id, action: 'auth.password_reset', entityType: 'user', entityId: t.user_id, requestId });
+    });
+  }
+
   /** Consumes a single-use activation token atomically and sets the first password. */
   async activate(tenantId: string, token: string, password: string, requestId: string, net?: ClientNet): Promise<TokenPair> {
     return withTenantTx(this.deps.db, tenantId, async (trx) => {
@@ -143,6 +185,9 @@ export class AuthService {
         .returning(['id', 'user_id']);
       const t = rows[0];
       if (!t) throw AppError.unauthorized('ACTIVATION_INVALID', 'Activation link is invalid, used or expired');
+      const current = await trx('users').where({ id: t.user_id, tenant_id: tenantId }).forNoKeyUpdate().first('status');
+      if (!current || !['PENDING_ACTIVATION', 'ACTIVE'].includes(current.status)) throw AppError.unauthorized('ACTIVATION_INVALID', 'Activation link is invalid, used or expired');
+      if (current.status !== 'ACTIVE') assertTransition('user', USER_TRANSITIONS, current.status, 'ACTIVE');
       const passwordHash = await this.hashPassword(password);
       await trx('users').where({ id: t.user_id, tenant_id: tenantId }).update({ password_hash: passwordHash, status: 'ACTIVE', updated_at: trx.fn.now() });
       const user = await trx('users').where({ id: t.user_id }).first();

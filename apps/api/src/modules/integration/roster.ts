@@ -70,7 +70,8 @@ export async function upsertPersons(deps: AppDeps, trx: Knex.Transaction, actor:
         const changes: Record<string, unknown> = {};
         if (user.full_name !== p.fullName) changes['full_name'] = p.fullName;
         if (user.email !== p.email) changes['email'] = p.email;
-        const newStatus = p.status === 'ACTIVE' ? (user.status === 'PENDING_ACTIVATION' ? 'PENDING_ACTIVATION' : 'ACTIVE') : p.status;
+        // An ERP 'ACTIVE' never overrides a local decision: a disabled account stays disabled until an admin enables it.
+        const newStatus = p.status === 'ACTIVE' ? user.status : p.status;
         if (user.status !== newStatus) changes['status'] = newStatus;
         if (Object.keys(changes).length) await trx('users').where('id', user.id).update({ ...changes, updated_at: trx.fn.now() });
         if (p.kind === 'STUDENT') await upsertStudentProfile(trx, actor.tenantId, user.id, p);

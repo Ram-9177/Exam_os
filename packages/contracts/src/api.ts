@@ -45,6 +45,8 @@ export const LoginSchema = z.object({
 });
 export const RefreshSchema = z.object({ refreshToken: z.string().min(20) });
 export const ActivateSchema = z.object({ token: z.string().min(20), password: z.string().min(12).max(256) });
+export const ForgotPasswordSchema = z.object({ email: z.string().trim().email().max(320) });
+export const ResetPasswordSchema = z.object({ token: z.string().min(20), password: z.string().min(12).max(256) });
 
 // ---------- users / roles ----------
 export const UserCreateSchema = z.object({

@@ -153,6 +153,8 @@ describe('Exam workspace', () => {
     renderApp([{ path: '/student/attempts/:attemptId/exam', element: <ExamWorkspace /> }], `/student/attempts/${ATTEMPT}/exam`);
     const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
     const textarea = await screen.findByLabelText('Answer paragraph 1');
+    // The editor renders while the session connects, but only accepts typing once the answer has loaded.
+    await waitFor(() => expect(textarea).toBeEnabled());
     await user.type(textarea, 'draft');
     expect(screen.getByLabelText('Answer paragraph 1')).toBe(textarea);
     expect(textarea).toHaveValue('draft');

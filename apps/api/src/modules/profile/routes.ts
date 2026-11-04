@@ -5,7 +5,8 @@ import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body } from '../../lib/http.js';
 import { AppError } from '../../lib/errors.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
-import { requireUser, userPrincipal } from '../../middleware/auth.js';
+import { grantsAllow, requireUser, userPrincipal } from '../../middleware/auth.js';
+import type { Principal } from '../../types.js';
 import type { JwtService } from '../auth/jwt.js';
 import { updateUserSignature, removeUserSignature } from '../users/service.js';
 import {
@@ -16,19 +17,33 @@ import {
   verifyStudentByHash,
 } from './service.js';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whose profile this request acts on. A student is always themself. Staff act on
+ * themselves freely; reaching another person needs users:read (or the Exam
+ * Section's candidate read) and, for changes, users:write. The default for a
+ * staff read without ?userId stays the first student, for the staff preview.
+ */
 async function resolveTargetStudentId(
   trx: Knex.Transaction,
   tenantId: string,
-  principal: { kind: string; userId: string },
-  queryUserId?: unknown
+  principal: Extract<Principal, { type: 'USER' }>,
+  queryUserId?: unknown,
+  access: 'read' | 'write' = 'read',
 ): Promise<string> {
   if (principal.kind === 'STUDENT') return principal.userId;
-  if (typeof queryUserId === 'string' && queryUserId.trim().length > 0) return queryUserId.trim();
-  // If staff did not specify a student, fallback to the first student enrolled in this tenant
-  const firstStudent = await trx('users')
-    .where({ tenant_id: tenantId, kind: 'STUDENT' })
-    .orderBy('created_at', 'asc')
-    .first('id');
+  const requested = typeof queryUserId === 'string' ? queryUserId.trim() : '';
+  if (requested && !UUID_RE.test(requested)) throw AppError.badRequest('INVALID_USER_ID', 'userId must be a uuid');
+  if (access === 'write' && !requested) return principal.userId;
+  if (requested === principal.userId) return requested;
+  const allowed =
+    access === 'write'
+      ? grantsAllow(principal.grants, 'users:write')
+      : grantsAllow(principal.grants, 'users:read') || grantsAllow(principal.grants, 'examcell:candidates:read');
+  if (!allowed) throw AppError.forbidden('PERMISSION_DENIED', 'Your role cannot open another person\'s profile');
+  if (requested) return requested;
+  const firstStudent = await trx('users').where({ tenant_id: tenantId, kind: 'STUDENT' }).orderBy('created_at', 'asc').first('id');
   return firstStudent?.id ?? principal.userId;
 }
 
@@ -61,9 +76,9 @@ export function profileRoutes(deps: AppDeps, jwt: JwtService): Router {
       const p = userPrincipal(req);
       const input = body<typeof PhotoUploadSchema>(req);
       const targetUserId = await tenantTx(deps, req, (trx) =>
-        resolveTargetStudentId(trx, t.id, p, req.query['userId'])
+        resolveTargetStudentId(trx, t.id, p, req.query['userId'], 'write')
       );
-      res.json(await tenantTx(deps, req, (trx) => uploadStudentPhoto(deps, trx, t.id, targetUserId, input)));
+      res.json(await tenantTx(deps, req, (trx) => uploadStudentPhoto(deps, trx, t.id, targetUserId, input, p.userId)));
     }),
   );
 
@@ -111,7 +126,7 @@ export function profileRoutes(deps: AppDeps, jwt: JwtService): Router {
       const p = userPrincipal(req);
       const input = body<typeof UserSignatureUploadSchema>(req);
       const targetUserId = await tenantTx(deps, req, (trx) =>
-        resolveTargetStudentId(trx, t.id, p, req.query['userId'])
+        resolveTargetStudentId(trx, t.id, p, req.query['userId'], 'write')
       );
       const result = await tenantTx(deps, req, (trx) =>
         updateUserSignature(trx, {
@@ -132,7 +147,7 @@ export function profileRoutes(deps: AppDeps, jwt: JwtService): Router {
       const t = requireTenant(req);
       const p = userPrincipal(req);
       const targetUserId = await tenantTx(deps, req, (trx) =>
-        resolveTargetStudentId(trx, t.id, p, req.query['userId'])
+        resolveTargetStudentId(trx, t.id, p, req.query['userId'], 'write')
       );
       const result = await tenantTx(deps, req, (trx) =>
         removeUserSignature(trx, {
@@ -167,7 +182,8 @@ export function profileRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const hash = req.params['hash'] ?? '';
-      res.json(await tenantTx(deps, req, (trx) => verifyStudentByHash(deps, trx, t.id, hash)));
+      const verification = await tenantTx(deps, req, (trx) => verifyStudentByHash(deps, trx, t.id, hash));
+      res.json({ verification });
     }),
   );
 

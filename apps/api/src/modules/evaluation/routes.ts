@@ -18,6 +18,7 @@ import {
   getEvaluatorQueue,
   recordEvaluatorMarks,
   listModerationSamples,
+  listPendingModeration,
   resolveModeration,
   requestRevaluation,
   listRevaluationRequests,
@@ -131,6 +132,16 @@ export function evaluationRoutes(deps: AppDeps, jwt: JwtService): Router {
         listModerationSamples(trx, t.id, examId),
       );
       res.json(result);
+    }),
+  );
+
+  r.get(
+    '/moderation/pending',
+    user,
+    requirePermission('evaluation:moderate'),
+    asyncHandler(async (req: Request, res: Response) => {
+      const t = requireTenant(req);
+      res.json(await tenantTx(deps, req, (trx) => listPendingModeration(trx, t.id)));
     }),
   );
 

@@ -144,14 +144,38 @@ export async function getDepartmentAnalytics(
   };
 }
 
+export interface OverviewDepartmentSummary {
+  id: string;
+  code: string;
+  name: string;
+  studentCount: number;
+  publishedRecordsCount: number;
+  passRate: number;
+  avgPercentage: number;
+}
+
+/** `departmentIds` null means every department in the tenant; a list narrows to a scoped reader's own. */
 export async function getOverviewAnalytics(
   trx: Knex.Transaction,
   tenantId: string,
-): Promise<{ departments: DepartmentAnalyticsData[] }> {
-  const depts = await trx('departments').where('tenant_id', tenantId).select('id').orderBy('code');
-  const results = await Promise.all(
-    depts.map((d) => getDepartmentAnalytics(trx, tenantId, d.id)),
-  );
-  return { departments: results };
+  departmentIds: readonly string[] | null = null,
+): Promise<{ departments: OverviewDepartmentSummary[] }> {
+  const q = trx('departments').where('tenant_id', tenantId).select('id').orderBy('code');
+  if (departmentIds) q.whereIn('id', [...departmentIds]);
+  const depts = await q;
+  const departments: OverviewDepartmentSummary[] = [];
+  // One transaction, one connection: these run in sequence, not in parallel.
+  for (const d of depts) {
+    const a = await getDepartmentAnalytics(trx, tenantId, d.id);
+    departments.push({
+      id: a.department.id,
+      code: a.department.code,
+      name: a.department.name,
+      studentCount: a.summary.totalStudents,
+      publishedRecordsCount: a.summary.totalPublishedResults,
+      passRate: a.summary.passRate,
+      avgPercentage: a.summary.avgPercentage,
+    });
+  }
+  return { departments };
 }
-

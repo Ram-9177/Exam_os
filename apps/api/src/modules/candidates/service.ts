@@ -154,6 +154,9 @@ export async function recordResultVersion(trx: Knex.Transaction, tenantId: strin
         throw AppError.unprocessable('MARK_OUT_OF_RANGE', `question ${it.questionId}: marks ${it.marks} exceeds paper max marks ${q.max_marks}`);
       }
     }
+    const marked = new Set(items.map((i) => i.questionId));
+    const missing = paperQuestions.filter((q) => !marked.has(q.question_id)).map((q) => q.question_id);
+    if (missing.length) throw AppError.unprocessable('MARKS_INCOMPLETE', `Every question on the paper needs marks; missing: ${missing.join(', ')}`);
   }
 
   const total = round2(items.reduce((a, i) => a + i.marks, 0));

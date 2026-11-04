@@ -88,6 +88,25 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
   const [signatureFor, setSignatureFor] = useState<UserRow | null>(null);
   const [photoFor, setPhotoFor] = useState<UserRow | null>(null);
   const users = useQuery({ queryKey: ['tenant', 'users', q, kind], queryFn: () => api.get<{ users: UserRow[] }>(`/tenant/users?q=${encodeURIComponent(q)}&kind=${kind}`) });
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const resendActivation = async (u: UserRow) => {
+    try {
+      await api.post(`/tenant/users/${u.id}/resend-activation`);
+      toast({ tone: 'success', title: 'Activation link sent', description: `A new link is on its way to ${u.email}. The earlier one no longer works.` });
+    } catch {
+      /* reported by the global problem toast */
+    }
+  };
+  const setStatus = async (u: UserRow, status: 'ACTIVE' | 'INACTIVE') => {
+    try {
+      await api.patch(`/tenant/users/${u.id}/status`, { status });
+      void qc.invalidateQueries({ queryKey: ['tenant', 'users'] });
+      toast({ tone: 'success', title: status === 'ACTIVE' ? 'Account enabled' : 'Account disabled', description: status === 'ACTIVE' ? undefined : 'Their sessions have ended and unused links no longer work.' });
+    } catch {
+      /* reported by the global problem toast */
+    }
+  };
   const columns: Column<UserRow>[] = [
     { key: 'name', header: 'Name', render: (u) => (
         <div>
@@ -124,6 +143,16 @@ function Users({ canWrite, tz }: { canWrite: boolean; tz: string }) {
             <Button size="sm" onClick={() => setRoleFor(u)}>
               Roles
             </Button>
+            {u.status === 'PENDING_ACTIVATION' ? (
+              <Button size="sm" variant="secondary" onClick={() => void resendActivation(u)}>
+                Resend link
+              </Button>
+            ) : null}
+            {u.status === 'ACTIVE' || u.status === 'INACTIVE' ? (
+              <Button size="sm" variant="secondary" onClick={() => void setStatus(u, u.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE')}>
+                {u.status === 'ACTIVE' ? 'Disable' : 'Enable'}
+              </Button>
+            ) : null}
           </div>
         ) : null,
     },
@@ -1809,7 +1838,7 @@ function RosterImport() {
   const [importing, setImporting] = useState(false);
 
   const handleDownloadTemplate = () => {
-    window.open(`/api/v1/tenant/roster/templates/${entity}`, '_blank');
+    void api.download(`/tenant/roster/templates/${entity}`, `${entity.toLowerCase()}-template.csv`).catch(() => undefined);
   };
 
   const handlePreview = async () => {

@@ -238,10 +238,10 @@ describe('Phase 3 — Student Profile, ID Card, and Department Analytics', () =>
     // 3. Public identity verification (without authentication)
     const publicVerifyRes = await req().get(`/api/v1/student/verify-student/${hash}`).set('Host', t.host);
     expect(publicVerifyRes.status).toBe(200);
-    expect(publicVerifyRes.body.valid).toBe(true);
-    expect(publicVerifyRes.body.fullName).toBe('Aarav Patel');
-    expect(publicVerifyRes.body.registerNumber).toBe('2026CSE001');
-    expect(publicVerifyRes.body.departmentName).toBe('Computer Science and Engineering');
+    expect(publicVerifyRes.body.verification.valid).toBe(true);
+    expect(publicVerifyRes.body.verification.fullName).toBe('Aarav Patel');
+    expect(publicVerifyRes.body.verification.registerNumber).toBe('2026CSE001');
+    expect(publicVerifyRes.body.verification.departmentName).toBe('Computer Science and Engineering');
 
     // 4. Fake hash returns 404
     const fakeVerify = await req().get(`/api/v1/student/verify-student/${'0'.repeat(64)}`).set('Host', t.host);
@@ -391,19 +391,19 @@ describe('Phase 3 — Student Profile, ID Card, and Department Analytics', () =>
       .get(`/api/v1/analytics/department/${deptCseId}`)
       .set(H(hodCse.token));
     expect(cseRes.status).toBe(200);
-    expect(cseRes.body.department.code).toBe('CSE');
-    expect(cseRes.body.summary.totalStudents).toBe(2);
-    expect(cseRes.body.summary.totalPublishedResults).toBe(2);
-    expect(cseRes.body.summary.avgPercentage).toBe(60); // (42 + 18) / 100 * 100 = 60%
-    expect(cseRes.body.summary.passCount).toBe(1);
-    expect(cseRes.body.summary.failCount).toBe(1);
-    expect(cseRes.body.summary.passRate).toBe(50); // 1 / 2 = 50%
+    expect(cseRes.body.analytics.department.code).toBe('CSE');
+    expect(cseRes.body.analytics.summary.totalStudents).toBe(2);
+    expect(cseRes.body.analytics.summary.totalPublishedResults).toBe(2);
+    expect(cseRes.body.analytics.summary.avgPercentage).toBe(60); // (42 + 18) / 100 * 100 = 60%
+    expect(cseRes.body.analytics.summary.passCount).toBe(1);
+    expect(cseRes.body.analytics.summary.failCount).toBe(1);
+    expect(cseRes.body.analytics.summary.passRate).toBe(50); // 1 / 2 = 50%
 
     // Exam rollups
-    expect(cseRes.body.examRollups).toHaveLength(1);
-    expect(cseRes.body.examRollups[0].examCode).toBe('CS301-TEST');
-    expect(cseRes.body.examRollups[0].highestMarks).toBe(42);
-    expect(cseRes.body.examRollups[0].lowestMarks).toBe(18);
+    expect(cseRes.body.analytics.examRollups).toHaveLength(1);
+    expect(cseRes.body.analytics.examRollups[0].examCode).toBe('CS301-TEST');
+    expect(cseRes.body.analytics.examRollups[0].highestMarks).toBe(42);
+    expect(cseRes.body.analytics.examRollups[0].lowestMarks).toBe(18);
 
     // 3. ABAC SCOPED REFUSAL: HOD CSE requests ECE department analytics -> 403 Forbidden!
     const refusedRes = await req()
@@ -417,9 +417,9 @@ describe('Phase 3 — Student Profile, ID Card, and Department Analytics', () =>
       .get(`/api/v1/analytics/department/${deptEceId}`)
       .set(H(hodEce.token));
     expect(eceRes.status).toBe(200);
-    expect(eceRes.body.department.code).toBe('ECE');
-    expect(eceRes.body.summary.totalStudents).toBe(1);
-    expect(eceRes.body.summary.totalPublishedResults).toBe(0);
+    expect(eceRes.body.analytics.department.code).toBe('ECE');
+    expect(eceRes.body.analytics.summary.totalStudents).toBe(1);
+    expect(eceRes.body.analytics.summary.totalPublishedResults).toBe(0);
 
     // 5. Tenant-wide Controller can access department analytics and tenant overview
     const ctlDeptRes = await req()
@@ -431,8 +431,8 @@ describe('Phase 3 — Student Profile, ID Card, and Department Analytics', () =>
       .get('/api/v1/analytics/overview')
       .set(H(controller.token));
     expect(overviewRes.status).toBe(200);
-    expect(overviewRes.body.departments).toBeInstanceOf(Array);
-    expect(overviewRes.body.departments.length).toBeGreaterThanOrEqual(2);
+    expect(overviewRes.body.overview.departments).toBeInstanceOf(Array);
+    expect(overviewRes.body.overview.departments.length).toBeGreaterThanOrEqual(2);
 
     // 6. PROCTORING PRIVACY INVARIANT: Ensure analytics payload never leaks proctoring keys
     const jsonStr = JSON.stringify(cseRes.body).toLowerCase();

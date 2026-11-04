@@ -4,6 +4,8 @@ import type { PaperQuestionInput, PaperSection } from '@examos/contracts';
 import { useQuery } from '@tanstack/react-query';
 import { api, isApiError, timeoutSignal } from '@/lib/api';
 import { collectDeviceScan } from '@/lib/device-scan';
+import { ChoiceAnswer, NumericAnswer } from './StructuredAnswer';
+import { promptText } from '@examos/contracts';
 import { useAuth } from '@/lib/auth';
 import { INTERNAL_MIME, type AnswerDoc } from '@/lib/answers';
 import { uuid } from '@/lib/ids';
@@ -86,7 +88,7 @@ export function ExamWorkspace() {
     id: q.questionId, label: `Question ${q.number}`, prompt: q.prompt,
     maxMarks: q.maxMarks, kind: q.kind, options: q.options, sectionId: q.sectionCode,
   })), [paper.data]);
-  const policy = useQuery({ queryKey: ['student', 'policy', attemptId], queryFn: () => api.get<{ examTitle: string; durationMinutes: number }>(`/student/attempts/${attemptId}/policy`, { quiet: true }), enabled: !!attemptId, staleTime: Infinity });
+  const policy = useQuery({ queryKey: ['student', 'policy', attemptId], queryFn: () => api.get<{ examTitle: string; durationMinutes: number; consentPurposes?: string[] }>(`/student/attempts/${attemptId}/policy`, { quiet: true }), enabled: !!attemptId, staleTime: Infinity });
 
   // ---------- answer sync ----------
   const transport = useMemo<SyncTransport>(
@@ -155,8 +157,10 @@ export function ExamWorkspace() {
   const streamRef = useRef<MediaStream | null>(null);
   const reporter = useMemo(() => new SignalReporter({ attemptId }), [attemptId]);
 
+  // The camera opens only when the exam's policy asks for it and the student consented at readiness.
+  const cameraRequired = (policy.data?.consentPurposes ?? []).includes('CAMERA');
   useEffect(() => {
-    if (session.kind !== 'active') return;
+    if (session.kind !== 'active' || !cameraRequired) return;
     let active = true;
 
     async function initCamera() {
@@ -198,7 +202,7 @@ export function ExamWorkspace() {
         streamRef.current = null;
       }
     };
-  }, [session.kind, reporter]);
+  }, [session.kind, reporter, cameraRequired]);
 
   useEffect(() => {
     if (videoRef.current && streamRef.current && cameraActive) {
@@ -624,38 +628,42 @@ export function ExamWorkspace() {
               {SAVE_LABEL[snap.questions[current.id]?.state ?? 'empty'].text}
             </StatusChip>
           </div>
+          {index === 0 && paper.data?.instructions ? (
+            <div className="mb-4 p-3 border border-rule rounded-md text-sm text-ink-2 whitespace-pre-wrap">
+              <strong className="text-ink">Instructions: </strong>
+              {paper.data.instructions}
+            </div>
+          ) : null}
           {current.prompt ? (
             <div className="sheet p-4 mb-4 border border-rule-2 rounded-md bg-sheet-2 text-ink whitespace-pre-wrap leading-relaxed text-[15px] select-none">
-              {current.prompt.blocks.map((b, i) => <div key={i}>{typeof b['text'] === 'string' ? b['text'] : typeof b['content'] === 'string' ? b['content'] : ''}</div>)}
+              {promptText(current.prompt)}
             </div>
           ) : null}
-          {Array.isArray(current.options) && current.options.length > 0 ? (
-            <div className="mb-4 space-y-2">
-              {(current.options as Array<{ key: string; text: string }>).map((opt, idx: number) => (
-                <div key={idx} className="p-3 border border-rule-2 rounded bg-sheet text-sm flex items-start gap-2">
-                  <span className="font-semibold text-ink-2">{String.fromCharCode(65 + idx)}.</span>
-                  <span>{opt.text}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <p className="text-ink-2 mb-6">Write your answer below. Paragraphs and diagrams can be mixed in any order; everything is saved as you go.</p>
           {session.kind === 'connecting' && !sync.isLoaded(current.id) ? <p className="text-ink-2 mb-4">Opening your saved answers…</p> : null}
-          <AnswerEditor
-            questionId={current.id}
-            doc={doc}
-            placeholderId={placeholderId}
-            onChange={onChange}
-            disabled={disabled}
-            onExternalPaste={() => {
-              reporter.report('CLIPBOARD_ATTEMPT', { action: 'paste', source: 'external' });
-              toast({
-                tone: 'error',
-                title: '⛔ External paste blocked & logged',
-                description: 'Pasting from external applications is strictly prohibited. This incident has been logged in the proctor audit trail.',
-              });
-            }}
-          />
+          {current.kind === 'MCQ' && Array.isArray(current.options) && current.options.length > 0 ? (
+            <ChoiceAnswer questionId={current.id} options={current.options as Array<{ key: string; text: string }>} doc={doc} placeholderId={placeholderId} disabled={disabled} onChange={onChange} />
+          ) : current.kind === 'NUMERIC' ? (
+            <NumericAnswer doc={doc} placeholderId={placeholderId} disabled={disabled} onChange={onChange} />
+          ) : (
+            <>
+              <p className="text-ink-2 mb-6">{current.kind === 'DRAWING' ? 'Draw your answer: add a diagram below. Everything is saved as you go.' : 'Write your answer below. Paragraphs and diagrams can be mixed in any order; everything is saved as you go.'}</p>
+              <AnswerEditor
+                questionId={current.id}
+                doc={doc}
+                placeholderId={placeholderId}
+                onChange={onChange}
+                disabled={disabled}
+                onExternalPaste={() => {
+                  reporter.report('CLIPBOARD_ATTEMPT', { action: 'paste', source: 'external' });
+                  toast({
+                    tone: 'error',
+                    title: '⛔ External paste blocked & logged',
+                    description: 'Pasting from external applications is strictly prohibited. This incident has been logged in the proctor audit trail.',
+                  });
+                }}
+              />
+            </>
+          )}
         </section>
       </div>
 
@@ -714,18 +722,18 @@ export function ExamWorkspace() {
         </ul>
       </Dialog>
 
-      {/* Live Proctor Camera Feed Widget */}
-      {showCameraWidget && session.kind === 'active' ? (
+      {/* Camera preview: shown to the student only; no frame leaves this browser until the media pipeline exists. */}
+      {cameraRequired && showCameraWidget && session.kind === 'active' ? (
         <aside
           role="complementary"
-          aria-label="Live proctor webcam monitor"
+          aria-label="Camera preview"
           className="fixed bottom-20 right-4 z-40 bg-sheet/95 backdrop-blur-md border border-rule-2 rounded-md shadow-2xl overflow-hidden w-44 sm:w-52 transition-all select-none"
         >
           <div className="flex items-center justify-between px-2.5 py-1 bg-sheet-2 border-b border-rule text-[11px] font-medium">
             <div className="flex items-center gap-1.5">
               <span className={cn('h-2 w-2 rounded-full', cameraActive ? 'bg-ready animate-pulse' : 'bg-stop')} />
               <span className="text-ink-2 font-mono uppercase tracking-wider text-[10px]">
-                {cameraActive ? 'Live Proctor' : 'Camera Lost'}
+                {cameraActive ? 'Camera on' : 'Camera off'}
               </span>
             </div>
             <button
@@ -777,12 +785,11 @@ export function ExamWorkspace() {
           </div>
           <div className="px-2 py-1 bg-sheet-2 text-[10px] text-ink-3 flex items-center justify-between font-mono">
             <span>Tab logs: {tabSwitchCount}</span>
-            <span className="text-ready text-[9px] uppercase font-bold tracking-wider">AI Guard On</span>
           </div>
         </aside>
       ) : null}
 
-      {!showCameraWidget && session.kind === 'active' ? (
+      {cameraRequired && !showCameraWidget && session.kind === 'active' ? (
         <button
           type="button"
           onClick={() => setShowCameraWidget(true)}
@@ -802,24 +809,20 @@ export function ExamWorkspace() {
               ⚠️
             </div>
             <h3 className="text-lg font-serif font-bold text-ink mb-1">
-              Proctor Warning: {tabWarningModal.reason}
+              Please stay on the exam: {tabWarningModal.reason}
             </h3>
             <p className="text-xs text-stop font-mono uppercase tracking-wider mb-3">
-              Infraction #{tabWarningModal.count} Recorded at {tabWarningModal.time}
+              Noted at {tabWarningModal.time}
             </p>
             <p className="text-sm text-ink-2 mb-4 leading-relaxed">
-              You navigated away from the exam workspace. Leaving the exam window, minimizing, or switching browser tabs is strictly monitored and has been logged to the Proctor Audit Trail.
+              You moved away from the exam window. This is noted for an invigilator to review. It is not a warning unless an invigilator decides it is one. If something went wrong with your device, tell the invigilator.
             </p>
-            <div className="p-3 bg-sheet-2 border border-rule rounded text-xs text-left mb-4 space-y-1 text-ink-3">
-              <div>• <strong>Recorded Data:</strong> Timestamp, sequence number, and duration.</div>
-              <div>• <strong>Threshold:</strong> Repeated infractions will be flagged directly to the proctoring committee.</div>
-            </div>
             <Button
               variant="primary"
               className="w-full justify-center"
               onClick={() => setTabWarningModal(null)}
             >
-              I Acknowledge &amp; Return to Exam
+              Return to exam
             </Button>
           </div>
         </div>
@@ -836,7 +839,7 @@ export function ExamWorkspace() {
               Full Screen Mode Required
             </h3>
             <p className="text-sm text-ink-2 mb-4 leading-relaxed">
-              Exiting full screen is flagged as an exam infraction. Please return to full screen mode to continue writing your exam.
+              Leaving full screen is noted for an invigilator to review. Please return to full screen to continue writing.
             </p>
             <Button
               variant="primary"

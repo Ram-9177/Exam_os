@@ -359,6 +359,20 @@ describe('Phase 6 — Evaluation at Scale, Moderation, and Revaluation', () => {
         attemptIds: [targetAttempt],
       });
 
+    // Once a script has assignees nobody else may mark it, on either marks path.
+    const outsider = await req()
+      .post(`/api/v1/candidates/${targetAttempt}/result-versions`)
+      .set(H(moderator.token))
+      .send({ items: [{ questionId: 'Q1', maxMarks: 50, marks: 1, explanation: 'Not my script.' }, { questionId: 'Q2', maxMarks: 50, marks: 1, explanation: 'Not my script.' }] });
+    expect(outsider.status).toBe(403);
+    expect(outsider.body.code).toBe('NOT_ASSIGNED');
+
+    // Double evaluation on an external exam is blind: no name, no examiner.
+    const blindScript = await req().get(`/api/v1/student/attempts/${targetAttempt}/booklet`).set(H(evaluator2.token));
+    expect(blindScript.status).toBe(200);
+    expect(blindScript.body.student.name).toMatch(/^ANON-/);
+    expect(blindScript.body.student.registerNumber).toBeNull();
+
     // 1. Evaluator 1 submits high marks (90/100)
     const marksRes1 = await req()
       .post(`/api/v1/evaluator/me/attempts/${targetAttempt}/marks`)

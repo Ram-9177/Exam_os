@@ -14,6 +14,7 @@ import { releasePaperForStudent } from '../papers/service.js';
 import { getOrRenderBookletPdf, getOrRenderHallTicketPdf } from '../documents/service.js';
 import { assertExportAllowed } from '../exams/service.js';
 import { grantsAllow } from '../../middleware/auth.js';
+import { blindingFor } from '../evaluation/service.js';
 
 const StartPrecheckBody = z.object({ clientBuild: z.string().max(64).nullable().default(null) });
 const PracticeSaveBody = z.object({ contentDigest: z.string().regex(/^[a-f0-9]{64}$/) });
@@ -253,7 +254,17 @@ export function attemptRoutes(deps: AppDeps, jwt: JwtService): Router {
             const packet = await trx('candidate_review_packets').where({ tenant_id: t.id, attempt_id: attemptId }).first('exam_id');
             if (packet) await assertExportAllowed(deps, trx, t.id, packet.exam_id, p.userId, 'booklet.json');
           }
-          return answerBooklet(trx, t.id, attemptId, { userId: p.userId, isStaff: staffView });
+          const booklet = await answerBooklet(trx, t.id, attemptId, { userId: p.userId, isStaff: staffView });
+          // Examiners read scripts blind where the exam says so; the Exam Section keeps the full view.
+          if (!staffView || grantsAllow(p.grants, 'examcell:candidates:read') || !grantsAllow(p.grants, 'marks:approve')) return booklet;
+          const blind = await blindingFor(trx, t.id, attemptId, p.userId);
+          return {
+            ...booklet,
+            student: blind.hideIdentity ? { name: blind.anonymizedIdentifier, registerNumber: null, hallTicket: null } : booklet.student,
+            questions: blind.hidePriorMarks ? booklet.questions.map((q) => ({ ...q, marks: null, explanation: null, criteria: null })) : booklet.questions,
+            total: blind.hidePriorMarks ? null : booklet.total,
+            validation: blind.hidePriorMarks || blind.hideIdentity ? { ...booklet.validation, examiner: null } : booklet.validation,
+          };
         }),
       );
     }),

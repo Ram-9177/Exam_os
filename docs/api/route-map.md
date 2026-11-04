@@ -137,3 +137,18 @@ GET  /tenant/roster/templates/:entity (roster:read) → CSV template download
 POST /tenant/roster/preview {entity, csvContent, mode, provider?} (roster:write) → {entity, total, summary, sampleRows}
 POST /tenant/roster/import {entity, csvContent, mode, provider?, sourceLabel?} (roster:write) → {syncJobId, summary, rows}
 GET  /tenant/roster/sync-jobs?source (roster:read) → {jobs:[...]}
+
+## Password reset and account recovery
+POST /auth/forgot-password {email} → 202 (always; ACTIVE gets reset link, PENDING gets new activation)
+POST /auth/reset-password {token, newPassword} → 200 (single-use; clears lockout; revokes all sessions)
+POST /tenant/users/:id/resend-activation → 200 (users:write; 409 ALREADY_ACTIVATED if not PENDING)
+
+## Moderation queue
+GET /evaluator/me/moderation/pending (evaluation:moderate) → [{id,attemptId,reason,divergence,evaluator1Marks,evaluator2Marks,evaluator1Name,evaluator2Name,moderatorName,status,resolutionNote}]
+
+## Analytics shape (updated)
+GET /analytics/overview → {overview:{departments:[{id,name,departmentCode,totalStudents,appeared,passed,witheld,resultReleased,averageScore}]}}
+GET /analytics/department/:id → {analytics:{...}}
+
+## Append-only trigger migration
+20261030000104_append_only_gaps.ts — adds examos_forbid_mutation triggers on submission_manifests, resume_grants, controller_publication_grants

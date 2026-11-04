@@ -331,6 +331,7 @@ export const MAIL_CATEGORIES = [
   'EXAM_CELL_DIGEST',
   'SECURITY_ALERT',
   'REVALUATION_DECISION',
+  'PASSWORD_RESET',
 ] as const;
 export type MailCategory = (typeof MAIL_CATEGORIES)[number];
 
@@ -349,6 +350,7 @@ export const MAIL_CATEGORY_LANE: Record<MailCategory, MailLane> = {
   EXAM_CELL_DIGEST: 'BULK',
   SECURITY_ALERT: 'TRANSACTIONAL',
   REVALUATION_DECISION: 'TRANSACTIONAL',
+  PASSWORD_RESET: 'TRANSACTIONAL',
 };
 
 export const MAIL_STATUSES = ['QUEUED', 'SENDING', 'ACCEPTED', 'DELIVERED', 'BOUNCED', 'FAILED'] as const;

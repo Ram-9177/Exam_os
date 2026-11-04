@@ -107,14 +107,17 @@ describe('interruptions, recovery and the secure client', () => {
     const incidents = await ctx.admin('proctor_incidents').where({ attempt_id: student.attemptId });
     expect(incidents.length).toBe(0); // technical: never an incident, never a warning
     // writes are refused while recovery is pending; nothing is lost
-    const blocked = await req().put(`/api/v1/student/attempts/${student.attemptId}/answers/Q1`).set(H(student.token)).set('x-device-session', student.device).send({ clientOperationId: randomUUID(), baseRevision: 0, answerFormat: 'hybrid-v1', ops: [{ op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: 'x' }], contentSha256: answerHash([{ id: 'b1', kind: 'paragraph', content: 'x' }]) });
+    const blocked = await req().put(`/api/v1/student/attempts/${student.attemptId}/answers/q1`).set(H(student.token)).set('x-device-session', student.device).send({ clientOperationId: randomUUID(), baseRevision: 0, answerFormat: 'hybrid-v1', ops: [{ op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: 'x' }], contentSha256: answerHash([{ id: 'b1', kind: 'paragraph', content: 'x' }]) });
     expect(blocked.status).toBe(409);
     // the student comes back on a different network address (hotspot) with the same device
     const back = await req().post(`/api/v1/student/attempts/${student.attemptId}/reconnect`).set(H(student.token)).set('x-device-session', student.device);
     expect(back.status).toBe(200);
     expect(back.body.status).toBe('ACTIVE');
     expect(back.body.deviceSessionId).toBe(student.device);
-    const save = await req().put(`/api/v1/student/attempts/${student.attemptId}/answers/Q1`).set(H(student.token)).set('x-device-session', student.device).send({ clientOperationId: randomUUID(), baseRevision: 0, answerFormat: 'hybrid-v1', ops: [{ op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: 'x' }], contentSha256: answerHash([{ id: 'b1', kind: 'paragraph', content: 'x' }]) });
+    const invented = await req().put(`/api/v1/student/attempts/${student.attemptId}/answers/Q99`).set(H(student.token)).set('x-device-session', student.device).send({ clientOperationId: randomUUID(), baseRevision: 0, answerFormat: 'hybrid-v1', ops: [{ op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: 'x' }], contentSha256: answerHash([{ id: 'b1', kind: 'paragraph', content: 'x' }]) });
+    expect(invented.status).toBe(422);
+    expect(invented.body.code).toBe('UNKNOWN_QUESTION_ID');
+    const save = await req().put(`/api/v1/student/attempts/${student.attemptId}/answers/q1`).set(H(student.token)).set('x-device-session', student.device).send({ clientOperationId: randomUUID(), baseRevision: 0, answerFormat: 'hybrid-v1', ops: [{ op: 'upsert-block', blockId: 'b1', kind: 'paragraph', content: 'x' }], contentSha256: answerHash([{ id: 'b1', kind: 'paragraph', content: 'x' }]) });
     expect(save.status).toBe(200);
     const events = await ctx.admin('attempt_event_log').where({ attempt_id: student.attemptId }).select('event_type');
     const types = events.map((e) => e.event_type);
@@ -137,7 +140,7 @@ describe('interruptions, recovery and the secure client', () => {
     const rc = await req().post(`/api/v1/student/attempts/${student.attemptId}/reconnect`).set(H(student.token)).set('x-device-session', loaner);
     expect(rc.status).toBe(200);
     expect(rc.body.deviceSessionId).toBe(loaner);
-    expect(rc.body.answers).toEqual([{ questionId: 'Q1', serverRevision: 1, contentSha256: expect.any(String) }]);
+    expect(rc.body.answers).toEqual([{ questionId: 'q1', serverRevision: 1, contentSha256: expect.any(String) }]);
     const old = await req().post(`/api/v1/student/attempts/${student.attemptId}/heartbeat`).set(H(student.token)).set('x-device-session', student.device);
     expect(old.status).toBe(409);
     expect(old.body.code).toBe('DEVICE_SESSION_MISMATCH');

@@ -186,6 +186,7 @@ export function AnswerRender({ doc, className }: { doc: AnswerDoc | unknown; cla
 
   const hasContent = blocks.some((b) => {
     if (b.kind === 'paragraph') return typeof b.content === 'string' && b.content.trim().length > 0;
+    if ((b.kind as string) === 'choice') return true;
     if (b.kind === 'canvas' || (b.kind as string) === 'drawing') {
       const c = normalizeCanvasContent(b.content);
       return c !== null && c.strokes.length > 0;
@@ -208,6 +209,9 @@ export function AnswerRender({ doc, className }: { doc: AnswerDoc | unknown; cla
           }
         }
 
+        if ((b.kind as string) === 'choice') {
+          return <p key={b.id} className="font-medium">Selected option: {String((b.content as { selected?: unknown } | null)?.selected ?? '—')}</p>;
+        }
         if (b.kind === 'equation' || (b.kind as string) === 'formula') {
           const formulaText = typeof b.content === 'string' ? b.content : (b.content as any)?.formula || (b.content as any)?.latex || JSON.stringify(b.content);
           return (

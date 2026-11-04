@@ -68,6 +68,7 @@ export async function listMyExams(trx: Knex.Transaction, tenantId: string, userI
       'at.deadline_at as deadlineAt',
       'h.number as hallTicketNumber',
       'h.verification_hash as hallTicketVerification',
+      trx.raw(`(SELECT r.ready_until FROM precheck_runs r WHERE r.attempt_id = at.id AND r.status = 'READY' ORDER BY r.started_at DESC LIMIT 1) AS "readyUntil"`),
     )
     .orderBy('e.window_start_at', 'desc');
 }
@@ -320,7 +321,8 @@ export async function finalizePrecheck(deps: AppDeps, trx: Knex.Transaction, ten
   const exam = await trx('exams').where({ id: run.exam_id }).first();
   const checks = await listItems(trx, runId);
   const byCode = new Map(checks.map((c) => [c.code, c]));
-  const mandatory = MANDATORY_CHECKS_BY_PROFILE[exam.security_profile as SecurityProfile];
+  // CONSENT is created only when the exam captures something; with nothing to consent to it cannot be outstanding.
+  const mandatory = MANDATORY_CHECKS_BY_PROFILE[exam.security_profile as SecurityProfile].filter((code) => code !== 'CONSENT' || byCode.has('CONSENT'));
   const exceptions = await trx('admission_exceptions').where({ attempt_id: run.attempt_id }).whereNull('revoked_at').where('expires_at', '>', deps.clock.now());
   const covered = new Set(exceptions.flatMap((e) => e.covers_checks as string[]));
 
@@ -502,6 +504,12 @@ export async function saveAnswer(deps: AppDeps, trx: Knex.Transaction, tenantId:
   }
   let doc = await trx('answer_documents').where({ attempt_id: attemptId, question_id: questionId }).forUpdate().first();
   if (!doc) {
+    // First write to a question: it must exist on the approved paper. Later saves skip this, the document already proves it.
+    const paper = await trx('question_papers').where({ tenant_id: tenantId, exam_id: attempt.exam_id, status: 'APPROVED' }).orderBy('version', 'desc').first('id');
+    if (paper) {
+      const known = await trx('paper_questions').where({ tenant_id: tenantId, paper_id: paper.id, question_id: questionId }).first('id');
+      if (!known) throw AppError.unprocessable('UNKNOWN_QUESTION_ID', `Question ${questionId} is not on this paper`);
+    }
     const empty: AnswerContent = { blocks: [] };
     const [created] = await trx('answer_documents').insert({ tenant_id: tenantId, attempt_id: attemptId, question_id: questionId, current_revision: 0, content: JSON.stringify(empty), content_sha256: contentHash(empty) }).returning('*');
     doc = created;

@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { EXAM_TRANSITIONS, type ExamStatus } from '@examos/contracts';
+import { EXAM_TRANSITIONS, ROLE_PERMISSIONS, type ExamStatus, type Permission } from '@examos/contracts';
 import { api, isApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDateTime } from '@/lib/time';
 import { EXAM_TYPE_LABEL } from '@/features/student/api';
 import { Badge, Button, ConfirmDialog, EmptyState, Field, humanize, KeyValue, PageTitle, Skeleton, StatusChip, Table, Tabs, TextArea, TextInput, toneForExam, useToast, type TabDef } from '@/ui';
-import { EXAM_STATUS_LABEL, generateSebConfig, getSebDownloadUrl, transitionExam, useExam, type ExamAction, type ExamRow } from './api';
+import { EXAM_STATUS_LABEL, generateSebConfig, transitionExam, useExam, type ExamAction, type ExamRow } from './api';
 import { ReadinessBoard } from './ReadinessBoard';
 import { CandidatesTab } from './CandidatesTab';
 import { PaperTab } from './PaperTab';
@@ -76,15 +76,19 @@ export function ExamDetailPage() {
     }
   };
 
-  const tabs: TabDef<TabId>[] = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'paper', label: 'Question paper' },
-    { id: 'allocations', label: 'Allocations and hall tickets' },
-    { id: 'readiness', label: 'Readiness board' },
-    { id: 'candidates', label: 'Candidates' },
-    { id: 'evaluation', label: 'Evaluation & Moderation' },
-    { id: 'exports', label: 'Exports' },
-  ];
+  // A tab is offered only to someone whose role can load it.
+  const can = (permission: Permission) => (me?.grants ?? []).some((g) => ROLE_PERMISSIONS[g.role].includes(permission));
+  const tabs: TabDef<TabId>[] = (
+    [
+      { id: 'overview', label: 'Overview' },
+      { id: 'paper', label: 'Question paper', show: can('paper:write') || can('paper:review') },
+      { id: 'allocations', label: 'Allocations and hall tickets', show: can('exams:allocate') || can('halltickets:issue') },
+      { id: 'readiness', label: 'Readiness board', show: can('exams:conduct') },
+      { id: 'candidates', label: 'Candidates', show: can('examcell:candidates:read') },
+      { id: 'evaluation', label: 'Evaluation & Moderation', show: can('evaluation:assign') || can('evaluation:moderate') },
+      { id: 'exports', label: 'Exports', show: can('exports:read') },
+    ] as Array<TabDef<TabId> & { show?: boolean }>
+  ).filter((t) => t.show !== false);
 
   return (
     <div>
@@ -183,13 +187,7 @@ function ClientSecurityPolicyCard({ exam, onUpdated }: { exam: ExamRow; onUpdate
           {generating ? 'Generating...' : sebKey ? 'Rebuild SEB Config' : 'Generate SEB Config'}
         </Button>
         {sebKey ? (
-          <a
-            href={getSebDownloadUrl(exam.id)}
-            download={`smru-exam-${exam.code}.seb`}
-            className="inline-flex items-center justify-center rounded-md border font-medium whitespace-nowrap transition-colors bg-sheet text-ink border-rule-2 hover:bg-sheet-2 h-10 px-4 text-[15px]"
-          >
-            Download .seb file
-          </a>
+          <Button onClick={() => void api.download(`/exams/${exam.id}/seb-config`, `smru-exam-${exam.code}.seb`).catch(() => undefined)}>Download .seb file</Button>
         ) : null}
       </div>
     </section>

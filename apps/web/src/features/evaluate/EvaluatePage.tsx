@@ -48,6 +48,45 @@ export function useEvaluatorAssignments(examId?: string) {
   });
 }
 
+interface PendingSample {
+  id: string;
+  attemptId: string;
+  reason: string;
+  divergence: string | number | null;
+  evaluator1Marks: string | number | null;
+  evaluator2Marks: string | number | null;
+  examCode: string;
+  examTitle: string;
+}
+
+/** Scripts whose two examiners disagreed. Only moderators see this; the marks they enter become the result. */
+function ModerationQueue() {
+  const { hasRole } = useAuth();
+  const navigate = useNavigate();
+  const allowed = hasRole('MODERATOR');
+  const pending = useQuery({ queryKey: ['moderation', 'pending'], queryFn: () => api.get<PendingSample[]>('/moderation/pending'), enabled: allowed });
+  if (!allowed || !pending.data?.length) return null;
+  return (
+    <section aria-labelledby="moderation-heading" className="space-y-3">
+      <h2 id="moderation-heading" className="text-h3">
+        Moderation queue
+      </h2>
+      <Table
+        caption="Scripts waiting for a moderator"
+        columns={[
+          { key: 'exam', header: 'Exam', render: (s) => `${s.examCode} · ${s.examTitle}` },
+          { key: 'marks', header: 'Examiner marks', render: (s) => <span className="font-mono">{s.evaluator1Marks ?? '—'} / {s.evaluator2Marks ?? '—'}</span> },
+          { key: 'gap', header: 'Divergence', render: (s) => <span className="font-mono">{s.divergence ?? '—'}</span> },
+          { key: 'open', header: '', align: 'right', render: (s) => <Button size="sm" onClick={() => navigate(`/evaluate/${s.attemptId}?moderate=${s.id}`)}>Resolve</Button> },
+        ]}
+        rows={pending.data}
+        rowKey={(s) => s.id}
+        empty="Nothing is waiting."
+      />
+    </section>
+  );
+}
+
 /** Examiners land here: view their assigned marking queue, or open a candidate attempt by id. */
 export function EvaluateHomePage() {
   const { me } = useAuth();
@@ -153,6 +192,8 @@ export function EvaluateHomePage() {
         )}
       </section>
 
+      <ModerationQueue />
+
       {/* Manual Attempt Lookup */}
       <section className="sheet p-6">
         <h3 className="font-medium text-ink-1 mb-2">Open by Attempt ID</h3>
@@ -207,35 +248,21 @@ export function EvaluateHomePage() {
   );
 }
 
-/**
- * PAPER MODULE INTEGRATION POINT (see ExamWorkspace): until the API has a
- * question paper, the marking sheet lists the questions the student answered
- * plus the placeholder list (`?questions=` or Q1..Q5) so unanswered questions
- * can be marked 0. The server refuses marks above 0 for an unanswered question.
- */
-function withPlaceholderQuestions(booklet: Booklet, raw: string | null): Booklet {
-  const ids = (raw ? raw.split(',') : ['Q1', 'Q2', 'Q3', 'Q4', 'Q5']).map((x) => x.trim()).filter((x) => /^[A-Za-z0-9._-]{1,64}$/.test(x));
-  const known = new Set(booklet.questions.map((q) => q.questionId));
-  const extra: BookletQuestion[] = ids.filter((id) => !known.has(id)).map((id) => ({ questionId: id, answer: { blocks: [] }, answerSha256: null, revision: 0, marks: null, maxMarks: null, explanation: null, criteria: null }));
-  const questions = [...booklet.questions, ...extra].sort((a, b) => a.questionId.localeCompare(b.questionId, undefined, { numeric: true }));
-  return { ...booklet, questions };
-}
-
 export function EvaluatePage() {
   const { attemptId = '' } = useParams();
   const [params] = useSearchParams();
   const { me } = useAuth();
   const tz = me?.tenant.timezone ?? 'Asia/Kolkata';
-  const bookletQuery = useBooklet(attemptId);
-  const questionsParam = params.get('questions');
-  const bookletData = useMemo(() => (bookletQuery.data ? withPlaceholderQuestions(bookletQuery.data, questionsParam) : undefined), [bookletQuery.data, questionsParam]);
-  const booklet = { isLoading: bookletQuery.isLoading, isError: bookletQuery.isError, error: bookletQuery.error, data: bookletData };
+  const booklet = useBooklet(attemptId);
+  const moderationSampleId = params.get('moderate');
   const qc = useQueryClient();
   const { toast } = useToast();
   const [entries, setEntries] = useState<Record<string, Entry>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [proposalsBusy, setProposalsBusy] = useState(false);
+  const [moderationNote, setModerationNote] = useState('');
+  const navigate = useNavigate();
   const [done, setDone] = useState<{ resultVersionId: string; version: number; total: number; max: number; invalidatedApprovals: number } | null>(null);
 
   const fetchRubricProposals = async () => {
@@ -331,12 +358,22 @@ export function EvaluatePage() {
       }
       return { questionId: q.questionId, maxMarks, marks, explanation: en.explanation.trim(), ...(criteria.length ? { criteria: criteria.map((c) => ({ code: c.code.trim(), max: Number(c.max) || 0, awarded: Number(c.awarded) || 0, ...(c.evidence.trim() ? { evidence: c.evidence.trim() } : {}) })) } : {}) };
     });
+    if (moderationSampleId && moderationNote.trim().length < 5) errs['_'] = 'Add a resolution note of at least a few words.';
     setErrors(errs);
     if (Object.keys(errs).length) return;
     setBusy(true);
     try {
-      const out = await api.post<{ resultVersionId: string; version: number; total: number; max: number; invalidatedApprovals: number }>(`/candidates/${attemptId}/result-versions`, { items }, { quiet: ['PACKET_STATE', 'MARK_OUT_OF_RANGE', 'CRITERIA_SUM_MISMATCH', 'CRITERION_OUT_OF_RANGE', 'EXPLANATION_REQUIRED', 'MARKS_WITHOUT_ANSWER'] });
-      setDone(out);
+      const quiet = ['PACKET_STATE', 'MARK_OUT_OF_RANGE', 'CRITERIA_SUM_MISMATCH', 'CRITERION_OUT_OF_RANGE', 'EXPLANATION_REQUIRED', 'MARKS_WITHOUT_ANSWER', 'MARKS_INCOMPLETE', 'NOT_ASSIGNED'];
+      if (moderationSampleId) {
+        await api.post(`/moderation/samples/${moderationSampleId}/resolve`, { resolutionNote: moderationNote.trim(), items }, { quiet });
+        void qc.invalidateQueries({ queryKey: ['moderation', 'pending'] });
+        toast({ tone: 'success', title: 'Moderation resolved' });
+        navigate('/evaluate');
+        return;
+      }
+      // The assignment-aware path: completes the examiner's assignment and runs the double-evaluation decision.
+      const out = await api.post<{ resultVersionId: string; version: number; total: number; max: number; invalidatedApprovals?: number }>(`/evaluator/me/attempts/${attemptId}/marks`, { items }, { quiet });
+      setDone({ ...out, invalidatedApprovals: out.invalidatedApprovals ?? 0 });
       void qc.invalidateQueries({ queryKey: ['booklet', attemptId] });
       toast({ tone: 'success', title: `Result version ${out.version} recorded`, description: `${out.total} / ${out.max}${out.invalidatedApprovals ? ` · ${out.invalidatedApprovals} earlier approval invalidated` : ''}` });
     } catch (err) {
@@ -358,6 +395,11 @@ export function EvaluatePage() {
         <div>
           <h1 className="text-h2">Marks entry</h1>
           <p className="text-ink-2">Each question needs marks, a maximum and one explanation. Criteria rows are optional and must add up to the marks.</p>
+          {moderationSampleId ? (
+            <Field label="Moderation resolution note" hint="Why these are the final marks." className="mt-3">
+              {({ id, describedBy }) => <TextArea id={id} aria-describedby={describedBy} rows={2} value={moderationNote} onChange={(e) => setModerationNote(e.target.value)} />}
+            </Field>
+          ) : null}
         </div>
         <div className="flex items-center gap-4">
           <Button

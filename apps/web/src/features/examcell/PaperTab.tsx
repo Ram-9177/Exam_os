@@ -333,6 +333,50 @@ export function PaperTab({ exam }: { exam: ExamRow }) {
                   )}
                 </Field>
 
+                {q.kind === 'MCQ' ? (
+                  <fieldset className="space-y-2">
+                    <legend className="text-sm font-medium text-ink">Options (select the correct one)</legend>
+                    {(q.options ?? []).map((opt, oi) => (
+                      <div key={oi} className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name={`key-${idx}`}
+                          aria-label={`Option ${opt.key} is correct`}
+                          checked={(typeof q.expectedAnswer === 'object' ? (q.expectedAnswer as { key?: unknown } | null)?.key : q.expectedAnswer) === opt.key}
+                          disabled={!canEdit}
+                          onChange={() => updateQuestion(idx, { expectedAnswer: opt.key })}
+                        />
+                        <span className="font-mono text-sm w-6">{opt.key}</span>
+                        <TextInput
+                          aria-label={`Option ${opt.key} text`}
+                          value={opt.text}
+                          disabled={!canEdit}
+                          onChange={(e) => updateQuestion(idx, { options: (q.options ?? []).map((o, i) => (i === oi ? { ...o, text: e.target.value } : o)) })}
+                        />
+                        {canEdit ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => updateQuestion(idx, { options: (q.options ?? []).filter((_, i) => i !== oi).map((o, i) => ({ ...o, key: String.fromCharCode(65 + i) })), expectedAnswer: undefined })}
+                          >
+                            Remove
+                          </Button>
+                        ) : null}
+                      </div>
+                    ))}
+                    {canEdit ? (
+                      <Button size="sm" variant="secondary" onClick={() => updateQuestion(idx, { options: [...(q.options ?? []), { key: String.fromCharCode(65 + (q.options ?? []).length), text: '' }] })}>
+                        Add option
+                      </Button>
+                    ) : null}
+                  </fieldset>
+                ) : null}
+                {q.kind === 'NUMERIC' ? (
+                  <Field label="Correct value" className="w-48">
+                    {({ id }) => <TextInput id={id} inputMode="decimal" value={typeof q.expectedAnswer === 'string' ? q.expectedAnswer : ''} disabled={!canEdit} onChange={(e) => updateQuestion(idx, { expectedAnswer: e.target.value })} />}
+                  </Field>
+                ) : null}
+
                 {/* Rubric Criteria if any */}
                 {q.rubric && q.rubric.length > 0 ? (
                   <div className="text-xs text-ink-2 space-y-1">

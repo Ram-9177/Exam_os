@@ -210,6 +210,26 @@ export async function getEvaluatorQueue(
 // ---------------------------------------------------------------------------
 // Evaluator Marks Entry & Double Evaluation / Moderation
 // ---------------------------------------------------------------------------
+/**
+ * Once a script has assignees, only they may mark it. A script nobody was
+ * assigned stays open to any examiner: small exams run without assignments.
+ */
+export async function assertMayMark(trx: Knex.Transaction, tenantId: string, attemptId: string, userId: string): Promise<void> {
+  const rows = await trx('evaluator_assignments').where({ tenant_id: tenantId, attempt_id: attemptId }).whereNot('status', 'REVOKED').select('evaluator_user_id');
+  if (rows.length && !rows.some((r) => r.evaluator_user_id === userId)) throw AppError.forbidden('NOT_ASSIGNED', 'This script is assigned to another examiner');
+}
+
+/** What an examiner must not see of a script: identity on anonymised exams, and in double evaluation the other examiner's marks. */
+export async function blindingFor(trx: Knex.Transaction, tenantId: string, attemptId: string, userId: string): Promise<{ hideIdentity: boolean; hidePriorMarks: boolean; anonymizedIdentifier: string }> {
+  const attempt = await trx('exam_attempts as a').join('exams as e', 'e.id', 'a.exam_id').where({ 'a.tenant_id': tenantId, 'a.id': attemptId }).first('e.exam_type', 'e.policy');
+  const policy = (attempt?.policy ?? {}) as Record<string, unknown>;
+  const hideIdentity = attempt?.exam_type === 'SEM_EXTERNAL' || Boolean(policy['anonymizeEvaluation']);
+  const isDouble = attempt?.exam_type === 'SEM_EXTERNAL' || Boolean(policy['doubleEvaluation']);
+  const own = await trx('evaluator_assignments').where({ tenant_id: tenantId, attempt_id: attemptId, evaluator_user_id: userId }).first('role_type', 'status');
+  const blindRole = own?.role_type === 'EVALUATOR_1' || own?.role_type === 'EVALUATOR_2';
+  return { hideIdentity, hidePriorMarks: isDouble && blindRole && own?.status !== 'COMPLETED', anonymizedIdentifier: `ANON-${sha256Hex(attemptId + tenantId).slice(0, 8).toUpperCase()}` };
+}
+
 export async function recordEvaluatorMarks(
   trx: Knex.Transaction,
   tenantId: string,
@@ -223,6 +243,7 @@ export async function recordEvaluatorMarks(
     .where({ tenant_id: tenantId, attempt_id: attemptId, evaluator_user_id: evaluatorUserId })
     .first();
 
+  await assertMayMark(trx, tenantId, attemptId, evaluatorUserId);
   const assignedRole = assignment?.role_type ?? roleType ?? 'EVALUATOR_1';
 
   // Record result version
@@ -358,6 +379,15 @@ export async function listModerationSamples(
       'm.created_at as createdAt',
       'm.resolved_at as resolvedAt',
     );
+}
+
+/** Everything waiting for a moderator in this tenant, across exams. */
+export async function listPendingModeration(trx: Knex.Transaction, tenantId: string) {
+  return trx('moderation_samples as m')
+    .join('exams as e', 'e.id', 'm.exam_id')
+    .where({ 'm.tenant_id': tenantId, 'm.status': 'PENDING' })
+    .orderBy('m.created_at', 'asc')
+    .select('m.id', 'm.attempt_id as attemptId', 'm.reason', 'm.divergence', 'm.evaluator_1_marks as evaluator1Marks', 'm.evaluator_2_marks as evaluator2Marks', 'e.code as examCode', 'e.title as examTitle', 'm.created_at as createdAt');
 }
 
 export async function resolveModeration(
@@ -620,6 +650,23 @@ export async function decideRevaluationRequest(
 // ---------------------------------------------------------------------------
 // Gate E: Rubric Proposal Generation & Similarity Analysis
 // ---------------------------------------------------------------------------
+/** Exact comparison against the key: an option's key for MCQ, numeric equality for NUMERIC. Never a substring. */
+export function answerMatchesKey(kind: string, blocks: Array<{ kind?: string; content?: unknown }>, expected: unknown): boolean {
+  // Papers store the key either bare ('C', 42) or as { key: 'C' } / { value: 42 }.
+  const wrapped = expected !== null && typeof expected === 'object' ? ((expected as { key?: unknown; value?: unknown }).key ?? (expected as { value?: unknown }).value) : expected;
+  if (wrapped === null || wrapped === undefined || wrapped === '') return false;
+  const key = String(wrapped).trim();
+  const typed = blocks.map((b) => (typeof b.content === 'string' ? b.content : '')).join(' ').trim();
+  if (kind === 'MCQ') {
+    const choice = blocks.find((b) => b.kind === 'choice')?.content as { selected?: unknown } | undefined;
+    const given = typeof choice?.selected === 'string' ? choice.selected : typed;
+    return given.trim().toLowerCase() === key.toLowerCase();
+  }
+  const a = Number(typed);
+  const b = Number(key);
+  return typed !== '' && Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 1e-9;
+}
+
 export async function generateRubricProposals(
   trx: Knex.Transaction,
   tenantId: string,
@@ -671,13 +718,13 @@ export async function generateRubricProposals(
     }
 
     if (q.kind === 'MCQ' || q.kind === 'NUMERIC') {
-      const match = q.expected_answer && text.toLowerCase().includes(String(q.expected_answer).toLowerCase());
+      const match = answerMatchesKey(q.kind, blocks, q.expected_answer);
       const awarded = match ? maxMarks : 0;
       return {
         questionId: q.question_id,
         maxMarks,
         suggestedMarks: awarded,
-        suggestionExplanation: match ? 'Matches expected answer format.' : 'Does not match expected answer key.',
+        suggestionExplanation: match ? 'Matches the answer key.' : q.expected_answer == null ? 'No answer key on the paper; mark by hand.' : 'Does not match the answer key.',
         criteriaSuggestions: rubric.map((c) => ({ code: c.code, max: c.max, awarded: match ? c.max : 0 })),
       };
     }

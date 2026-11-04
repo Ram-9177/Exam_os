@@ -1,7 +1,7 @@
 import { clientNet } from '../../lib/client-net.js';
 import { Router } from 'express';
 import { z } from 'zod';
-import { LoginSchema, RefreshSchema, ActivateSchema } from '@examos/contracts';
+import { LoginSchema, RefreshSchema, ActivateSchema, ForgotPasswordSchema, ResetPasswordSchema } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, validateQuery, query } from '../../lib/http.js';
 import { requireTenant } from '../../middleware/request-context.js';
@@ -44,6 +44,26 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
     asyncHandler(async (req, res) => {
       const { token, password } = body<typeof ActivateSchema>(req);
       res.json(await auth.activate(requireTenant(req).id, token, password, req.ctx.requestId, clientNet(req)));
+    }),
+  );
+  const forgotLimiter = rateLimit(deps, { pool: 'auth-forgot', limit: 5, windowSeconds: 900, keyOf: (req) => `${req.ip}:${String((req.body as { email?: string })?.email ?? '').toLowerCase()}` });
+  r.post(
+    '/forgot-password',
+    forgotLimiter,
+    validateBody(ForgotPasswordSchema),
+    asyncHandler(async (req, res) => {
+      await auth.forgotPassword(requireTenant(req).id, body<typeof ForgotPasswordSchema>(req).email, req.ctx.requestId);
+      res.status(202).json({ accepted: true });
+    }),
+  );
+  r.post(
+    '/reset-password',
+    activateLimiter,
+    validateBody(ResetPasswordSchema),
+    asyncHandler(async (req, res) => {
+      const { token, password } = body<typeof ResetPasswordSchema>(req);
+      await auth.resetPassword(requireTenant(req).id, token, password, req.ctx.requestId);
+      res.status(204).end();
     }),
   );
   r.post(

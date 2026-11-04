@@ -1078,7 +1078,7 @@ describe('All-Personas Comprehensive End-to-End Exam Suite', () => {
     // HOD checks academic analytics overview
     const overview = await req().get('/api/v1/analytics/overview').set(H(chiefReviewer.token));
     expect(overview.status).toBe(200);
-    expect(overview.body.departments).toBeInstanceOf(Array);
+    expect(overview.body.overview.departments).toBeInstanceOf(Array);
 
     const dept = await ctx.admin('departments').where({ tenant_id: t.tenantId, code: 'CS' }).first('id');
     expect(dept).toBeTruthy();
@@ -1088,7 +1088,7 @@ describe('All-Personas Comprehensive End-to-End Exam Suite', () => {
       .get(`/api/v1/analytics/department/${dept.id}`)
       .set(H(chiefReviewer.token));
     expect(deptAnalytics.status).toBe(200);
-    expect(deptAnalytics.body.summary).toMatchObject({
+    expect(deptAnalytics.body.analytics.summary).toMatchObject({
       totalStudents: 5,
       totalExams: 1,
       totalPublishedResults: 1,

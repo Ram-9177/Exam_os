@@ -64,10 +64,6 @@ export async function fetchPublicStudentVerification(hash: string) {
   return api.get<{ verification: IdCardVerificationData }>(`/student/verify-student/${hash}`);
 }
 
-export function getStudentSebConfigUrl(examId: string): string {
-  return `/api/v1/student/me/exams/${examId}/seb-config`;
-}
-
 export async function requestStudentRevaluation(attemptId: string, input: { reason: string; feeRef?: string }) {
   return api.post<{ requestId: string; status: string }>(`/student/attempts/${attemptId}/revaluation`, input);
 }
@@ -90,6 +86,7 @@ export interface StudentExam {
   attemptId: string | null;
   attemptStatus: AttemptStatus | null;
   deadlineAt: string | null;
+  readyUntil?: string | null;
   hallTicketNumber: string | null;
   hallTicketVerification: string | null;
 }

@@ -76,10 +76,9 @@ describe('Secure Client and Safe Exam Browser UI', () => {
     expect(await screen.findByText('Computer Networks & Security Mid-term')).toBeInTheDocument();
     expect(screen.getByText('Safe Exam Browser')).toBeInTheDocument();
 
-    const sebLink = screen.getByRole('link', { name: 'Download .seb configuration' });
-    expect(sebLink).toBeInTheDocument();
-    expect(sebLink).toHaveAttribute('href', '/api/v1/student/me/exams/e-seb-1/seb-config');
-    expect(sebLink).toHaveAttribute('download', 'smru-exam-CS401-MID.seb');
+    // A plain link sends no bearer token and would always be refused; the download must be an authenticated fetch.
+    expect(screen.getByRole('button', { name: 'Download .seb configuration' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Download .seb configuration' })).not.toBeInTheDocument();
   });
 
   it('renders SEB Config Key and allows Exam Section to rebuild config', async () => {

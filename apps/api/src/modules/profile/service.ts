@@ -116,6 +116,7 @@ export async function uploadStudentPhoto(
   tenantId: string,
   userId: string,
   input: PhotoUploadInput,
+  actorId: string = userId,
 ): Promise<{ sha256: string; byteLength: number; mimeType: string }> {
   if (!input.consentGiven) {
     throw AppError.badRequest('CONSENT_REQUIRED', 'Explicit student consent is required to store identity photograph');
@@ -178,7 +179,7 @@ export async function uploadStudentPhoto(
   await audit(trx, {
     tenantId,
     actorType: 'USER',
-    actorId: userId,
+    actorId,
     action: 'student.photo_uploaded',
     entityType: 'user',
     entityId: userId,

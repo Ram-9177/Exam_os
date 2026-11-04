@@ -95,7 +95,14 @@ export function examRoutes(deps: AppDeps, jwt: JwtService): Router {
       const t = requireTenant(req);
       const p = userPrincipal(req);
       const paper = await tenantTx(deps, req, (trx) =>
-        getExamPaper(deps, trx, t.id, p.userId, uuidParam(req, 'id'), { isStaff: true, requestId: req.ctx.requestId }),
+        getExamPaper(deps, trx, t.id, p.userId, uuidParam(req, 'id'), {
+          isStaff: true,
+          requestId: req.ctx.requestId,
+          viewer: {
+            canAuthor: grantsAllow(p.grants, 'paper:write', examScope(req)) || grantsAllow(p.grants, 'paper:review', examScope(req)),
+            canMark: grantsAllow(p.grants, 'marks:approve', examScope(req)),
+          },
+        }),
       );
       if (!paper) return res.status(404).json({ code: 'PAPER_NOT_FOUND' });
       res.json({ paper });

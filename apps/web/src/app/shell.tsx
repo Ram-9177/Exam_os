@@ -15,9 +15,9 @@ const NAV: NavItem[] = [
   { to: '/student', label: 'My exams', roles: ['STUDENT'] },
   { to: '/student/ledger', label: 'Results', roles: ['STUDENT'] },
   { to: '/student/profile', label: 'Profile & ID', roles: ['STUDENT', 'TENANT_ADMIN', 'CONTROLLER', 'EXAM_CELL_OPERATOR'] },
-  { to: '/examcell', label: 'Exams', roles: ['EXAM_CELL_OPERATOR', 'CONTROLLER', 'QUESTION_SETTER', 'PAPER_REVIEWER', 'HOD'] },
-  { to: '/evaluate', label: 'Marking', roles: ['EVALUATOR', 'MODERATOR', 'EXAM_CELL_OPERATOR', 'CONTROLLER'] },
-  { to: '/proctor', label: 'Invigilation', roles: ['PROCTOR', 'CHIEF_PROCTOR', 'EXAM_CELL_OPERATOR', 'CONTROLLER'] },
+  { to: '/examcell', label: 'Exams', roles: ['EXAM_CELL_OPERATOR', 'CONTROLLER', 'QUESTION_SETTER', 'PAPER_REVIEWER', 'HOD', 'CHIEF_PROCTOR'] },
+  { to: '/evaluate', label: 'Marking', roles: ['EVALUATOR', 'MODERATOR'] },
+  { to: '/proctor', label: 'Invigilation', roles: ['PROCTOR', 'CHIEF_PROCTOR', 'SECURITY_AUDITOR'] },
   { to: '/analytics', label: 'Academic Analytics', roles: ['HOD', 'REPORT_VIEWER', 'EXAM_CELL_OPERATOR', 'CONTROLLER', 'TENANT_ADMIN', 'SYSTEM_ADMIN'] },
   { to: '/admin', label: 'Administration', roles: ['TENANT_ADMIN', 'SYSTEM_ADMIN', 'INTEGRATION_ADMIN', 'SECURITY_AUDITOR', 'CONTROLLER'] },
 ];

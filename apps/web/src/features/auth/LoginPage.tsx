@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Navigate, useNavigate, useSearchParams } from 'react-router';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
 import { useTenant } from '@/app/queries';
 import { api, isApiError, type TokenPair } from '@/lib/api';
 import { homeFor, useAuth } from '@/lib/auth';
@@ -81,7 +81,12 @@ export function LoginPage() {
           </Button>
         </div>
       ) : null}
-      <p className="mt-6 text-sm text-ink-2">Received an activation e-mail? Open the link in it to set your password.</p>
+      <p className="mt-6 text-sm text-ink-2">
+        <Link to="/forgot-password" className="text-accent underline underline-offset-2">
+          Forgot your password, or your activation link expired?
+        </Link>
+      </p>
+      <p className="mt-2 text-sm text-ink-2">Received an activation e-mail? Open the link in it to set your password.</p>
     </AuthFrame>
   );
 }
@@ -164,7 +169,7 @@ export function ActivatePage() {
       const me = await adoptTokens(pair);
       navigate(homeFor(new Set(me.grants.map((g) => g.role))), { replace: true });
     } catch (err) {
-      if (isApiError(err) && (err.status === 401 || err.status === 404 || err.status === 409)) setError('This activation link has expired or was already used. Ask the Examination Section for a new one.');
+      if (isApiError(err) && (err.status === 401 || err.status === 404 || err.status === 409)) setError('This activation link has expired or was already used. Use “Forgot your password” on the sign-in page to get a new one.');
       else setError('Could not activate the account right now. Try again in a moment.');
     } finally {
       setBusy(false);
@@ -190,6 +195,93 @@ export function ActivatePage() {
           </Button>
         </form>
       )}
+    </AuthFrame>
+  );
+}
+
+export function ForgotPasswordPage() {
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      await api.post('/auth/forgot-password', { email }, { auth: false, quiet: true });
+      setSent(true);
+    } catch (err) {
+      setError(isApiError(err) && err.status === 429 ? 'Too many requests. Wait a few minutes and try again.' : 'Could not send the request right now. Try again in a moment.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AuthFrame title="Reset your password" lede="Enter your university e-mail. We will send a link to set a new password.">
+      {sent ? (
+        <p role="status" className="text-ink-2">
+          If that address has an account here, a link is on its way. It works once and expires soon. Check your junk folder too.
+        </p>
+      ) : (
+        <form onSubmit={(e) => void onSubmit(e)} noValidate className="flex flex-col gap-4">
+          <Field label="E-mail" error={error}>
+            {({ id, describedBy, invalid }) => <TextInput id={id} type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} aria-describedby={describedBy} aria-invalid={invalid || undefined} autoFocus />}
+          </Field>
+          <Button type="submit" variant="primary" size="lg" loading={busy}>
+            Send the link
+          </Button>
+        </form>
+      )}
+      <p className="mt-6 text-sm">
+        <Link to="/login" className="text-accent underline underline-offset-2">
+          Back to sign in
+        </Link>
+      </p>
+    </AuthFrame>
+  );
+}
+
+export function ResetPasswordPage() {
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const token = params.get('token') ?? '';
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (password.length < 12) return setError('Use at least 12 characters. A short sentence works well.');
+    if (password !== confirm) return setError('The two passwords do not match.');
+    setBusy(true);
+    try {
+      await api.post('/auth/reset-password', { token, password }, { auth: false, quiet: true });
+      navigate('/login', { replace: true });
+    } catch (err) {
+      setError(isApiError(err, 'RESET_INVALID') ? 'This link has expired or was already used. Ask for a new one from the sign-in page.' : 'Could not reset the password right now. Try again in a moment.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AuthFrame title="Choose a new password" lede="Every device signed in to this account will be signed out.">
+      <form onSubmit={(e) => void onSubmit(e)} noValidate className="flex flex-col gap-4">
+        <Field label="New password" hint="At least 12 characters.">
+          {({ id, describedBy }) => <TextInput id={id} type="password" autoComplete="new-password" minLength={12} required value={password} onChange={(e) => setPassword(e.target.value)} aria-describedby={describedBy} autoFocus />}
+        </Field>
+        <Field label="Repeat the password" error={error}>
+          {({ id, describedBy, invalid }) => <TextInput id={id} type="password" autoComplete="new-password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-describedby={describedBy} aria-invalid={invalid || undefined} />}
+        </Field>
+        <Button type="submit" variant="primary" size="lg" loading={busy} disabled={!token}>
+          Set new password
+        </Button>
+      </form>
     </AuthFrame>
   );
 }

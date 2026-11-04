@@ -1,7 +1,7 @@
 import { createBrowserRouter, Outlet } from 'react-router';
 import { AppShell } from './shell';
 import { RequireAuth, RequireRole, RootRedirect } from './guards';
-import { ActivatePage, LoginPage, OidcCallbackPage } from '@/features/auth/LoginPage';
+import { ActivatePage, ForgotPasswordPage, LoginPage, OidcCallbackPage, ResetPasswordPage } from '@/features/auth/LoginPage';
 import { MyExamsPage } from '@/features/student/MyExamsPage';
 import { LedgerPage } from '@/features/student/LedgerPage';
 import { ProfilePage } from '@/features/student/ProfilePage';
@@ -24,6 +24,8 @@ export const router = createBrowserRouter([
   { path: '/', element: <RootRedirect /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/activate', element: <ActivatePage /> },
+  { path: '/forgot-password', element: <ForgotPasswordPage /> },
+  { path: '/reset-password', element: <ResetPasswordPage /> },
   { path: '/auth/callback', element: <OidcCallbackPage /> },
   { path: '/verify/:attemptId/:version', element: <VerifyPage /> },
   { path: '/student/verify-student/:hash', element: <StudentVerifyPage /> },
@@ -57,7 +59,7 @@ export const router = createBrowserRouter([
             children: [{ path: '/student/attempts/:attemptId/booklet', element: <BookletPage /> }],
           },
           {
-            element: <RequireRole roles={['EXAM_CELL_OPERATOR', 'CONTROLLER', 'QUESTION_SETTER', 'PAPER_REVIEWER', 'HOD']} />,
+            element: <RequireRole roles={['EXAM_CELL_OPERATOR', 'CONTROLLER', 'QUESTION_SETTER', 'PAPER_REVIEWER', 'HOD', 'CHIEF_PROCTOR']} />,
             children: [
               { path: '/examcell', lazy: () => import('@/features/examcell/ExamListPage').then((m) => ({ Component: m.ExamListPage })) },
               { path: '/examcell/exams/:id', lazy: () => import('@/features/examcell/ExamDetailPage').then((m) => ({ Component: m.ExamDetailPage })) },
@@ -70,14 +72,14 @@ export const router = createBrowserRouter([
             ],
           },
           {
-            element: <RequireRole roles={['EVALUATOR', 'MODERATOR', 'EXAM_CELL_OPERATOR', 'CONTROLLER']} />,
+            element: <RequireRole roles={['EVALUATOR', 'MODERATOR']} />,
             children: [
               { path: '/evaluate', lazy: () => import('@/features/evaluate/EvaluatePage').then((m) => ({ Component: m.EvaluateHomePage })) },
               { path: '/evaluate/:attemptId', lazy: () => import('@/features/evaluate/EvaluatePage').then((m) => ({ Component: m.EvaluatePage })) },
             ],
           },
           {
-            element: <RequireRole roles={['PROCTOR', 'CHIEF_PROCTOR', 'EXAM_CELL_OPERATOR', 'CONTROLLER']} />,
+            element: <RequireRole roles={['PROCTOR', 'CHIEF_PROCTOR', 'SECURITY_AUDITOR']} />,
             children: [{ path: '/proctor', lazy: () => import('@/features/proctor/ProctorPage').then((m) => ({ Component: m.ProctorPage })) }],
           },
           {

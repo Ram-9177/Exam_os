@@ -4,7 +4,8 @@ import { CandidateApprovalSchema, ControllerAuthorizeSchema } from '@examos/cont
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
-import { requireUser, requirePermission, userPrincipal } from '../../middleware/auth.js';
+import { assertMayMark } from '../evaluation/service.js';
+import { grantsAllow, requireUser, requirePermission, userPrincipal } from '../../middleware/auth.js';
 import type { JwtService } from '../auth/jwt.js';
 import { runForensicChecks, recordResultVersion, candidateChecklist, approveCandidate, holdCandidate, releaseHold, controllerAuthorizeAndPublish, evaluatorQueue } from './service.js';
 import { getCandidatePaper } from '../papers/service.js';
@@ -50,7 +51,14 @@ export function candidateRoutes(deps: AppDeps, jwt: JwtService): Router {
       const t = requireTenant(req);
       const examId = String(req.query['examId'] ?? '');
       if (!/^[0-9a-f-]{36}$/i.test(examId)) return res.status(400).json({ code: 'INVALID_ID', title: 'examId must be a UUID', status: 400 });
-      res.json(await tenantTx(deps, req, (trx) => evaluatorQueue(trx, t.id, examId)));
+      const seesIdentity = grantsAllow(userPrincipal(req).grants, 'examcell:candidates:read', { examId });
+      const queue = await tenantTx(deps, req, async (trx) => {
+        const exam = await trx('exams').where({ tenant_id: t.id, id: examId }).first('exam_type', 'policy');
+        const out = await evaluatorQueue(trx, t.id, examId);
+        const anonymised = exam?.exam_type === 'SEM_EXTERNAL' || Boolean((exam?.policy as Record<string, unknown> | undefined)?.['anonymizeEvaluation']);
+        return !anonymised || seesIdentity ? out : { ...out, candidates: out.candidates.map((c) => ({ ...c, fullName: null, registerNumber: null, hallTicket: null })) };
+      });
+      res.json(queue);
     }),
   );
   r.post(
@@ -70,7 +78,12 @@ export function candidateRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.status(201).json(await tenantTx(deps, req, (trx) => recordResultVersion(trx, t.id, p.userId, uuidParam(req, 'attemptId'), body<typeof ResultItemsBody>(req).items)));
+      res.status(201).json(
+        await tenantTx(deps, req, async (trx) => {
+          await assertMayMark(trx, t.id, uuidParam(req, 'attemptId'), p.userId);
+          return recordResultVersion(trx, t.id, p.userId, uuidParam(req, 'attemptId'), body<typeof ResultItemsBody>(req).items);
+        }),
+      );
     }),
   );
   r.get(
@@ -80,7 +93,12 @@ export function candidateRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);
-      res.json(await tenantTx(deps, req, (trx) => getCandidatePaper(deps, trx, t.id, p.userId, uuidParam(req, 'attemptId'))));
+      const scope = await examScopeOfAttempt(deps, req);
+      const viewer = {
+        canAuthor: grantsAllow(p.grants, 'paper:write', scope) || grantsAllow(p.grants, 'paper:review', scope),
+        canMark: grantsAllow(p.grants, 'marks:approve', scope),
+      };
+      res.json(await tenantTx(deps, req, (trx) => getCandidatePaper(deps, trx, t.id, p.userId, uuidParam(req, 'attemptId'), viewer)));
     }),
   );
 

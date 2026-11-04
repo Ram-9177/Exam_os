@@ -167,3 +167,40 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Dependency audit (`npm audit`, prod + dev) | Tested | 0 vulnerabilities after upgrades (docs/security-review.md) |
 | Black-box security probes (26 checks: auth, IDOR, injection, mass assignment, headers, tokens, rate limit, device scans, network policy, platform surface) | Tested | `npm run security:probes` |
 | Independent penetration test, DAST/SAST in CI, privacy impact assessment | Not Started | docs/security-review.md lists the required scope |
+
+## Authentication hardening (Phase 1 completion)
+| Feature | Status | Evidence |
+| --- | --- | --- |
+| Lockout: attempts while locked don't extend lock; expired lock resets count | Tested | all-personas-e2e.test.ts |
+| Activate: refuses unless PENDING_ACTIVATION or ACTIVE; assertTransition enforced | Tested | all-personas-e2e.test.ts |
+| Forgot password: always 202; ACTIVE → reset link, PENDING → activation link | Tested | all-personas-e2e.test.ts |
+| Reset password: single-use token, clears lockout, revokes all sessions | Tested | all-personas-e2e.test.ts |
+| Resend activation: 409 ALREADY_ACTIVATED if not PENDING | Tested | all-personas-e2e.test.ts |
+| Password reset token: 60-min TTL, issuing a new one consumes prior unused tokens | Tested | all-personas-e2e.test.ts |
+| setUserStatus consumes unused tokens on disable | Tested | all-personas-e2e.test.ts |
+| Rate limit: POST /auth/forgot-password 5/15 min | In Progress | route exists; no dedicated rate-limit test |
+
+## Role-gap fixes (November 2026 audit)
+| Feature | Status | Evidence |
+| --- | --- | --- |
+| Bearer-only auth (removed ?token= / ?access_token= query auth) | Tested | role-gaps.test.ts |
+| departmentScopeOf: ABAC scope helper returning ALL / NONE / id-list for analytics | Tested | role-gaps.test.ts |
+| Analytics overview scoped to department subset for non-admin | Tested | role-gaps.test.ts, analytics.test.ts |
+| saveAnswer validates question exists in approved paper; 422 UNKNOWN_QUESTION_ID | Tested | recovery.test.ts, role-gaps.test.ts |
+| PaperViewer model: KEYS / PROMPTS / NONE; rubric/expectedAnswer stripped for non-KEYS | Tested | paper.test.ts |
+| Audit trail for any non-DRAFT paper read before LIVE | Tested | paper.test.ts |
+| MCQ MCQ_OPTIONS_REQUIRED: submitPaperForReview rejects MCQs with < 2 options | Tested | paper.test.ts |
+| MARKS_INCOMPLETE: recordResultVersion refuses if any question unmarked | Tested | paper.test.ts |
+| assertMayMark: 403 NOT_ASSIGNED when evaluator not assigned | Tested | evaluation-scale.test.ts |
+| blindingFor: hideIdentity, hidePriorMarks, anonymizedIdentifier for blinded booklets | Tested | evaluation-scale.test.ts |
+| Moderation pending queue GET /evaluator/me/moderation/pending | Tested | evaluation-scale.test.ts |
+| Queue name masking on anonymised exams (candidates:read guard) | Tested | role-gaps.test.ts |
+| uploadStudentPhoto records actorId in audit | Tested | role-gaps.test.ts |
+| resolveTargetStudentId: permission-gated profile access | Tested | role-gaps.test.ts |
+| Append-only triggers on submission_manifests, resume_grants, controller_publication_grants | Tested | migration 20261030000104 (DB-enforced) |
+| answerMatchesKey: MCQ choice exact match, numeric equality for auto-proposals | Tested | role-gaps.test.ts |
+| ERP ACTIVE no longer overrides local disabled status | Tested | role-gaps.test.ts |
+| Tokens in memory/sessionStorage; no ?token= in photo URL | Tested | profile.test.tsx |
+| MCQ ChoiceAnswer + NumericAnswer UI components in ExamWorkspace | Tested | exam-workspace.test.tsx |
+| ForgotPasswordPage + ResetPasswordPage in web router | In Progress | UI exists; no dedicated web test |
+| ModerationQueue component shown to MODERATOR | In Progress | UI exists; no dedicated web test |

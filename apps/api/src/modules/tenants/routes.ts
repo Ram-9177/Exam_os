@@ -36,7 +36,7 @@ import {
 import { generateTemplate, previewRosterImport, executeRosterImport } from '../integration/csv-importer.js';
 import { getMailHealthMetrics } from '../notifications/health.js';
 import { reconcileBounce } from '../notifications/bounce.js';
-import { createUserWithActivation, grantRole, revokeRole, setUserStatus, staffSeats, updateUserSignature, removeUserSignature } from '../users/service.js';
+import { createUserWithActivation, resendActivation, grantRole, revokeRole, setUserStatus, staffSeats, updateUserSignature, removeUserSignature } from '../users/service.js';
 import { audit } from '../../lib/audit.js';
 
 const MailConfigBody = TenantMailConfigSchema.extend({
@@ -166,6 +166,16 @@ export function tenantAdminRoutes(deps: AppDeps, jwt: JwtService): Router {
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       res.json(await tenantTx(deps, req, (trx) => staffSeats(trx, t.id)));
+    }),
+  );
+  r.post(
+    '/users/:id/resend-activation',
+    user,
+    requirePermission('users:write'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      res.status(202).json(await tenantTx(deps, req, (trx) => resendActivation(deps, trx, t.id, uuidParam(req, 'id'), p.userId)));
     }),
   );
   r.patch(

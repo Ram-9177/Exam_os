@@ -12,16 +12,36 @@ import { AppError } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { canonicalJson, encryptAtRest, decryptAtRest, sha256Hex } from '../../lib/crypto.js';
 
+export interface PaperViewer {
+  /** Holds paper:write or paper:review for this exam. */
+  canAuthor: boolean;
+  /** Holds marks:approve for this exam. */
+  canMark: boolean;
+}
+
+/**
+ * Who may see a paper, and when. Authors and reviewers see it always. Everyone
+ * else with exams:read sees nothing before the exam starts, and never the key
+ * unless they mark, and then only after the exam has closed.
+ */
+export function paperAccess(viewer: PaperViewer, examStatus: string): 'KEYS' | 'PROMPTS' | 'NONE' {
+  if (viewer.canAuthor) return 'KEYS';
+  if (examStatus === 'CLOSED' || examStatus === 'ARCHIVED') return viewer.canMark ? 'KEYS' : 'PROMPTS';
+  return examStatus === 'LIVE' ? 'PROMPTS' : 'NONE';
+}
+
 export async function getExamPaper(
   deps: AppDeps,
   trx: Knex.Transaction,
   tenantId: string,
   actorId: string,
   examId: string,
-  options?: { isStaff?: boolean; requestId?: string },
+  options: { isStaff?: boolean; requestId?: string; viewer: PaperViewer },
 ) {
   const exam = await trx('exams').where({ tenant_id: tenantId, id: examId }).first();
   if (!exam) throw AppError.notFound('EXAM_NOT_FOUND');
+  const access = paperAccess(options.viewer, exam.status);
+  if (access === 'NONE') throw AppError.forbidden('PAPER_RESTRICTED', 'The question paper is not available to your role before the exam starts');
 
   // Find latest paper
   const paper = await trx('question_papers')
@@ -31,8 +51,8 @@ export async function getExamPaper(
 
   if (!paper) return null;
 
-  // Audit on early view: reading an approved paper before exam is LIVE is audited
-  if (paper.status === 'APPROVED' && exam.status !== 'LIVE' && options?.isStaff) {
+  // Every read of a paper under review or approved, before the exam starts, leaves a trace.
+  if (paper.status !== 'DRAFT' && ['DRAFT', 'PAPER_REVIEW', 'APPROVED', 'SCHEDULED', 'PRECHECK'].includes(exam.status) && options.isStaff) {
     await audit(trx, {
       tenantId,
       actorType: 'USER',
@@ -78,8 +98,8 @@ export async function getExamPaper(
       prompt: q.prompt,
       options: q.options,
       maxMarks: Number(q.max_marks),
-      rubric: q.rubric,
-      expectedAnswer: q.expected_answer,
+      rubric: access === 'KEYS' ? q.rubric : null,
+      expectedAnswer: access === 'KEYS' ? q.expected_answer : null,
       attachments: q.attachments,
     })),
     sets: sets.map((s) => ({
@@ -231,6 +251,11 @@ export async function submitPaperForReview(
   if (!questionsCount || Number(questionsCount.count) === 0) {
     throw AppError.unprocessable('EMPTY_PAPER', 'Question paper must have at least one question');
   }
+
+  // Drafts may be incomplete; what goes to a reviewer must be answerable.
+  const mcqs = await trx('paper_questions').where({ tenant_id: tenantId, paper_id: paper.id, kind: 'MCQ' }).select('question_id', 'options');
+  const short = mcqs.filter((q) => !Array.isArray(q.options) || q.options.length < 2).map((q) => q.question_id);
+  if (short.length) throw AppError.unprocessable('MCQ_OPTIONS_REQUIRED', `Add at least two options to: ${short.join(', ')}`);
 
   await trx('question_papers').where('id', paper.id).update({
     status: 'REVIEW',
@@ -548,9 +573,13 @@ export async function getCandidatePaper(
   tenantId: string,
   actorId: string,
   attemptId: string,
+  viewer: PaperViewer,
 ) {
   const attempt = await trx('exam_attempts').where({ tenant_id: tenantId, id: attemptId }).first();
   if (!attempt) throw AppError.notFound('ATTEMPT_NOT_FOUND');
+  const exam = await trx('exams').where({ tenant_id: tenantId, id: attempt.exam_id }).first('status');
+  const access = paperAccess(viewer, exam?.status ?? 'DRAFT');
+  if (access === 'NONE') throw AppError.forbidden('PAPER_RESTRICTED', 'The question paper is not available to your role before the exam starts');
 
   // Look for release or default to approved paper
   const release = await trx('paper_releases').where({ tenant_id: tenantId, attempt_id: attemptId }).first();
@@ -597,8 +626,8 @@ export async function getCandidatePaper(
       prompt: q.prompt,
       options: q.options,
       maxMarks: Number(q.max_marks),
-      rubric: q.rubric,
-      expectedAnswer: q.expected_answer,
+      rubric: access === 'KEYS' ? q.rubric : null,
+      expectedAnswer: access === 'KEYS' ? q.expected_answer : null,
       attachments: q.attachments,
     })),
   };

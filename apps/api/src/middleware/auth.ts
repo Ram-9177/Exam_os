@@ -22,12 +22,8 @@ export function requireUser({ deps, jwt }: AuthDeps): RequestHandler {
       const tenant = req.ctx.tenant;
       if (!tenant) throw AppError.notFound('TENANT_NOT_FOUND', 'No tenant in context');
       const header = req.header('authorization') ?? '';
-      const queryToken = typeof req.query['token'] === 'string'
-        ? req.query['token']
-        : typeof req.query['access_token'] === 'string'
-          ? req.query['access_token']
-          : '';
-      const token = header.startsWith('Bearer ') ? header.slice(7).trim() : queryToken.trim();
+      // Bearer header only: a token in a URL ends up in access logs, history and Referer headers.
+      const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
       if (!token) throw AppError.unauthorized();
       let claims;
       try {
@@ -86,6 +82,17 @@ export function grantsAllow(grants: Grant[], permission: Permission, target: Sco
     if (g.scopeType === 'COURSE' && target.courseId && g.scopeId === target.courseId) return true;
   }
   return false;
+}
+
+/** Which departments a person may read under `permission`: everything, a list, or nothing. */
+export function departmentScopeOf(grants: Grant[], permission: Permission): 'ALL' | 'NONE' | string[] {
+  const ids: string[] = [];
+  for (const g of grants) {
+    if (!ROLE_PERMISSIONS[g.role]?.includes(permission)) continue;
+    if (g.scopeType === 'TENANT' || g.scopeType === 'TENANT_GROUP') return 'ALL';
+    if (g.scopeType === 'DEPARTMENT' && g.scopeId) ids.push(g.scopeId);
+  }
+  return ids.length ? ids : 'NONE';
 }
 
 /**

@@ -3,7 +3,7 @@ import type { StudentProfileData, IdCardVerificationData } from '@examos/contrac
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/time';
-import { api, getTokens } from '@/lib/api';
+import { api } from '@/lib/api';
 import {
   Button,
   Dialog,
@@ -359,11 +359,7 @@ export function ProfilePage() {
   }
 
   const { student, department, programme, documents, hallTickets, cumulative } = profile;
-  const token = getTokens()?.accessToken;
-  const fallbackPhotoSrc = (documents.photo || uploadedPhotoPreview)
-    ? `/api/v1/student/profile/photo?t=${photoKey}${token ? `&token=${encodeURIComponent(token)}` : ''}${activeStudentId ? `&userId=${encodeURIComponent(activeStudentId)}` : ''}`
-    : null;
-  const photoSrc = uploadedPhotoPreview || photoBlobQuery.data || fallbackPhotoSrc;
+  const photoSrc = uploadedPhotoPreview || photoBlobQuery.data || null;
 
   return (
     <div className="max-w-5xl space-y-10">
