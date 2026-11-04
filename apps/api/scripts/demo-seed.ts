@@ -933,7 +933,7 @@ async function main() {
     const microservicesDiagram = {
       width: 800,
       height: 400,
-      background: 'grid' as const,
+      background: 'blank' as const,
       strokes: [
         { tool: 'rect' as const, width: 2, color: 'blue' as const, fill: true, points: [[50, 80], [210, 160]] },
         { tool: 'text' as const, width: 2, color: 'blue' as const, text: 'Order Service', size: 16, points: [[70, 125]] },
@@ -961,7 +961,7 @@ async function main() {
     const testPyramidDiagram = {
       width: 800,
       height: 400,
-      background: 'grid' as const,
+      background: 'blank' as const,
       strokes: [
         { tool: 'rect' as const, width: 2, color: 'red' as const, fill: true, points: [[300, 50], [500, 110]] },
         { tool: 'text' as const, width: 2, color: 'red' as const, text: 'E2E Tests (10%)', size: 15, points: [[335, 85]] },

@@ -67,7 +67,7 @@ export function buildCanvasScene(content: CanvasContentWire): CanvasScene {
   return {
     width,
     height,
-    background: { kind, spacing: kind === 'blank' ? 0 : BACKGROUND_SPACING[kind], color: '#d6dae3' },
+    background: { kind, spacing: kind === 'blank' ? 0 : BACKGROUND_SPACING[kind], color: 'currentColor' },
     segments,
     visibleCount,
   };
@@ -145,15 +145,20 @@ export function canvasItemSvg(item: CanvasItem, inkColor?: string): string {
   }
 }
 
-function backgroundSvg(scene: CanvasScene, idPrefix: string): string {
+function backgroundSvg(scene: CanvasScene, idPrefix: string, inkColor?: string): string {
   const bg = scene.background;
   if (bg.kind === 'blank') return '';
   const id = `${idPrefix}bg`;
   const s = bg.spacing;
+  const strokeColor = inkColor ?? (bg.color && bg.color !== '#d6dae3' ? bg.color : 'currentColor');
   let tile = '';
-  if (bg.kind === 'grid') tile = `<path d="M${s} 0 L0 0 L0 ${s}" fill="none" stroke="${bg.color}" stroke-width="1"/>`;
-  else if (bg.kind === 'ruled') tile = `<line x1="0" y1="${s - 0.5}" x2="${s}" y2="${s - 0.5}" stroke="${bg.color}" stroke-width="1"/>`;
-  else tile = `<circle cx="${s / 2}" cy="${s / 2}" r="1" fill="${bg.color}"/>`;
+  if (bg.kind === 'grid') {
+    tile = `<path d="M${s} 0 L0 0 L0 ${s}" fill="none" stroke="${strokeColor}" stroke-width="0.75" stroke-opacity="0.10"/>`;
+  } else if (bg.kind === 'ruled') {
+    tile = `<line x1="0" y1="${s - 0.5}" x2="${s}" y2="${s - 0.5}" stroke="${strokeColor}" stroke-width="0.75" stroke-opacity="0.12"/>`;
+  } else {
+    tile = `<circle cx="${s / 2}" cy="${s / 2}" r="1" fill="${strokeColor}" fill-opacity="0.16"/>`;
+  }
   return `<defs><pattern id="${id}" width="${s}" height="${s}" patternUnits="userSpaceOnUse">${tile}</pattern></defs><rect x="0" y="0" width="${num(scene.width)}" height="${num(scene.height)}" fill="url(#${id})"/>`;
 }
 
@@ -162,7 +167,7 @@ function backgroundSvg(scene: CanvasScene, idPrefix: string): string {
  * viewBox; `idPrefix` keeps mask ids unique when several drawings share a page.
  */
 export function canvasSceneSvgInner(scene: CanvasScene, idPrefix = 'c', inkColor?: string): string {
-  let out = backgroundSvg(scene, idPrefix);
+  let out = backgroundSvg(scene, idPrefix, inkColor);
   scene.segments.forEach((seg, i) => {
     const body = seg.items.map((it) => canvasItemSvg(it, inkColor)).join('');
     if (!seg.erasers.length) {

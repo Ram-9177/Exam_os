@@ -1,5 +1,5 @@
 import { promptText } from '@examos/contracts';
-import type { ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { isCanvasContent, paragraphText, type AnswerDoc, type Block, type CanvasContent } from '@/lib/answers';
 import { formatDateTime } from '@/lib/time';
 import { cn } from '@/ui';
@@ -129,6 +129,57 @@ export function questionLabel(id: string, index: number): string {
   return m ? `Question ${m[1]}` : `Question ${index + 1} (${id})`;
 }
 
+function BookletDiagram({ canvas, index }: { canvas: CanvasContent; index: number }) {
+  const [paper, setPaper] = useState<CanvasContent['background']>(canvas.background || 'blank');
+  const effectiveCanvas = useMemo(() => ({ ...canvas, background: paper }), [canvas, paper]);
+  const strokeCount = canvas.strokes.filter((s) => s.tool !== 'eraser').length;
+
+  return (
+    <figure className="border border-rule-2 rounded-sm bg-sheet p-2.5 text-ink shadow-xs">
+      <div className="flex items-center justify-between pb-2 mb-2 border-b border-rule/50 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-[11px] tracking-wider uppercase text-ink-2">Diagram {index}</span>
+          <span className="text-[11px] text-ink-3">· {strokeCount} {strokeCount === 1 ? 'stroke' : 'strokes'}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-ink-3 mr-1">Paper:</span>
+          <button
+            type="button"
+            onClick={() => setPaper('blank')}
+            className={cn('px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer', paper === 'blank' || !paper ? 'bg-sheet-2 text-ink shadow-xs border border-rule-2' : 'text-ink-2 hover:text-ink')}
+            title="Clean Paper (Plain)"
+          >
+            Clean
+          </button>
+          <button
+            type="button"
+            onClick={() => setPaper('grid')}
+            className={cn('px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer', paper === 'grid' ? 'bg-sheet-2 text-ink shadow-xs border border-rule-2' : 'text-ink-2 hover:text-ink')}
+            title="Subtle Engineering Grid"
+          >
+            Grid
+          </button>
+          <button
+            type="button"
+            onClick={() => setPaper('dots')}
+            className={cn('px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer', paper === 'dots' ? 'bg-sheet-2 text-ink shadow-xs border border-rule-2' : 'text-ink-2 hover:text-ink')}
+            title="Dot Grid"
+          >
+            Dots
+          </button>
+        </div>
+      </div>
+      <StrokesSvg content={effectiveCanvas} label={`Diagram ${index}`} />
+      <figcaption className="text-xs text-ink-2 mt-1.5 flex items-center justify-between">
+        <span>Diagram, drawn by the candidate</span>
+        {canvas.background && canvas.background !== 'blank' ? (
+          <span className="text-[11px] text-ink-3">Authored on {canvas.background} paper</span>
+        ) : null}
+      </figcaption>
+    </figure>
+  );
+}
+
 /** The answer rendered as it was written: paragraphs on ruled paper, diagrams from their strokes, equations and code. */
 export function AnswerRender({ doc, className }: { doc: AnswerDoc | unknown; className?: string }) {
   const blocks = parseAnswerBlocks(doc);
@@ -153,12 +204,7 @@ export function AnswerRender({ doc, className }: { doc: AnswerDoc | unknown; cla
         if (isCanvas) {
           const canvas = normalizeCanvasContent(b.content);
           if (canvas) {
-            return (
-              <figure key={b.id || `canvas-${i}`} className="border border-rule-2 rounded-sm bg-sheet p-2 text-ink shadow-xs">
-                <StrokesSvg content={canvas} label={`Diagram ${i + 1}`} />
-                <figcaption className="text-xs text-ink-2 mt-1">Diagram, drawn by the candidate</figcaption>
-              </figure>
-            );
+            return <BookletDiagram key={b.id || `canvas-${i}`} canvas={canvas} index={i + 1} />;
           }
         }
 

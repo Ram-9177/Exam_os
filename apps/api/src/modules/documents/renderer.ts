@@ -67,14 +67,15 @@ function renderCanvasToSvg(content: unknown, diagramSeq?: number): string {
   const safeContent: CanvasContentWire = {
     width: typeof c.width === 'number' && c.width > 0 ? c.width : 800,
     height: typeof c.height === 'number' && c.height > 0 ? c.height : 480,
-    background: c.background || 'grid',
+    background: c.background || 'blank',
     strokes,
   };
   canvasSeq = (canvasSeq + 1) % 1_000_000;
   const svg = canvasToSvg(safeContent, {
     idPrefix: `d${canvasSeq}`,
-    style: 'width: 100%; max-height: 440px; display: block; background: #ffffff;',
+    style: 'width: 100%; max-height: 440px; display: block; background: #ffffff; color: #1a2030;',
     label: `Diagram ${diagramSeq ?? 1}`,
+    inkColor: '#1a2030',
   });
   return `
     <div style="border: 1px solid #d1d5db; border-radius: 6px; padding: 12px; margin: 12px 0; background: #ffffff;">

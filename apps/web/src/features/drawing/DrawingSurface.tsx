@@ -131,7 +131,7 @@ export function renderStrokes(ctx: CanvasRenderingContext2D, content: CanvasCont
 
 /** CSS background for the ruled/grid/dot paper; kept out of the bitmap so erasers never punch through it. */
 export function backgroundStyle(kind: CanvasContent['background'], scale = 1): CSSProperties {
-  const c = 'var(--rule-2, #d6dae3)';
+  const c = 'color-mix(in srgb, var(--ink, #1a2030) 11%, transparent)';
   const s = (n: number) => `${n * scale}px`;
   switch (kind) {
     case 'grid':
