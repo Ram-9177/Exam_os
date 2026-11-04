@@ -92,6 +92,9 @@ export function ExamNewPage() {
       else if (isApiError(err, 'EXAM_EXISTS')) setErrors({ code: 'An exam with this code already exists.' });
       else if (isApiError(err, 'WINDOW_INVALID')) setErrors({ windowEndAt: 'The window must close after it opens.' });
       else if (isApiError(err) && err.problem.errors?.length) setErrors(Object.fromEntries(err.problem.errors.map((x) => [x.path.replace(/^body\./, ''), x.message])));
+      else {
+        toast({ tone: 'error', title: 'Failed to create exam', description: (err as any)?.problem?.title || 'Unexpected error' });
+      }
     } finally {
       setBusy(false);
     }

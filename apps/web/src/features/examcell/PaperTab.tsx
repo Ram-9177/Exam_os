@@ -125,6 +125,8 @@ export function PaperTab({ exam }: { exam: ExamRow }) {
     } catch (e) {
       if (isApiError(e)) {
         toast({ tone: 'warning', title: 'Approval refused', description: e.problem.detail ?? e.problem.title });
+      } else {
+        toast({ tone: 'error', title: 'Approval failed', description: (e as any)?.message || 'Could not approve paper' });
       }
     }
   };
@@ -139,6 +141,8 @@ export function PaperTab({ exam }: { exam: ExamRow }) {
     } catch (e) {
       if (isApiError(e)) {
         toast({ tone: 'warning', title: 'Action refused', description: e.problem.detail ?? e.problem.title });
+      } else {
+        toast({ tone: 'error', title: 'Action failed', description: (e as any)?.message || 'Could not reject paper' });
       }
     }
   };

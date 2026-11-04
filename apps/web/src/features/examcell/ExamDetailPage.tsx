@@ -67,6 +67,10 @@ export function ExamDetailPage() {
     } catch (err) {
       if (isApiError(err, 'OUTSIDE_WINDOW')) toast({ tone: 'warning', title: 'Outside the allowed window', description: err.problem.title });
       else if (isApiError(err, 'ILLEGAL_TRANSITION')) toast({ tone: 'warning', title: 'Not allowed from the current state', description: err.problem.title });
+      else {
+        const desc = (err as any)?.problem?.detail || (err as any)?.problem?.title || (err as any)?.message || 'Action failed';
+        toast({ tone: 'error', title: 'Action failed', description: desc });
+      }
     } finally {
       setBusy(false);
     }
@@ -270,6 +274,10 @@ function Allocations({ examId, status }: { examId: string; status: ExamStatus })
       toast({ tone: 'success', title: `${out.allocated} allocated`, description: out.skipped.length ? `${out.skipped.length} skipped` : undefined });
     } catch (err) {
       if (isApiError(err, 'EXAM_LOCKED')) toast({ tone: 'warning', title: 'Allocations are locked', description: err.problem.title });
+      else {
+        const desc = (err as any)?.problem?.detail || (err as any)?.problem?.title || (err as any)?.message || 'Allocation failed';
+        toast({ tone: 'error', title: 'Allocation failed', description: desc });
+      }
     } finally {
       setBusy(false);
     }
@@ -280,6 +288,9 @@ function Allocations({ examId, status }: { examId: string; status: ExamStatus })
     try {
       const out = await api.post<{ issued: number }>(`/exams/${examId}/hall-tickets`, {});
       toast({ tone: 'success', title: `${out.issued} hall ${out.issued === 1 ? 'ticket' : 'tickets'} issued`, description: out.issued === 0 ? 'Everyone allocated already has one.' : undefined });
+    } catch (err) {
+      const desc = (err as any)?.problem?.detail || (err as any)?.problem?.title || (err as any)?.message || 'Hall ticket generation failed';
+      toast({ tone: 'error', title: 'Issue failed', description: desc });
     } finally {
       setIssuing(false);
     }
@@ -339,6 +350,7 @@ function Allocations({ examId, status }: { examId: string; status: ExamStatus })
 }
 
 function Exports({ examId, status, tz }: { examId: string; status: ExamStatus; tz: string }) {
+  const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [locked, setLocked] = useState<string | null>(null);
   const [scripts, setScripts] = useState<Array<{ attemptId: string; fullName: string; status: string; sealedAt: string | null }> | null>(null);
@@ -352,6 +364,9 @@ function Exports({ examId, status, tz }: { examId: string; status: ExamStatus; t
       setScripts(out.scripts);
     } catch (err) {
       if (isApiError(err, 'EXPORT_LOCKED')) setLocked(err.problem.title);
+      else {
+        toast({ tone: 'error', title: 'Export failed', description: (err as any)?.problem?.title || 'Could not export scripts' });
+      }
     } finally {
       setBusy(false);
     }

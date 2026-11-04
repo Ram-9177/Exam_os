@@ -294,7 +294,12 @@ export function ExamWorkspace() {
       if (isApiError(e, 'ALREADY_SUBMITTED')) {
         setSubmitOpen(false);
         void heartbeatRef.current();
-      } else if (isApiError(e, 'ATTEMPT_STATE')) toast({ tone: 'warning', title: 'Cannot submit right now', description: e.problem.title });
+      } else if (isApiError(e, 'ATTEMPT_STATE')) {
+        toast({ tone: 'warning', title: 'Cannot submit right now', description: e.problem.title });
+      } else {
+        const desc = (e as any)?.problem?.detail || (e as any)?.problem?.title || (e as any)?.message || 'Submission could not be completed. Please try again.';
+        toast({ tone: 'error', title: 'Submission failed', description: desc });
+      }
     } finally {
       setSubmitting(false);
     }
