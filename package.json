@@ -11,6 +11,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "build": "npm run typecheck && npm run build -w @examos/web",
     "typecheck": "tsc -p apps/api/tsconfig.json && tsc -p packages/db/tsconfig.json && tsc -p apps/web/tsconfig.json",
     "migrate": "npm run migrate -w @examos/db",
     "migrate:rollback": "npm run migrate:rollback -w @examos/db",

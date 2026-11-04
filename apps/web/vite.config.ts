@@ -40,9 +40,11 @@ export default defineConfig({
         manualChunks: {
           react: ['react', 'react-dom', 'react-router'],
           query: ['@tanstack/react-query'],
+          zod: ['zod'],
         },
       },
     },
+    chunkSizeWarningLimit: 800,
   },
   test: {
     environment: 'jsdom',
