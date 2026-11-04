@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState, type ClipboardEvent } from 'react';
+import { forwardRef, useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 import { CANVAS_BACKGROUNDS, CANVAS_COLORS, CANVAS_LIMITS, CANVAS_TOOLS, type CanvasColor } from '@examos/contracts';
 import type { AnswerDoc, Block, CanvasContent, Stroke } from '@/lib/answers';
 import { isCanvasContent, paragraphText } from '@/lib/answers';
@@ -43,19 +43,79 @@ export interface AnswerEditorProps {
 export function AnswerEditor({ questionId, doc, placeholderId, onChange, disabled = false, onExternalPaste }: AnswerEditorProps) {
   const blocks = normaliseDoc(doc, placeholderId).blocks;
   const firstRef = useRef<HTMLTextAreaElement>(null);
+  const [docHistory, setDocHistory] = useState<AnswerDoc[]>([]);
+  const [docFuture, setDocFuture] = useState<AnswerDoc[]>([]);
 
   useEffect(() => {
     firstRef.current?.focus({ preventScroll: true });
   }, [questionId]);
+
+  const pushDoc = useCallback(
+    (next: AnswerDoc) => {
+      setDocHistory((prev) => [...prev.slice(-30), doc]);
+      setDocFuture([]);
+      onChange(next);
+    },
+    [doc, onChange],
+  );
+
+  const undoDoc = useCallback(() => {
+    if (docHistory.length === 0) return;
+    const prev = docHistory[docHistory.length - 1]!;
+    setDocHistory((h) => h.slice(0, -1));
+    setDocFuture((f) => [...f, doc]);
+    onChange(prev);
+  }, [doc, docHistory, onChange]);
+
+  const redoDoc = useCallback(() => {
+    if (docFuture.length === 0) return;
+    const next = docFuture[docFuture.length - 1]!;
+    setDocFuture((f) => f.slice(0, -1));
+    setDocHistory((h) => [...h, doc]);
+    onChange(next);
+  }, [doc, docFuture, onChange]);
 
   const update = (id: string, content: unknown) => onChange({ blocks: blocks.map((b) => (b.id === id ? { ...b, content } : b)) });
   const insertAfter = (id: string | null, block: Block) => {
     const idx = id ? blocks.findIndex((b) => b.id === id) : -1;
     const next = [...blocks];
     next.splice(idx + 1, 0, block);
-    onChange({ blocks: next });
+    pushDoc({ blocks: next });
   };
-  const remove = (id: string) => onChange(normaliseDoc({ blocks: blocks.filter((b) => b.id !== id) }, placeholderId));
+  const remove = (id: string) => pushDoc(normaliseDoc({ blocks: blocks.filter((b) => b.id !== id) }, placeholderId));
+
+  // Global document-level keyboard shortcut for block actions (when not typing inside a textarea or drawing on a canvas)
+  useEffect(() => {
+    if (disabled) return;
+    const onDocKey = (e: globalThis.KeyboardEvent) => {
+      const active = document.activeElement;
+      const isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'CANVAS');
+      if (isInput) return;
+      if (active?.closest('figure')) return;
+
+      const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (!mod) return;
+
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        if (docHistory.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          undoDoc();
+        }
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        if (docFuture.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          redoDoc();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', onDocKey);
+    return () => window.removeEventListener('keydown', onDocKey);
+  }, [disabled, docHistory.length, docFuture.length, undoDoc, redoDoc]);
 
   const onCopy = (e: ClipboardEvent) => {
     const sel = typeof window !== 'undefined' ? window.getSelection()?.toString() : '';
@@ -72,6 +132,16 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
 
   return (
     <div className="flex flex-col gap-4" onCopy={onCopy} onCut={onCopy} onPaste={onPaste}>
+      {(docHistory.length > 0 || docFuture.length > 0) && !disabled ? (
+        <div className="flex items-center gap-2 text-xs text-ink-3">
+          <Button size="sm" variant="ghost" onClick={undoDoc} disabled={docHistory.length === 0} title="Undo block action (Ctrl+Z / ⌘Z)">
+            ↶ Undo block (Ctrl+Z)
+          </Button>
+          <Button size="sm" variant="ghost" onClick={redoDoc} disabled={docFuture.length === 0} title="Redo block action (Ctrl+Y / ⌘Shift+Z)">
+            ↷ Redo block (Ctrl+Y)
+          </Button>
+        </div>
+      ) : null}
       {blocks.map((b, i) => (
         <div key={b.id} className="group">
           {b.kind === 'canvas' && isCanvasContent(b.content) ? (
@@ -184,6 +254,9 @@ function DiagramBlock({
   index: number;
   onInsertToParagraph?: (text: string) => void;
 }) {
+  const figureRef = useRef<HTMLElement>(null);
+  const [isHovered, setIsHovered] = useState(false);
+  const lastActiveRef = useRef(0);
   const [tool, setTool] = useState<DrawingTool>('pen');
   const [color, setColor] = useState<CanvasColor>('ink');
   const [width, setWidth] = useState<number>(WIDTHS[1].value);
@@ -197,23 +270,67 @@ function DiagramBlock({
   const items = content.strokes.filter((s) => s.tool !== 'eraser').length;
   const shape = tool === 'rect' || tool === 'ellipse';
 
-  const draw = (next: CanvasContent) => {
+  const draw = useCallback((next: CanvasContent) => {
     setRedo([]);
     setLimitNote(false);
+    lastActiveRef.current = Date.now();
     onChange(next);
-  };
-  const undo = () => {
+  }, [onChange]);
+
+  const undo = useCallback(() => {
     const last = content.strokes[content.strokes.length - 1];
     if (!last) return;
     setRedo((r) => [...r, last]);
+    lastActiveRef.current = Date.now();
     onChange(undoLastStroke(content));
-  };
-  const redoLast = () => {
+  }, [content, onChange]);
+
+  const redoLast = useCallback(() => {
     const item = redo[redo.length - 1];
     if (!item) return;
     setRedo((r) => r.slice(0, -1));
+    lastActiveRef.current = Date.now();
     onChange({ ...content, strokes: [...content.strokes, item] });
-  };
+  }, [content, redo, onChange]);
+
+  // Keyboard shortcut listener: Ctrl+Z / Cmd+Z to undo, Ctrl+Y / Cmd+Shift+Z to redo
+  useEffect(() => {
+    if (disabled) return;
+    const handleDiagramKeyDown = (e: globalThis.KeyboardEvent) => {
+      const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (!mod) return;
+
+      const key = e.key.toLowerCase();
+      const isUndo = key === 'z' && !e.shiftKey;
+      const isRedo = key === 'y' || (key === 'z' && e.shiftKey);
+      if (!isUndo && !isRedo) return;
+
+      const active = document.activeElement;
+      // If focused inside a text input outside this diagram, let that input handle native typing undo
+      const isExternalInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') && !figureRef.current?.contains(active);
+      if (isExternalInput) return;
+
+      // Handle if focused inside this figure, or hovered, or recently drawn on (< 45s)
+      const isRecent = Date.now() - lastActiveRef.current < 45_000;
+      const isTarget = isHovered || (figureRef.current && (figureRef.current === active || figureRef.current.contains(active))) || isRecent;
+      if (!isTarget) return;
+
+      if (isUndo && content.strokes.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        undo();
+      } else if (isRedo && redo.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        redoLast();
+      }
+    };
+
+    window.addEventListener('keydown', handleDiagramKeyDown, true);
+    return () => window.removeEventListener('keydown', handleDiagramKeyDown, true);
+  }, [disabled, isHovered, content.strokes.length, redo.length, undo, redoLast]);
+
   const clear = () => {
     setConfirmClear(false);
     setRedo([]);
@@ -234,7 +351,22 @@ function DiagramBlock({
   };
 
   return (
-    <figure className="border border-rule-2 rounded-sm overflow-hidden bg-sheet">
+    <figure
+      ref={figureRef}
+      role="figure"
+      aria-label={`Diagram ${index}`}
+      data-testid={`diagram-${index}`}
+      tabIndex={0}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      onFocus={() => setIsHovered(true)}
+      onBlur={(e) => {
+        if (!figureRef.current?.contains(e.relatedTarget as Node)) {
+          setIsHovered(false);
+        }
+      }}
+      className="border border-rule-2 rounded-sm overflow-hidden bg-sheet focus-within:ring-1 focus-within:ring-accent outline-none"
+    >
       <figcaption className="flex flex-col gap-2 px-3 py-2 border-b border-rule bg-sheet-2 text-sm">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium mr-2">Diagram {index}</span>
@@ -332,10 +464,10 @@ function DiagramBlock({
               </select>
             </label>
             <div className="flex gap-1 ml-auto">
-              <Button size="sm" onClick={undo} disabled={content.strokes.length === 0}>
+              <Button size="sm" onClick={undo} disabled={content.strokes.length === 0} title="Undo stroke (Ctrl+Z / ⌘Z)">
                 Undo
               </Button>
-              <Button size="sm" onClick={redoLast} disabled={redo.length === 0}>
+              <Button size="sm" onClick={redoLast} disabled={redo.length === 0} title="Redo stroke (Ctrl+Y / ⌘Shift+Z)">
                 Redo
               </Button>
               <Button size="sm" variant="ghost" onClick={taller} disabled={content.height >= CANVAS_LIMITS.maxHeight}>
@@ -376,6 +508,8 @@ function DiagramBlock({
         label={`Diagram ${index}`}
         onLimit={() => setLimitNote(true)}
         autoConvertMath={autoConvert}
+        onUndo={undo}
+        onRedo={redoLast}
       />
     </figure>
   );

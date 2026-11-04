@@ -24,6 +24,8 @@ export interface DrawingSurfaceProps {
   onLimit?: () => void;
   /** Automatically converts recognized math symbols (e.g. √, ∫, ∑) and shapes */
   autoConvertMath?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 const MIN_POINT_DISTANCE = 1.5;
@@ -240,7 +242,7 @@ export function insertDigitalSymbolOnCanvas(
   };
 }
 
-export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth = 2.25, eraserWidth = 18, fill = false, textSize = DEFAULT_TEXT_SIZE, readOnly = false, label, className, onLimit, autoConvertMath = false }: DrawingSurfaceProps) {
+export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth = 2.25, eraserWidth = 18, fill = false, textSize = DEFAULT_TEXT_SIZE, readOnly = false, label, className, onLimit, autoConvertMath = false, onUndo, onRedo }: DrawingSurfaceProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const liveRef = useRef<Stroke | null>(null);
   const inkColor = useRef('#1a2030');
@@ -440,8 +442,9 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
         role="img"
         aria-label={`${label}. ${count} ${count === 1 ? 'item' : 'items'}.`}
         data-tool={tool}
+        tabIndex={0}
         style={{ width: '100%', height: '100%', touchAction: 'none', cursor, ...backgroundStyle(value.background) }}
-        className="block bg-sheet rounded-sm"
+        className="block bg-sheet rounded-sm outline-none focus:ring-1 focus:ring-accent"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={finish}
@@ -450,6 +453,25 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
           if (liveRef.current) finish(e);
         }}
         onContextMenu={(e) => e.preventDefault()}
+        onKeyDown={(e) => {
+          const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+          const mod = isMac ? e.metaKey : e.ctrlKey;
+          if (!mod) return;
+          const key = e.key.toLowerCase();
+          if (key === 'z' && !e.shiftKey) {
+            if (onUndo) {
+              e.preventDefault();
+              e.stopPropagation();
+              onUndo();
+            }
+          } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+            if (onRedo) {
+              e.preventDefault();
+              e.stopPropagation();
+              onRedo();
+            }
+          }
+        }}
       />
       {textDraft ? (
         <textarea
