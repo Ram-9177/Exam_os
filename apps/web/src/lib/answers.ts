@@ -6,7 +6,7 @@ import { canonicalJson, sha256Hex } from './canonical';
  * carry plain text; canvas blocks carry vector strokes. Equation and table
  * kinds are accepted by the API but the editor does not create them yet.
  */
-export type BlockKind = 'paragraph' | 'equation' | 'table' | 'canvas';
+export type BlockKind = 'paragraph' | 'equation' | 'table' | 'canvas' | 'code';
 
 export interface Block {
   id: string;
@@ -44,6 +44,12 @@ export function isCanvasContent(v: unknown): v is CanvasContent {
 
 export function paragraphText(b: Block): string {
   return typeof b.content === 'string' ? b.content : '';
+}
+
+export function codeText(b: Block): string {
+  if (typeof b.content === 'string') return b.content;
+  if (b.content && typeof (b.content as any).code === 'string') return (b.content as any).code;
+  return '';
 }
 
 /** Only the three wire fields take part in hashing; client-side extras never do. */

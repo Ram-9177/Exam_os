@@ -7,6 +7,8 @@ import { recognizeMathSymbol, type RecognizedSymbol } from './strokeRecognition'
 export type DrawingTool = Stroke['tool'];
 export type { CanvasColor };
 
+export type EraserMode = 'area' | 'stroke';
+
 export interface DrawingSurfaceProps {
   value: CanvasContent;
   onChange: (next: CanvasContent) => void;
@@ -14,6 +16,7 @@ export interface DrawingSurfaceProps {
   color?: CanvasColor;
   penWidth?: number;
   eraserWidth?: number;
+  eraserMode?: EraserMode;
   /** Shapes only: translucent fill. */
   fill?: boolean;
   textSize?: number;
@@ -138,8 +141,15 @@ export function backgroundStyle(kind: CanvasContent['background'], scale = 1): C
   switch (kind) {
     case 'grid':
       return { backgroundImage: `linear-gradient(${c} 1px, transparent 1px), linear-gradient(90deg, ${c} 1px, transparent 1px)`, backgroundSize: `${s(20)} ${s(20)}` };
-    case 'ruled':
-      return { backgroundImage: `linear-gradient(${c} 1px, transparent 1px)`, backgroundSize: `${s(28)} ${s(28)}`, backgroundPosition: `0 ${s(27)}` };
+    case 'ruled': {
+      const marginRose = 'color-mix(in srgb, #f43f5e 38%, transparent)';
+      const marginPos = s(56);
+      return {
+        backgroundImage: `linear-gradient(to right, transparent calc(${marginPos} - 1.5px), ${marginRose} calc(${marginPos} - 1.5px), ${marginRose} ${marginPos}, transparent ${marginPos}), linear-gradient(${c} 1px, transparent 1px)`,
+        backgroundSize: `100% 100%, 100% ${s(28)}`,
+        backgroundPosition: `0 0, 0 ${s(27)}`,
+      };
+    }
     case 'dots':
       return { backgroundImage: `radial-gradient(${c} 1px, transparent 1.5px)`, backgroundSize: `${s(20)} ${s(20)}`, backgroundPosition: `${s(10)} ${s(10)}` };
     default:
@@ -242,11 +252,88 @@ export function insertDigitalSymbolOnCanvas(
   };
 }
 
-export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth = 2.25, eraserWidth = 18, fill = false, textSize = DEFAULT_TEXT_SIZE, readOnly = false, label, className, onLimit, autoConvertMath = false, onUndo, onRedo }: DrawingSurfaceProps) {
+function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
+  if (l2 === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
+}
+
+export function findStrokeIndexAt(strokes: readonly Stroke[], p: StrokePoint, threshold = 12): number {
+  const [px, py] = p;
+  for (let idx = strokes.length - 1; idx >= 0; idx--) {
+    const s = strokes[idx]!;
+    const hitDist = threshold + (s.width || 2) / 2;
+    if (s.tool === 'text') {
+      const p0 = s.points[0];
+      if (!p0) continue;
+      const size = s.size ?? DEFAULT_TEXT_SIZE;
+      const lines = (s.text ?? '').split('\n');
+      const maxLen = Math.max(...lines.map((l) => l.length), 1);
+      const textWidth = maxLen * (size * 0.6);
+      const textHeight = lines.length * size * 1.25;
+      if (px >= p0[0] - 6 && px <= p0[0] + textWidth + 6 && py >= p0[1] - size && py <= p0[1] + textHeight) {
+        return idx;
+      }
+      continue;
+    }
+
+    if (s.tool === 'rect') {
+      const [a, b] = s.points;
+      if (!a || !b) continue;
+      const x = Math.min(a[0], b[0]);
+      const y = Math.min(a[1], b[1]);
+      const w = Math.abs(b[0] - a[0]);
+      const h = Math.abs(b[1] - a[1]);
+      if (s.fill && px >= x && px <= x + w && py >= y && py <= y + h) return idx;
+      if (
+        distToSegment(px, py, x, y, x + w, y) <= hitDist ||
+        distToSegment(px, py, x + w, y, x + w, y + h) <= hitDist ||
+        distToSegment(px, py, x + w, y + h, x, y + h) <= hitDist ||
+        distToSegment(px, py, x, y + h, x, y) <= hitDist
+      ) {
+        return idx;
+      }
+      continue;
+    }
+
+    if (s.tool === 'ellipse') {
+      const [a, b] = s.points;
+      if (!a || !b) continue;
+      const cx = (a[0] + b[0]) / 2;
+      const cy = (a[1] + b[1]) / 2;
+      const rx = Math.max(1, Math.abs(b[0] - a[0]) / 2);
+      const ry = Math.max(1, Math.abs(b[1] - a[1]) / 2);
+      const norm = ((px - cx) ** 2) / (rx ** 2) + ((py - cy) ** 2) / (ry ** 2);
+      if (s.fill && norm <= 1.1) return idx;
+      const d = Math.abs(Math.sqrt(norm) - 1) * Math.min(rx, ry);
+      if (d <= hitDist) return idx;
+      continue;
+    }
+
+    const pts = s.points;
+    if (pts.length === 1) {
+      if (Math.hypot(px - pts[0]![0], py - pts[0]![1]) <= hitDist) return idx;
+      continue;
+    }
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p1 = pts[i]!;
+      const p2 = pts[i + 1]!;
+      if (distToSegment(px, py, p1[0], p1[1], p2[0], p2[1]) <= hitDist) {
+        return idx;
+      }
+    }
+  }
+  return -1;
+}
+
+export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth = 2.25, eraserWidth = 18, eraserMode = 'area', fill = false, textSize = DEFAULT_TEXT_SIZE, readOnly = false, label, className, onLimit, autoConvertMath = false, onUndo, onRedo }: DrawingSurfaceProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const liveRef = useRef<Stroke | null>(null);
   const inkColor = useRef('#1a2030');
   const [textDraft, setTextDraft] = useState<{ x: number; y: number; value: string } | null>(null);
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
   const [recognitionPrompt, setRecognitionPrompt] = useState<{
     candidate: RecognizedSymbol;
     strokeIndex: number;
@@ -330,6 +417,15 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
       return;
     }
     const p = toPoint(e);
+    if (tool === 'eraser' && eraserMode === 'stroke') {
+      const hitRadius = Math.max(10, eraserWidth / 2);
+      const hitIndex = findStrokeIndexAt(value.strokes, p, hitRadius);
+      if (hitIndex >= 0) {
+        const nextStrokes = value.strokes.filter((_, idx) => idx !== hitIndex);
+        onChange({ ...value, strokes: nextStrokes });
+      }
+      return;
+    }
     if (tool === 'text') {
       setTextDraft({ x: p[0], y: p[1], value: '' });
       return;
@@ -351,6 +447,20 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (tool === 'eraser' && !readOnly) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      setHoverPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      if (eraserMode === 'stroke' && (e.buttons === 1 || e.pressure > 0)) {
+        const p = toPoint(e);
+        const hitRadius = Math.max(10, eraserWidth / 2);
+        const hitIndex = findStrokeIndexAt(value.strokes, p, hitRadius);
+        if (hitIndex >= 0) {
+          const nextStrokes = value.strokes.filter((_, idx) => idx !== hitIndex);
+          onChange({ ...value, strokes: nextStrokes });
+        }
+        return;
+      }
+    }
     const live = liveRef.current;
     if (!live) return;
     const p = toPoint(e);
@@ -450,6 +560,7 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
         onPointerUp={finish}
         onPointerCancel={finish}
         onPointerLeave={(e) => {
+          setHoverPos(null);
           if (liveRef.current) finish(e);
         }}
         onContextMenu={(e) => e.preventDefault()}
@@ -473,6 +584,21 @@ export function DrawingSurface({ value, onChange, tool, color = 'ink', penWidth 
           }
         }}
       />
+      {tool === 'eraser' && hoverPos && !readOnly ? (
+        <div
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute rounded-full -translate-x-1/2 -translate-y-1/2 border z-10',
+            eraserMode === 'stroke' ? 'border-accent bg-accent/20' : 'border-stop/80 bg-stop/10'
+          )}
+          style={{
+            left: hoverPos.x,
+            top: hoverPos.y,
+            width: eraserWidth,
+            height: eraserWidth,
+          }}
+        />
+      ) : null}
       {textDraft ? (
         <textarea
           ref={textRef}

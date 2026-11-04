@@ -37,6 +37,12 @@ export function validateAnswerOps(ops: AnswerSave['ops'], current: { blocks: Arr
         if (!ChoiceContentSchema.safeParse(content).success) throw AppError.unprocessable('ANSWER_INVALID', `ops[${i}]: a choice is {selected: key | null}`);
         break;
       }
+      case 'code': {
+        const codeText = typeof content === 'string' ? content : (content && typeof (content as any).code === 'string' ? (content as any).code : null);
+        if (content !== null && codeText === null) throw AppError.unprocessable('ANSWER_INVALID', `ops[${i}]: code is text`);
+        if (codeText && codeText.length > PARAGRAPH_MAX_CHARS) throw AppError.unprocessable('ANSWER_TOO_LARGE', `ops[${i}]: a code block holds at most ${PARAGRAPH_MAX_CHARS} characters`);
+        break;
+      }
       default:
         if (JSON.stringify(content).length > MAX_OPAQUE_BLOCK_BYTES) throw AppError.unprocessable('ANSWER_TOO_LARGE', `ops[${i}]: block too large`);
     }

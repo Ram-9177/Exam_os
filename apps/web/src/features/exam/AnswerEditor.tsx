@@ -1,10 +1,10 @@
 import { forwardRef, useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 import { CANVAS_BACKGROUNDS, CANVAS_COLORS, CANVAS_LIMITS, CANVAS_TOOLS, type CanvasColor } from '@examos/contracts';
 import type { AnswerDoc, Block, CanvasContent, Stroke } from '@/lib/answers';
-import { isCanvasContent, paragraphText } from '@/lib/answers';
+import { isCanvasContent, paragraphText, codeText } from '@/lib/answers';
 import { uuid } from '@/lib/ids';
 import { Button, cn } from '@/ui';
-import { DrawingSurface, emptyCanvas, undoLastStroke, insertDigitalSymbolOnCanvas, type DrawingTool } from '@/features/drawing/DrawingSurface';
+import { DrawingSurface, emptyCanvas, undoLastStroke, insertDigitalSymbolOnCanvas, type DrawingTool, type EraserMode } from '@/features/drawing/DrawingSurface';
 import { MathPalette } from '@/features/drawing/MathPalette';
 
 const INTERNAL_MIME = 'text/x-examos-internal';
@@ -12,8 +12,13 @@ const INTERNAL_MIME = 'text/x-examos-internal';
 export function newParagraph(text = ''): Block {
   return { id: `b-${uuid()}`, kind: 'paragraph', content: text };
 }
+
 export function newCanvas(): Block {
   return { id: `b-${uuid()}`, kind: 'canvas', content: emptyCanvas(800, 480) };
+}
+
+export function newCodeBlock(code = '', language = 'python'): Block {
+  return { id: `b-${uuid()}`, kind: 'code', content: { code, language } };
 }
 
 /**
@@ -36,9 +41,9 @@ export interface AnswerEditorProps {
 }
 
 /**
- * The answer sheet: paragraph blocks (textareas that grow) and diagram blocks
- * (inline whiteboards), in document order. Copy/paste works inside the
- * workspace; pasting from outside is refused and logged, not punished.
+ * The answer sheet: paragraph blocks, whiteboard diagram blocks, and code listing
+ * blocks in document order. Supports moving blocks up/down, keyboard shortcuts (Alt+Up/Down),
+ * undo/redo (Ctrl+Z/Ctrl+Y), and Tab indentation in code blocks.
  */
 export function AnswerEditor({ questionId, doc, placeholderId, onChange, disabled = false, onExternalPaste }: AnswerEditorProps) {
   const blocks = normaliseDoc(doc, placeholderId).blocks;
@@ -76,18 +81,48 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
   }, [doc, docFuture, onChange]);
 
   const update = (id: string, content: unknown) => onChange({ blocks: blocks.map((b) => (b.id === id ? { ...b, content } : b)) });
+
   const insertAfter = (id: string | null, block: Block) => {
     const idx = id ? blocks.findIndex((b) => b.id === id) : -1;
     const next = [...blocks];
     next.splice(idx + 1, 0, block);
     pushDoc({ blocks: next });
   };
+
   const remove = (id: string) => pushDoc(normaliseDoc({ blocks: blocks.filter((b) => b.id !== id) }, placeholderId));
 
-  // Global document-level keyboard shortcut for block actions (when not typing inside a textarea or drawing on a canvas)
+  const move = useCallback(
+    (id: string, direction: 'up' | 'down') => {
+      const idx = blocks.findIndex((b) => b.id === id);
+      if (idx < 0) return;
+      const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= blocks.length) return;
+      const next = [...blocks];
+      const [moved] = next.splice(idx, 1);
+      if (!moved) return;
+      next.splice(targetIdx, 0, moved);
+      pushDoc({ blocks: next });
+    },
+    [blocks, pushDoc],
+  );
+
+  // Global document-level keyboard shortcut for block actions & reordering
   useEffect(() => {
     if (disabled) return;
     const onDocKey = (e: globalThis.KeyboardEvent) => {
+      // Reordering shortcut: Alt+ArrowUp / Alt+ArrowDown
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        const active = document.activeElement;
+        const blockEl = active?.closest('[data-block-id]');
+        const id = blockEl?.getAttribute('data-block-id');
+        if (id) {
+          e.preventDefault();
+          e.stopPropagation();
+          move(id, e.key === 'ArrowUp' ? 'up' : 'down');
+          return;
+        }
+      }
+
       const active = document.activeElement;
       const isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'CANVAS');
       if (isInput) return;
@@ -115,7 +150,7 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
 
     window.addEventListener('keydown', onDocKey);
     return () => window.removeEventListener('keydown', onDocKey);
-  }, [disabled, docHistory.length, docFuture.length, undoDoc, redoDoc]);
+  }, [disabled, docHistory.length, docFuture.length, move, undoDoc, redoDoc]);
 
   const onCopy = (e: ClipboardEvent) => {
     const sel = typeof window !== 'undefined' ? window.getSelection()?.toString() : '';
@@ -143,7 +178,7 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
         </div>
       ) : null}
       {blocks.map((b, i) => (
-        <div key={b.id} className="group">
+        <div key={b.id} data-block-id={b.id} className="group">
           {b.kind === 'canvas' && isCanvasContent(b.content) ? (
             <DiagramBlock
               content={b.content}
@@ -151,6 +186,10 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
               onRemove={() => remove(b.id)}
               disabled={disabled}
               index={i + 1}
+              isFirst={i === 0}
+              isLast={i === blocks.length - 1}
+              onMoveUp={() => move(b.id, 'up')}
+              onMoveDown={() => move(b.id, 'down')}
               onInsertToParagraph={(text) => {
                 const target = blocks.find((blk) => blk.kind === 'paragraph');
                 if (target) {
@@ -159,18 +198,43 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
                 }
               }}
             />
+          ) : b.kind === 'code' ? (
+            <CodeBlock
+              content={b.content}
+              onChange={(c) => update(b.id, c)}
+              onRemove={() => remove(b.id)}
+              disabled={disabled}
+              index={i + 1}
+              isFirst={i === 0}
+              isLast={i === blocks.length - 1}
+              onMoveUp={() => move(b.id, 'up')}
+              onMoveDown={() => move(b.id, 'down')}
+            />
           ) : (
-            <ParagraphBlock ref={i === 0 ? firstRef : undefined} value={paragraphText(b)} onChange={(t) => update(b.id, t)} disabled={disabled} label={`Answer paragraph ${i + 1}`} onRemove={blocks.length > 1 ? () => remove(b.id) : undefined} />
+            <ParagraphBlock
+              ref={i === 0 ? firstRef : undefined}
+              value={paragraphText(b)}
+              onChange={(t) => update(b.id, t)}
+              disabled={disabled}
+              label={`Answer paragraph ${i + 1}`}
+              index={i + 1}
+              isFirst={i === 0}
+              isLast={i === blocks.length - 1}
+              onMoveUp={() => move(b.id, 'up')}
+              onMoveDown={() => move(b.id, 'down')}
+              onRemove={blocks.length > 1 ? () => remove(b.id) : undefined}
+            />
           )}
-          <div className={cn('flex gap-2 mt-2 text-sm', disabled && 'hidden')}>
-            <Button size="sm" variant="ghost" onClick={() => insertAfter(b.id, newCanvas())}>
-              Insert diagram
+          <div className={cn('flex flex-wrap items-center gap-2 mt-2 text-sm', disabled && 'hidden')}>
+            <Button size="sm" variant="ghost" onClick={() => insertAfter(b.id, newParagraph())}>
+              + Add paragraph
             </Button>
-            {b.kind === 'canvas' ? (
-              <Button size="sm" variant="ghost" onClick={() => insertAfter(b.id, newParagraph())}>
-                Add paragraph
-              </Button>
-            ) : null}
+            <Button size="sm" variant="ghost" onClick={() => insertAfter(b.id, newCanvas())}>
+              + Insert diagram
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => insertAfter(b.id, newCodeBlock())}>
+              + Insert code
+            </Button>
           </div>
         </div>
       ))}
@@ -178,7 +242,24 @@ export function AnswerEditor({ questionId, doc, placeholderId, onChange, disable
   );
 }
 
-const ParagraphBlock = forwardRef<HTMLTextAreaElement, { value: string; onChange: (t: string) => void; disabled: boolean; label: string; onRemove?: () => void }>(function ParagraphBlock({ value, onChange, disabled, label, onRemove }, ref) {
+// ---------------------------------------------------------------------------
+// Paragraph block
+// ---------------------------------------------------------------------------
+const ParagraphBlock = forwardRef<
+  HTMLTextAreaElement,
+  {
+    value: string;
+    onChange: (t: string) => void;
+    disabled: boolean;
+    label: string;
+    index: number;
+    isFirst: boolean;
+    isLast: boolean;
+    onMoveUp?: () => void;
+    onMoveDown?: () => void;
+    onRemove?: () => void;
+  }
+>(function ParagraphBlock({ value, onChange, disabled, label, index, isFirst, isLast, onMoveUp, onMoveDown, onRemove }, ref) {
   const innerRef = useRef<HTMLTextAreaElement | null>(null);
   const setRefs = (el: HTMLTextAreaElement | null) => {
     innerRef.current = el;
@@ -192,7 +273,29 @@ const ParagraphBlock = forwardRef<HTMLTextAreaElement, { value: string; onChange
     el.style.height = `${Math.max(el.scrollHeight, 160)}px`;
   }, [value]);
   return (
-    <div className="relative">
+    <div className="relative border border-rule-2 rounded-sm overflow-hidden bg-sheet focus-within:ring-1 focus-within:ring-accent">
+      <div className="flex items-center justify-between text-xs text-ink-3 px-3 py-1.5 border-b border-rule bg-sheet-2">
+        <span className="font-medium text-ink-2">Paragraph {index}</span>
+        {!disabled ? (
+          <div className="flex items-center gap-1">
+            {onMoveUp ? (
+              <Button size="sm" variant="ghost" onClick={onMoveUp} disabled={isFirst} title="Move paragraph up (Alt+↑)" aria-label={`Move paragraph ${index} up`}>
+                ↑ Move up
+              </Button>
+            ) : null}
+            {onMoveDown ? (
+              <Button size="sm" variant="ghost" onClick={onMoveDown} disabled={isLast} title="Move paragraph down (Alt+↓)" aria-label={`Move paragraph ${index} down`}>
+                ↓ Move down
+              </Button>
+            ) : null}
+            {onRemove ? (
+              <Button size="sm" variant="ghost" onClick={onRemove} aria-label={`Remove paragraph ${index}`}>
+                Remove
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
       <textarea
         ref={setRefs}
         value={value}
@@ -203,17 +306,151 @@ const ParagraphBlock = forwardRef<HTMLTextAreaElement, { value: string; onChange
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="sentences"
-        className="ruled ruled-inset w-full resize-none rounded-sm border border-rule-2 py-0 text-[17px] text-ink outline-none focus-visible:border-accent focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-0 disabled:opacity-70"
+        className="ruled ruled-inset w-full resize-none border-0 py-2 text-[17px] text-ink outline-none disabled:opacity-70"
         style={{ fontFamily: 'var(--font-sans)', minHeight: 160 }}
       />
-      {onRemove && !disabled ? (
-        <button type="button" onClick={onRemove} className="absolute top-1 right-1 text-xs text-ink-3 hover:text-stop px-1.5 py-0.5 rounded-sm opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label={`Remove ${label.toLowerCase()}`}>
-          Remove
-        </button>
-      ) : null}
     </div>
   );
 });
+
+// ---------------------------------------------------------------------------
+// Code listing block
+// ---------------------------------------------------------------------------
+export const CODE_LANGUAGES = [
+  { value: 'python', label: 'Python' },
+  { value: 'c_cpp', label: 'C / C++' },
+  { value: 'java', label: 'Java' },
+  { value: 'javascript', label: 'JavaScript / TypeScript' },
+  { value: 'sql', label: 'SQL' },
+  { value: 'pseudocode', label: 'Pseudocode / Algorithm' },
+] as const;
+
+function CodeBlock({
+  content,
+  onChange,
+  onRemove,
+  disabled,
+  index,
+  isFirst,
+  isLast,
+  onMoveUp,
+  onMoveDown,
+}: {
+  content: unknown;
+  onChange: (next: unknown) => void;
+  onRemove: () => void;
+  disabled: boolean;
+  index: number;
+  isFirst: boolean;
+  isLast: boolean;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+}) {
+  const code = typeof content === 'string' ? content : (content as any)?.code ?? '';
+  const language = (content as any)?.language ?? 'python';
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleCodeChange = (newCode: string) => {
+    onChange({ code: newCode, language });
+  };
+
+  const handleLanguageChange = (newLang: string) => {
+    onChange({ code, language: newLang });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      if (e.shiftKey) {
+        if (code.slice(Math.max(0, start - 2), start) === '  ') {
+          const next = code.slice(0, start - 2) + code.slice(start);
+          handleCodeChange(next);
+          requestAnimationFrame(() => {
+            ta.selectionStart = ta.selectionEnd = Math.max(0, start - 2);
+          });
+        }
+      } else {
+        const next = code.slice(0, start) + '  ' + code.slice(end);
+        handleCodeChange(next);
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = start + 2;
+        });
+      }
+    }
+  };
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(el.scrollHeight, 140)}px`;
+  }, [code]);
+
+  return (
+    <div
+      role="region"
+      aria-label={`Code block ${index}`}
+      data-testid={`code-block-${index}`}
+      className="border border-rule-2 rounded-sm overflow-hidden bg-sheet focus-within:ring-1 focus-within:ring-accent"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-rule bg-sheet-2 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="font-medium">Code Listing {index}</span>
+          <select
+            value={language}
+            onChange={(e) => handleLanguageChange(e.target.value)}
+            disabled={disabled}
+            aria-label={`Code block ${index} language`}
+            className="rounded-sm border border-rule-2 bg-sheet px-2 py-0.5 text-xs text-ink font-mono"
+          >
+            {CODE_LANGUAGES.map((l) => (
+              <option key={l.value} value={l.value}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {!disabled ? (
+          <div className="flex items-center gap-1">
+            {onMoveUp ? (
+              <Button size="sm" variant="ghost" onClick={onMoveUp} disabled={isFirst} title="Move code up (Alt+↑)" aria-label={`Move code block ${index} up`}>
+                ↑ Move up
+              </Button>
+            ) : null}
+            {onMoveDown ? (
+              <Button size="sm" variant="ghost" onClick={onMoveDown} disabled={isLast} title="Move code down (Alt+↓)" aria-label={`Move code block ${index} down`}>
+                ↓ Move down
+              </Button>
+            ) : null}
+            <Button size="sm" variant="ghost" onClick={onRemove} aria-label={`Remove code block ${index}`}>
+              Remove
+            </Button>
+          </div>
+        ) : null}
+      </div>
+      <div className="p-2 bg-sheet-2/30">
+        <textarea
+          ref={textareaRef}
+          value={code}
+          onChange={(e) => handleCodeChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={disabled}
+          placeholder="// Write your code or algorithm here... (Tab indents 2 spaces)"
+          aria-label={`Code editor ${index}`}
+          spellCheck={false}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          className="w-full resize-none font-mono text-xs sm:text-sm leading-relaxed p-3 rounded-sm border border-rule bg-sheet text-ink outline-none focus:border-accent disabled:opacity-70"
+          style={{ minHeight: 140, tabSize: 2 }}
+        />
+      </div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Whiteboard block
@@ -221,11 +458,21 @@ const ParagraphBlock = forwardRef<HTMLTextAreaElement, { value: string; onChange
 export const TOOL_LABEL: Record<DrawingTool, string> = { pen: 'Pen', highlighter: 'Highlighter', eraser: 'Eraser', line: 'Line', arrow: 'Arrow', rect: 'Rectangle', ellipse: 'Ellipse', text: 'Text' };
 export const COLOR_LABEL: Record<CanvasColor, string> = { ink: 'Ink', blue: 'Blue', red: 'Red', green: 'Green', orange: 'Orange', purple: 'Purple' };
 const BACKGROUND_LABEL: Record<(typeof CANVAS_BACKGROUNDS)[number], string> = { blank: 'Plain', grid: 'Grid', ruled: 'Ruled', dots: 'Dots' };
+
 const WIDTHS = [
-  { label: 'Thin', value: 1.5 },
-  { label: 'Medium', value: 2.5 },
-  { label: 'Thick', value: 5 },
+  { label: 'Fine', value: 1.5 },
+  { label: 'Regular', value: 2.5 },
+  { label: 'Medium', value: 4 },
+  { label: 'Bold', value: 6.5 },
 ] as const;
+
+export const ERASER_SIZES = [
+  { label: 'Fine (8px)', value: 8 },
+  { label: 'Medium (18px)', value: 18 },
+  { label: 'Wide (36px)', value: 36 },
+  { label: 'Jumbo (60px)', value: 60 },
+] as const;
+
 const TEXT_SIZES = [
   { label: 'Small text', value: 14 },
   { label: 'Normal text', value: 18 },
@@ -234,10 +481,8 @@ const TEXT_SIZES = [
 const GROW_BY = 240;
 
 /**
- * One diagram: a toolbar (tools, colour, width, fill, text size, paper,
- * undo/redo, clear, taller) over the drawing surface. Every action is a plain
- * button so it works with a keyboard and a screen reader; state that matters
- * for marking (the items) lives in the answer document, the rest is local.
+ * One diagram: a toolbar (tools, colour, width, eraser sizes & modes, fill,
+ * text size, paper, undo/redo, move up/down, clear, taller) over the drawing surface.
  */
 function DiagramBlock({
   content,
@@ -245,6 +490,10 @@ function DiagramBlock({
   onRemove,
   disabled,
   index,
+  isFirst,
+  isLast,
+  onMoveUp,
+  onMoveDown,
   onInsertToParagraph,
 }: {
   content: CanvasContent;
@@ -252,6 +501,10 @@ function DiagramBlock({
   onRemove: () => void;
   disabled: boolean;
   index: number;
+  isFirst: boolean;
+  isLast: boolean;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
   onInsertToParagraph?: (text: string) => void;
 }) {
   const figureRef = useRef<HTMLElement>(null);
@@ -260,6 +513,8 @@ function DiagramBlock({
   const [tool, setTool] = useState<DrawingTool>('pen');
   const [color, setColor] = useState<CanvasColor>('ink');
   const [width, setWidth] = useState<number>(WIDTHS[1].value);
+  const [eraserSize, setEraserSize] = useState<number>(ERASER_SIZES[1].value);
+  const [eraserMode, setEraserMode] = useState<EraserMode>('area');
   const [textSize, setTextSize] = useState<number>(TEXT_SIZES[1].value);
   const [fill, setFill] = useState(false);
   const [showMath, setShowMath] = useState(false);
@@ -402,9 +657,21 @@ function DiagramBlock({
             {items} {items === 1 ? 'item' : 'items'}
           </span>
           {!disabled ? (
-            <Button size="sm" variant="ghost" onClick={onRemove}>
-              Remove diagram
-            </Button>
+            <div className="flex items-center gap-1">
+              {onMoveUp ? (
+                <Button size="sm" variant="ghost" onClick={onMoveUp} disabled={isFirst} title="Move diagram up (Alt+↑)" aria-label={`Move diagram ${index} up`}>
+                  ↑ Move up
+                </Button>
+              ) : null}
+              {onMoveDown ? (
+                <Button size="sm" variant="ghost" onClick={onMoveDown} disabled={isLast} title="Move diagram down (Alt+↓)" aria-label={`Move diagram ${index} down`}>
+                  ↓ Move down
+                </Button>
+              ) : null}
+              <Button size="sm" variant="ghost" onClick={onRemove} aria-label={`Remove diagram ${index}`}>
+                Remove
+              </Button>
+            </div>
           ) : null}
         </div>
 
@@ -432,13 +699,53 @@ function DiagramBlock({
                 />
               ))}
             </div>
-            <div role="group" aria-label={`Diagram ${index} line width`} className="flex gap-1">
-              {WIDTHS.map((w) => (
-                <Button key={w.label} size="sm" variant={width === w.value ? 'secondary' : 'ghost'} aria-pressed={width === w.value} onClick={() => setWidth(w.value)}>
-                  {w.label}
-                </Button>
-              ))}
-            </div>
+
+            {tool === 'eraser' ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <div role="group" aria-label={`Diagram ${index} eraser size`} className="flex gap-1">
+                  {ERASER_SIZES.map((e) => (
+                    <Button
+                      key={e.label}
+                      size="sm"
+                      variant={eraserSize === e.value ? 'secondary' : 'ghost'}
+                      aria-pressed={eraserSize === e.value}
+                      onClick={() => setEraserSize(e.value)}
+                    >
+                      {e.label}
+                    </Button>
+                  ))}
+                </div>
+                <div role="group" aria-label={`Diagram ${index} eraser mode`} className="flex gap-1 border-l border-rule pl-2">
+                  <Button
+                    size="sm"
+                    variant={eraserMode === 'area' ? 'primary' : 'ghost'}
+                    aria-pressed={eraserMode === 'area'}
+                    onClick={() => setEraserMode('area')}
+                    title="Brush erase: drag across canvas to erase area"
+                  >
+                    Brush
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={eraserMode === 'stroke' ? 'primary' : 'ghost'}
+                    aria-pressed={eraserMode === 'stroke'}
+                    onClick={() => setEraserMode('stroke')}
+                    title="Stroke erase: click or swipe across any stroke to delete the entire shape/line"
+                  >
+                    Stroke
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div role="group" aria-label={`Diagram ${index} line width`} className="flex gap-1">
+                {WIDTHS.map((w) => (
+                  <Button key={w.label} size="sm" variant={width === w.value ? 'secondary' : 'ghost'} aria-pressed={width === w.value} onClick={() => setWidth(w.value)}>
+                    {w.label}
+                  </Button>
+                ))}
+              </div>
+            )}
+
             {shape ? (
               <Button size="sm" variant={fill ? 'secondary' : 'ghost'} aria-pressed={fill} onClick={() => setFill((f) => !f)}>
                 Fill
@@ -502,6 +809,8 @@ function DiagramBlock({
         tool={tool}
         color={color}
         penWidth={width}
+        eraserWidth={eraserSize}
+        eraserMode={eraserMode}
         fill={fill}
         textSize={textSize}
         readOnly={disabled}

@@ -230,7 +230,7 @@ export const PaperReviewDecisionSchema = z.object({
 export type PaperReviewDecision = z.infer<typeof PaperReviewDecisionSchema>;
 
 // ---------- attempts / answers ----------
-export const ANSWER_BLOCK_KINDS = ['paragraph', 'equation', 'table', 'canvas', 'choice'] as const;
+export const ANSWER_BLOCK_KINDS = ['paragraph', 'equation', 'table', 'canvas', 'choice', 'code'] as const;
 export type AnswerBlockKind = (typeof ANSWER_BLOCK_KINDS)[number];
 
 /** Whiteboard colours are named, so every renderer (canvas, SVG, PDF) draws the same ink. */
