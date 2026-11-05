@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { waitFor } from '@testing-library/react';
 import { ApiError } from '@/lib/api';
 import { AnswerSync } from '@/lib/sync';
 import type { AnswerDoc } from '@/lib/answers';
@@ -34,8 +35,7 @@ describe('save retries under failure', () => {
       },
     });
     sync.edit('Q1', para('hello'));
-    await wait(40); // debounce → first attempt
-    expect(attempts).toHaveLength(1);
+    await waitFor(() => expect(attempts).toHaveLength(1)); // debounce → first attempt
     await wait(110); // +100 ms → second attempt
     expect(attempts).toHaveLength(2);
     await wait(100); // the third waits 200 ms (2 × retryMs), so not yet

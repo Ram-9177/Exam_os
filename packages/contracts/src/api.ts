@@ -42,11 +42,64 @@ export const UUID = z.string().uuid();
 export const LoginSchema = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8).max(256),
+  mfaCode: z.string().min(6).max(32).optional(),
 });
 export const RefreshSchema = z.object({ refreshToken: z.string().min(20) });
 export const ActivateSchema = z.object({ token: z.string().min(20), password: z.string().min(12).max(256) });
 export const ForgotPasswordSchema = z.object({ email: z.string().trim().email().max(320) });
 export const ResetPasswordSchema = z.object({ token: z.string().min(20), password: z.string().min(12).max(256) });
+
+// MFA & Step-up
+export const MfaSetupResponseSchema = z.object({
+  secret: z.string(),
+  qrUri: z.string(),
+  recoveryCodes: z.array(z.string()),
+});
+export type MfaSetupResponse = z.infer<typeof MfaSetupResponseSchema>;
+
+export const MfaActivateSchema = z.object({
+  code: z.string().regex(/^\d{6}$/),
+});
+export type MfaActivate = z.infer<typeof MfaActivateSchema>;
+
+export const MfaChallengeSchema = z.object({
+  code: z.string().regex(/^\d{6}$/),
+});
+export type MfaChallenge = z.infer<typeof MfaChallengeSchema>;
+
+// Tenant Branding
+export const TenantBrandingSchema = z.object({
+  logoUrl: z.string().max(2000).optional(),
+  primaryColor: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
+  accentColor: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
+  headerText: z.string().max(120).optional(),
+  contactEmail: z.string().email().optional(),
+});
+export type TenantBranding = z.infer<typeof TenantBrandingSchema>;
+
+// Active Sessions
+export const UserSessionSchema = z.object({
+  id: UUID,
+  familyId: UUID,
+  ip: z.string().nullable(),
+  userAgent: z.string().nullable(),
+  issuedAt: z.string(),
+  expiresAt: z.string(),
+  isCurrent: z.boolean().default(false),
+});
+export type UserSession = z.infer<typeof UserSessionSchema>;
+
+// Audit Query & Export
+export const AuditLogQuerySchema = z.object({
+  actor: z.string().optional(),
+  action: z.string().optional(),
+  entityType: z.string().optional(),
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type AuditLogQuery = z.infer<typeof AuditLogQuerySchema>;
 
 // ---------- users / roles ----------
 export const UserCreateSchema = z.object({

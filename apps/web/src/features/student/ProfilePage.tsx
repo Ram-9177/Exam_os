@@ -24,6 +24,7 @@ import {
   uploadStudentSignature,
   deleteStudentSignature,
 } from './api';
+import { SecurityAndSessions } from './SecurityAndSessions';
 
 export function ProfilePage() {
   const { me } = useAuth();
@@ -787,6 +788,9 @@ export function ProfilePage() {
           </div>
         )}
       </section>
+
+      {/* Two-Factor Authentication & Device Sessions */}
+      <SecurityAndSessions tz={tz} />
 
       {/* Upload Photograph Modal Dialog */}
       <Dialog

@@ -1,7 +1,15 @@
 import { clientNet } from '../../lib/client-net.js';
 import { Router } from 'express';
 import { z } from 'zod';
-import { LoginSchema, RefreshSchema, ActivateSchema, ForgotPasswordSchema, ResetPasswordSchema } from '@examos/contracts';
+import {
+  LoginSchema,
+  RefreshSchema,
+  ActivateSchema,
+  ForgotPasswordSchema,
+  ResetPasswordSchema,
+  MfaActivateSchema,
+  MfaChallengeSchema,
+} from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, validateQuery, query } from '../../lib/http.js';
 import { requireTenant } from '../../middleware/request-context.js';
@@ -25,8 +33,8 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
     loginLimiter,
     validateBody(LoginSchema),
     asyncHandler(async (req, res) => {
-      const { email, password } = body<typeof LoginSchema>(req);
-      const pair = await auth.login(requireTenant(req).id, email, password, req.ctx.requestId, req.header('user-agent') ?? undefined, clientNet(req));
+      const { email, password, mfaCode } = body<typeof LoginSchema>(req);
+      const pair = await auth.login(requireTenant(req).id, email, password, req.ctx.requestId, req.header('user-agent') ?? undefined, clientNet(req), mfaCode);
       res.json(pair);
     }),
   );
@@ -81,6 +89,83 @@ export function authRoutes(deps: AppDeps, auth: AuthService, oidc: OidcService, 
     asyncHandler(async (req, res) => {
       const p = userPrincipal(req);
       res.json({ userId: p.userId, email: p.email, kind: p.kind, grants: p.grants, tenant: requireTenant(req) });
+    }),
+  );
+
+  // ---------- MFA Endpoints ----------
+  r.get(
+    '/mfa/status',
+    requireUser({ deps, jwt }),
+    asyncHandler(async (req, res) => {
+      const p = userPrincipal(req);
+      const status = await auth.getMfaStatus(requireTenant(req).id, p.userId);
+      res.json(status);
+    }),
+  );
+
+  r.post(
+    '/mfa/setup',
+    requireUser({ deps, jwt }),
+    asyncHandler(async (req, res) => {
+      const p = userPrincipal(req);
+      const out = await auth.setupMfa(requireTenant(req).id, p.userId, req.ctx.requestId);
+      res.json(out);
+    }),
+  );
+
+  r.post(
+    '/mfa/activate',
+    requireUser({ deps, jwt }),
+    validateBody(MfaActivateSchema),
+    asyncHandler(async (req, res) => {
+      const p = userPrincipal(req);
+      const { code } = body<typeof MfaActivateSchema>(req);
+      const out = await auth.activateMfa(requireTenant(req).id, p.userId, code, req.ctx.requestId);
+      res.json(out);
+    }),
+  );
+
+  r.post(
+    '/mfa/disable',
+    requireUser({ deps, jwt }),
+    validateBody(MfaChallengeSchema),
+    asyncHandler(async (req, res) => {
+      const p = userPrincipal(req);
+      const { code } = body<typeof MfaChallengeSchema>(req);
+      const out = await auth.disableMfa(requireTenant(req).id, p.userId, code, req.ctx.requestId);
+      res.json(out);
+    }),
+  );
+
+  // ---------- User Active Sessions ----------
+  r.get(
+    '/sessions',
+    requireUser({ deps, jwt }),
+    asyncHandler(async (req, res) => {
+      const p = userPrincipal(req);
+      const sessions = await auth.listUserSessions(requireTenant(req).id, p.userId, p.sessionFamilyId);
+      res.json({ sessions });
+    }),
+  );
+
+  r.delete(
+    '/sessions/:id',
+    requireUser({ deps, jwt }),
+    asyncHandler(async (req, res) => {
+      const p = userPrincipal(req);
+      const sessionId = req.params['id'] as string;
+      await auth.revokeUserSession(requireTenant(req).id, p.userId, sessionId, req.ctx.requestId);
+      res.status(204).end();
+    }),
+  );
+
+  r.post(
+    '/sessions/revoke-others',
+    requireUser({ deps, jwt }),
+    asyncHandler(async (req, res) => {
+      const p = userPrincipal(req);
+      await auth.revokeOtherUserSessions(requireTenant(req).id, p.userId, p.sessionFamilyId, req.ctx.requestId);
+      res.status(204).end();
     }),
   );
   r.get(

@@ -30,7 +30,7 @@ export interface AuthContextValue {
   user: SessionUser | null;
   roles: ReadonlySet<RoleCode>;
   hasRole: (...roles: RoleCode[]) => boolean;
-  login: (email: string, password: string) => Promise<Me>;
+  login: (email: string, password: string, mfaCode?: string) => Promise<Me>;
   adoptTokens: (pair: TokenPair) => Promise<Me>;
   logout: () => Promise<void>;
   refreshMe: () => Promise<Me | null>;
@@ -96,8 +96,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const login = useCallback(
-    async (email: string, password: string): Promise<Me> => {
-      const pair = await api.post<TokenPair>('/auth/login', { email, password }, { auth: false, quiet: ['INVALID_CREDENTIALS', 'RATE_LIMITED', 'VALIDATION'] });
+    async (email: string, password: string, mfaCode?: string): Promise<Me> => {
+      const pair = await api.post<TokenPair>(
+        '/auth/login',
+        { email, password, mfaCode },
+        { auth: false, quiet: ['INVALID_CREDENTIALS', 'RATE_LIMITED', 'VALIDATION', 'MFA_REQUIRED', 'MFA_CODE_INVALID'] },
+      );
       return adoptTokens(pair);
     },
     [adoptTokens],

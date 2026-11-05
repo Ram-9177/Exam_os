@@ -1,12 +1,12 @@
-import { useMemo, useState, useRef, type FormEvent, type ReactNode } from 'react';
+import { useMemo, useState, useRef, useEffect, type FormEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { API_KEY_SCOPES, MAIL_TRANSPORT_KINDS, ROLE_CODES, ROLE_PERMISSIONS, WEBHOOK_EVENT_TYPES, type Permission, type RoleCode } from '@examos/contracts';
+import { API_KEY_SCOPES, MAIL_TRANSPORT_KINDS, ROLE_CODES, ROLE_PERMISSIONS, WEBHOOK_EVENT_TYPES, type Permission, type RoleCode, type TenantBranding } from '@examos/contracts';
 import { api, isApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDateTime } from '@/lib/time';
 import { Badge, Button, Checkbox, CopyIcon, Dialog, EmptyState, Field, humanize, PageTitle, Select, Skeleton, StatusChip, Table, Tabs, TextArea, TextInput, useToast, type Column, type TabDef, type Tone } from '@/ui';
 
-type TabId = 'users' | 'mail' | 'dispatches' | 'sso' | 'keys' | 'webhooks' | 'deliveries' | 'audit' | 'erp' | 'import';
+type TabId = 'users' | 'mail' | 'dispatches' | 'sso' | 'keys' | 'webhooks' | 'deliveries' | 'audit' | 'erp' | 'import' | 'branding' | 'sessions';
 
 const TAB_PERMISSION: Record<TabId, Permission> = {
   users: 'users:read',
@@ -19,6 +19,8 @@ const TAB_PERMISSION: Record<TabId, Permission> = {
   audit: 'audit:read',
   erp: 'integration:manage',
   import: 'roster:write',
+  branding: 'tenant:manage',
+  sessions: 'tenant:manage',
 };
 
 export function AdminPage() {
@@ -32,6 +34,8 @@ export function AdminPage() {
   const tabs: TabDef<TabId>[] = (
     [
       ['users', 'Users'],
+      ['branding', 'Campus branding'],
+      ['sessions', 'Active sessions'],
       ['mail', 'Mail'],
       ['dispatches', 'Mail log'],
       ['erp', 'ERP connections'],
@@ -54,6 +58,8 @@ export function AdminPage() {
       <PageTitle title="Administration" lede={me?.tenant.name} />
       <Tabs tabs={tabs} value={tab} onChange={setTab} label="Administration sections">
         {tab === 'users' ? <Users canWrite={perms.has('users:write')} tz={tz} /> : null}
+        {tab === 'branding' ? <CampusBranding /> : null}
+        {tab === 'sessions' ? <TenantSessions tz={tz} /> : null}
         {tab === 'mail' ? <MailConfig /> : null}
         {tab === 'dispatches' ? <Dispatches tz={tz} /> : null}
         {tab === 'erp' ? <ErpConnections tz={tz} /> : null}
@@ -1324,13 +1330,42 @@ interface AuditEvent {
 function Audit({ tz }: { tz: string }) {
   const q = useQuery({ queryKey: ['tenant', 'audit'], queryFn: () => api.get<{ events: AuditEvent[] }>('/tenant/audit') });
   const [filter, setFilter] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const { toast } = useToast();
+
+  const handleExportCsv = async () => {
+    try {
+      setExporting(true);
+      const res = await api.post<{ csv: string; count: number }>('/tenant/audit/export', {});
+      const blob = new Blob([res.csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `audit_log_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast({ tone: 'success', title: 'Audit log exported', description: `Exported ${res.count} audit events to CSV.` });
+    } catch {
+      /* handled */
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (q.isLoading) return <Skeleton lines={6} />;
   const rows = (q.data?.events ?? []).filter((e) => !filter || `${e.action} ${e.entity_type} ${e.entity_id ?? ''} ${e.actor_id ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div>
-      <Field label="Filter" hideLabel className="max-w-sm mb-4">
-        {({ id }) => <TextInput id={id} type="search" placeholder="Action, entity or actor" value={filter} onChange={(e) => setFilter(e.target.value)} />}
-      </Field>
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+        <Field label="Filter" hideLabel className="max-w-sm mb-0">
+          {({ id }) => <TextInput id={id} type="search" placeholder="Action, entity or actor" value={filter} onChange={(e) => setFilter(e.target.value)} />}
+        </Field>
+        <Button variant="secondary" loading={exporting} onClick={() => void handleExportCsv()}>
+          Export Audit Log (CSV)
+        </Button>
+      </div>
       <Table
         caption="Audit log (append-only, hash-chained)"
         dense
@@ -2057,6 +2092,359 @@ function RosterImport() {
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Campus branding & sessions
+function CampusBranding() {
+  const { me } = useAuth();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const q = useQuery({
+    queryKey: ['tenant', 'branding'],
+    queryFn: () => api.get<{ branding: TenantBranding | null }>('/tenant/branding'),
+  });
+
+  const [form, setForm] = useState<TenantBranding>({
+    logoUrl: '',
+    primaryColor: '#1e3fb8',
+    accentColor: '#9db0ff',
+    headerText: '',
+    contactEmail: '',
+  });
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (q.data?.branding) {
+      setForm({
+        logoUrl: q.data.branding.logoUrl ?? '',
+        primaryColor: q.data.branding.primaryColor ?? '#1e3fb8',
+        accentColor: q.data.branding.accentColor ?? '#9db0ff',
+        headerText: q.data.branding.headerText ?? '',
+        contactEmail: q.data.branding.contactEmail ?? '',
+      });
+    }
+  }, [q.data]);
+
+  const handleSave = async (e: FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.put('/tenant/branding', {
+        logoUrl: form.logoUrl?.trim() || null,
+        primaryColor: form.primaryColor?.trim() || null,
+        accentColor: form.accentColor?.trim() || null,
+        headerText: form.headerText?.trim() || null,
+        contactEmail: form.contactEmail?.trim() || null,
+      });
+      toast({ tone: 'success', title: 'Branding updated', description: 'Campus branding and document header appearance have been saved.' });
+      setDirty(false);
+      void qc.invalidateQueries({ queryKey: ['tenant', 'branding'] });
+    } catch {
+      /* handled */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (q.isLoading) return <Skeleton lines={6} />;
+
+  return (
+    <div className="space-y-8 max-w-4xl">
+      <div className="sheet p-6">
+        <h3 className="font-serif text-lg font-medium text-ink mb-1">Campus Branding & Documents</h3>
+        <p className="text-sm text-ink-2 mb-6">
+          Customize campus logos, official colors, and document headers that appear on student hall tickets, question papers, and answer booklets.
+        </p>
+
+        <form onSubmit={handleSave} className="space-y-4">
+          <Field label="Official Campus Header / Name">
+            {({ id }) => (
+              <TextInput
+                id={id}
+                value={form.headerText ?? ''}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, headerText: e.target.value }));
+                  setDirty(true);
+                }}
+                placeholder="e.g. St. Mary's University — Main Campus, Faculty of Engineering"
+              />
+            )}
+          </Field>
+
+          <Field label="Logo URL or Image Link">
+            {({ id }) => (
+              <TextInput
+                id={id}
+                value={form.logoUrl ?? ''}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, logoUrl: e.target.value }));
+                  setDirty(true);
+                }}
+                placeholder="https://example.edu/assets/logo.png"
+              />
+            )}
+          </Field>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Field label="Primary Brand Color (Hex)">
+              {({ id }) => (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={form.primaryColor || '#1e3fb8'}
+                    onChange={(e) => {
+                      setForm((f) => ({ ...f, primaryColor: e.target.value }));
+                      setDirty(true);
+                    }}
+                    className="w-10 h-10 rounded border border-rule cursor-pointer"
+                  />
+                  <TextInput
+                    id={id}
+                    value={form.primaryColor ?? ''}
+                    onChange={(e) => {
+                      setForm((f) => ({ ...f, primaryColor: e.target.value }));
+                      setDirty(true);
+                    }}
+                    placeholder="#1e3fb8"
+                  />
+                </div>
+              )}
+            </Field>
+
+            <Field label="Accent Brand Color (Hex)">
+              {({ id }) => (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={form.accentColor || '#9db0ff'}
+                    onChange={(e) => {
+                      setForm((f) => ({ ...f, accentColor: e.target.value }));
+                      setDirty(true);
+                    }}
+                    className="w-10 h-10 rounded border border-rule cursor-pointer"
+                  />
+                  <TextInput
+                    id={id}
+                    value={form.accentColor ?? ''}
+                    onChange={(e) => {
+                      setForm((f) => ({ ...f, accentColor: e.target.value }));
+                      setDirty(true);
+                    }}
+                    placeholder="#9db0ff"
+                  />
+                </div>
+              )}
+            </Field>
+          </div>
+
+          <Field label="Examination Office Contact Email">
+            {({ id }) => (
+              <TextInput
+                id={id}
+                type="email"
+                value={form.contactEmail ?? ''}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, contactEmail: e.target.value }));
+                  setDirty(true);
+                }}
+                placeholder="examcell@stmarys.edu"
+              />
+            )}
+          </Field>
+
+          <div className="pt-2 flex items-center justify-between">
+            <Button type="submit" variant="primary" loading={saving} disabled={!dirty}>
+              Save branding
+            </Button>
+            {dirty ? <span className="text-xs text-ink-3">Unsaved changes</span> : null}
+          </div>
+        </form>
+      </div>
+
+      {/* Live Preview Card */}
+      <div className="sheet p-6 border-l-4 border-l-accent">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-4">Live Document Header Preview</h4>
+        <div className="p-6 rounded border border-rule bg-sheet shadow-sm space-y-4">
+          <div className="flex items-center justify-between gap-4 border-b pb-4" style={{ borderColor: form.primaryColor || '#1e3fb8' }}>
+            <div className="flex items-center gap-3">
+              {form.logoUrl ? (
+                <img src={form.logoUrl} alt="Campus Logo" className="w-12 h-12 object-contain" onError={(e) => (e.currentTarget.style.display = 'none')} />
+              ) : (
+                <div className="w-12 h-12 rounded flex items-center justify-center font-bold text-white text-lg" style={{ backgroundColor: form.primaryColor || '#1e3fb8' }}>
+                  {form.headerText ? form.headerText.charAt(0) : 'U'}
+                </div>
+              )}
+              <div>
+                <h5 className="font-serif text-lg font-semibold text-ink leading-tight">
+                  {form.headerText || me?.tenant.name || 'University Examination Branch'}
+                </h5>
+                <p className="text-xs text-ink-2">Office of the Controller of Examinations</p>
+              </div>
+            </div>
+            <div className="text-right text-xs">
+              <span className="inline-block px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase" style={{ backgroundColor: form.accentColor ? `${form.accentColor}33` : '#9db0ff33', color: form.primaryColor || '#1e3fb8' }}>
+                Official Examination
+              </span>
+              <p className="text-ink-3 mt-1">{form.contactEmail || 'examcell@univ.edu'}</p>
+            </div>
+          </div>
+          <div className="text-xs text-ink-3 font-mono text-center">
+            [ Verified University Examination Document & Hall Ticket Header Layout ]
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TenantSessions({ tz }: { tz: string }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [emergencyOpen, setEmergencyOpen] = useState(false);
+  const [emergencyBusy, setEmergencyBusy] = useState(false);
+
+  const q = useQuery({
+    queryKey: ['tenant', 'sessions'],
+    queryFn: () =>
+      api.get<{
+        sessions: Array<{
+          id: string;
+          user_id: string;
+          email: string;
+          full_name: string;
+          role_codes: string[];
+          client_ip: string;
+          user_agent: string;
+          issued_at: string;
+          expires_at: string;
+        }>;
+      }>('/tenant/sessions'),
+  });
+
+  const revokeSession = async (id: string) => {
+    setRevokingId(id);
+    try {
+      await api.del(`/tenant/sessions/${id}`);
+      toast({ tone: 'success', title: 'Session revoked', description: 'User will be prompted to re-authenticate on their next request.' });
+      void qc.invalidateQueries({ queryKey: ['tenant', 'sessions'] });
+    } catch {
+      /* handled */
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
+  const handleRevokeAll = async () => {
+    setEmergencyBusy(true);
+    try {
+      await api.post('/tenant/revoke-all-sessions', {});
+      toast({ tone: 'success', title: 'All campus sessions revoked', description: 'Emergency forced logout executed. All current sessions have been invalidated.' });
+      setEmergencyOpen(false);
+      void qc.invalidateQueries({ queryKey: ['tenant', 'sessions'] });
+    } catch {
+      /* handled */
+    } finally {
+      setEmergencyBusy(false);
+    }
+  };
+
+  if (q.isLoading) return <Skeleton lines={6} />;
+
+  const sessions = q.data?.sessions ?? [];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4 sheet p-4">
+        <div>
+          <h3 className="font-serif text-lg font-medium text-ink">Active Campus Sessions ({sessions.length})</h3>
+          <p className="text-sm text-ink-2">Live device sessions authenticated across this campus.</p>
+        </div>
+        <Button variant="danger" onClick={() => setEmergencyOpen(true)}>
+          Force Logout All Campus Sessions
+        </Button>
+      </div>
+
+      <Table
+        caption="Active tenant sessions"
+        dense
+        columns={[
+          {
+            key: 'user',
+            header: 'User',
+            render: (s) => (
+              <div>
+                <p className="font-medium text-ink text-sm">{s.full_name}</p>
+                <p className="text-xs text-ink-2 font-mono">{s.email}</p>
+              </div>
+            ),
+          },
+          {
+            key: 'roles',
+            header: 'Roles',
+            render: (s) => (
+              <div className="flex flex-wrap gap-1">
+                {s.role_codes.map((r) => (
+                  <Badge key={r} tone={r === 'CONTROLLER' || r === 'SYSTEM_ADMIN' || r === 'TENANT_ADMIN' ? 'stop' : 'neutral'}>
+                    {r}
+                  </Badge>
+                ))}
+              </div>
+            ),
+          },
+          {
+            key: 'ip',
+            header: 'IP / Device',
+            render: (s) => (
+              <div>
+                <p className="font-mono text-xs text-ink">{s.client_ip || '—'}</p>
+                <p className="text-xs text-ink-3 truncate max-w-xs" title={s.user_agent}>
+                  {s.user_agent || 'Unknown browser'}
+                </p>
+              </div>
+            ),
+          },
+          {
+            key: 'issued',
+            header: 'Issued',
+            render: (s) => <span className="text-xs font-mono text-ink-2">{formatDateTime(s.issued_at, tz)}</span>,
+          },
+          {
+            key: 'actions',
+            header: 'Actions',
+            render: (s) => (
+              <Button size="sm" variant="ghost" loading={revokingId === s.id} onClick={() => void revokeSession(s.id)}>
+                Revoke
+              </Button>
+            ),
+          },
+        ]}
+        rows={sessions}
+        rowKey={(s) => s.id}
+        empty="No active sessions recorded."
+      />
+
+      <Dialog open={emergencyOpen} onClose={() => setEmergencyOpen(false)} title="Force Logout All Campus Sessions?">
+        <div className="space-y-4">
+          <p className="text-sm text-ink-2">
+            This is an emergency security action. It will invalidate all active refresh tokens and sessions for all students and staff members in this campus tenant.
+          </p>
+          <p className="text-sm text-stop font-semibold">
+            All users will be required to log in again with their credentials.
+          </p>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setEmergencyOpen(false)} disabled={emergencyBusy}>
+              Cancel
+            </Button>
+            <Button variant="danger" loading={emergencyBusy} onClick={() => void handleRevokeAll()}>
+              Confirm Emergency Logout
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }

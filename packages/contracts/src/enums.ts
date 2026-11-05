@@ -134,6 +134,9 @@ export const ROLE_CODES = [
 ] as const;
 export type RoleCode = (typeof ROLE_CODES)[number];
 
+export const PRIVILEGED_MFA_ROLES = ['CONTROLLER', 'SYSTEM_ADMIN', 'TENANT_ADMIN'] as const;
+export type PrivilegedMfaRole = (typeof PRIVILEGED_MFA_ROLES)[number];
+
 export const USER_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'PENDING_ACTIVATION'] as const;
 export const TENANT_STATUSES = ['ACTIVE', 'SUSPENDED'] as const;
 /** Named staff can hold several existing roles; no shared credentials. */

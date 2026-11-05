@@ -14,7 +14,7 @@ import {
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
-import { requireUser, requirePermission, userPrincipal, grantsAllow } from '../../middleware/auth.js';
+import { requireUser, requirePermission, requireStepUpMfa, userPrincipal, grantsAllow } from '../../middleware/auth.js';
 import type { JwtService } from '../auth/jwt.js';
 import { createExam, transitionExam, allocateStudents, issueHallTickets, readinessBoard, grantAdmissionException, assertExportAllowed, sealClosedExamAttempts } from './service.js';
 import { listCandidates } from '../candidates/service.js';
@@ -292,6 +292,7 @@ export function examRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/:id/exports/scripts',
     user,
     requirePermission('exports:read', examScope),
+    requireStepUpMfa(deps),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
       const p = userPrincipal(req);

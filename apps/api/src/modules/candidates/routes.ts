@@ -5,7 +5,7 @@ import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
 import { requireTenant, tenantTx } from '../../middleware/request-context.js';
 import { assertMayMark } from '../evaluation/service.js';
-import { grantsAllow, requireUser, requirePermission, userPrincipal } from '../../middleware/auth.js';
+import { grantsAllow, requireUser, requirePermission, requireStepUpMfa, userPrincipal } from '../../middleware/auth.js';
 import type { JwtService } from '../auth/jwt.js';
 import { runForensicChecks, recordResultVersion, candidateChecklist, approveCandidate, holdCandidate, releaseHold, controllerAuthorizeAndPublish, evaluatorQueue } from './service.js';
 import { getCandidatePaper } from '../papers/service.js';
@@ -148,6 +148,7 @@ export function candidateRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/:attemptId/authorize-publication',
     user,
     scoped('controller:publish'),
+    requireStepUpMfa(deps),
     validateBody(ControllerAuthorizeSchema),
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);

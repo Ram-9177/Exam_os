@@ -1,9 +1,10 @@
 import type { RequestHandler, Request } from 'express';
-import { ROLE_PERMISSIONS, type Permission, type RoleCode, type ScopeType } from '@examos/contracts';
+import { ROLE_PERMISSIONS, PRIVILEGED_MFA_ROLES, type Permission, type RoleCode, type ScopeType } from '@examos/contracts';
 import type { AppDeps, Grant, Principal } from '../types.js';
 import { AppError } from '../lib/errors.js';
 import type { JwtService } from '../modules/auth/jwt.js';
 import { withTenantTx } from '@examos/db';
+import { verifyTotp } from '../modules/platform/totp.js';
 
 export interface AuthDeps {
   deps: AppDeps;
@@ -37,10 +38,14 @@ export function requireUser({ deps, jwt }: AuthDeps): RequestHandler {
       if (revokedFamily) throw AppError.unauthorized('SESSION_REVOKED', 'Session revoked');
 
       const principal = await withTenantTx(deps.db, tenant.id, async (trx) => {
+        const tenantRow = await trx('tenants').where('id', tenant.id).first('sessions_revoked_at');
         const user = await trx('users').where({ id: claims.sub, tenant_id: tenant.id }).first();
         if (!user || user.status !== 'ACTIVE') return null;
-        const family = await trx('auth_sessions').where({ family_id: claims.sfm }).whereNull('revoked_at').first('id');
+        const family = await trx('auth_sessions').where({ family_id: claims.sfm }).whereNull('revoked_at').first('id', 'issued_at');
         if (!family) return null;
+        if (tenantRow?.sessions_revoked_at && new Date(family.issued_at) <= new Date(tenantRow.sessions_revoked_at)) {
+          return null;
+        }
         const grants = await trx('role_grants')
           .where({ tenant_id: tenant.id, user_id: user.id })
           .whereNull('revoked_at')
@@ -114,4 +119,51 @@ export function userPrincipal(req: Request): Extract<Principal, { type: 'USER' }
   const p = req.ctx.principal;
   if (!p || p.type !== 'USER') throw AppError.unauthorized();
   return p;
+}
+
+/**
+ * Step-up MFA verification: privileged operations (results publication, security
+ * waiver override, and script exports) require a fresh 6-digit TOTP code passed
+ * via the `x-mfa-code` header (or request body `mfaCode`).
+ */
+export function requireStepUpMfa(deps: AppDeps): RequestHandler {
+  return async (req, _res, next) => {
+    try {
+      const p = req.ctx.principal;
+      if (!p || p.type !== 'USER') return next();
+
+      const isPrivileged = p.grants.some((g) => PRIVILEGED_MFA_ROLES.includes(g.role as any));
+      if (!isPrivileged) return next();
+
+      const tenantId = req.ctx.tenant!.id;
+      const user = await withTenantTx(deps.db, tenantId, async (trx) => {
+        return trx('users').where({ id: p.userId, tenant_id: tenantId }).first();
+      });
+
+      // If user has not enabled TOTP MFA on their account yet, allow request;
+      // if TOTP MFA is enabled, strictly require and verify step-up code.
+      if (!user || !user.totp_enabled || !user.totp_secret_ref) {
+        return next();
+      }
+
+      const code = req.header('x-mfa-code') ?? (req.body as Record<string, any> | undefined)?.['mfaCode'];
+      if (!code || typeof code !== 'string' || !/^\d{6}$/.test(code)) {
+        throw AppError.forbidden('MFA_STEP_UP_REQUIRED', 'Step-up multi-factor authentication (TOTP) is required for this operation');
+      }
+
+      const secret = await deps.secrets.resolve(user.totp_secret_ref);
+      const step = verifyTotp(secret, code, deps.clock.now(), Number(user.totp_last_step ?? -1));
+      if (step === null) {
+        throw AppError.forbidden('MFA_CODE_INVALID', 'Invalid or replayed two-factor authentication code');
+      }
+
+      await withTenantTx(deps.db, tenantId, async (trx) => {
+        await trx('users').where('id', user.id).update({ totp_last_step: step });
+      });
+
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
 }

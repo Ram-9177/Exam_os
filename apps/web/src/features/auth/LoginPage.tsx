@@ -27,6 +27,8 @@ export function LoginPage() {
   const next = params.get('next');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ssoBusy, setSsoBusy] = useState(false);
@@ -38,14 +40,24 @@ export function LoginPage() {
     setError(null);
     setBusy(true);
     try {
-      const me = await login(email, password);
+      const me = await login(email, password, mfaRequired ? mfaCode.trim() : undefined);
       const home = homeFor(new Set(me.grants.map((g) => g.role)));
       navigate(next && next.startsWith('/') ? next : home, { replace: true });
     } catch (err) {
-      if (isApiError(err, 'INVALID_CREDENTIALS')) setError('The e-mail or password is not right. Check both and try again.');
-      else if (isApiError(err, 'RATE_LIMITED')) setError('Too many attempts. Wait a few minutes, then try again.');
-      else if (isApiError(err) && err.status === 400) setError('Enter the e-mail address and password you were given.');
-      else setError('Could not sign in right now. Try again in a moment.');
+      if (isApiError(err, 'MFA_REQUIRED')) {
+        setMfaRequired(true);
+        setError('Two-factor authentication is required. Enter the 6-digit code from your authenticator app.');
+      } else if (isApiError(err, 'MFA_CODE_INVALID')) {
+        setError('Invalid authentication code. Check your authenticator app or enter an 8-character recovery code.');
+      } else if (isApiError(err, 'INVALID_CREDENTIALS')) {
+        setError('The e-mail or password is not right. Check both and try again.');
+      } else if (isApiError(err, 'RATE_LIMITED')) {
+        setError('Too many attempts. Wait a few minutes, then try again.');
+      } else if (isApiError(err) && err.status === 400) {
+        setError('Enter the e-mail address and password you were given.');
+      } else {
+        setError('Could not sign in right now. Try again in a moment.');
+      }
     } finally {
       setBusy(false);
     }
@@ -70,9 +82,36 @@ export function LoginPage() {
         <Field label="Password" error={error}>
           {({ id, describedBy, invalid }) => <TextInput id={id} type="password" name="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} aria-describedby={describedBy} aria-invalid={invalid || undefined} />}
         </Field>
-        <Button type="submit" variant="primary" size="lg" loading={busy} className="mt-2">
-          Sign in
-        </Button>
+        {mfaRequired ? (
+          <Field label="Authenticator Code / Recovery Code" hint="Enter the 6-digit code from Microsoft/Google Authenticator, or an 8-character recovery code">
+            {({ id, describedBy, invalid }) => (
+              <TextInput
+                id={id}
+                type="text"
+                name="mfaCode"
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                required
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value)}
+                aria-describedby={describedBy}
+                aria-invalid={invalid || undefined}
+                autoFocus
+                placeholder="123456"
+              />
+            )}
+          </Field>
+        ) : null}
+        <div className="flex flex-col gap-2 mt-2">
+          <Button type="submit" variant="primary" size="lg" loading={busy}>
+            {mfaRequired ? 'Verify & Sign in' : 'Sign in'}
+          </Button>
+          {mfaRequired ? (
+            <Button type="button" variant="ghost" size="sm" onClick={() => setMfaRequired(false)}>
+              Back to Password
+            </Button>
+          ) : null}
+        </div>
       </form>
       {tenant.data?.ssoProvider ? (
         <div className="mt-6 pt-6 border-t border-rule">

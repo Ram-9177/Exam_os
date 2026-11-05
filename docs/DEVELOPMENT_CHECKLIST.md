@@ -11,6 +11,8 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Tenant provisioning (platform bootstrap key) with admin activation mail | Tested | helpers/provisionTenant |
 | Platform admin accounts replacing the bootstrap key: one super admin per deployment (password + sealed TOTP, replay-proof codes, platform-bound sessions, lockout); bootstrap key refused in production | Tested | platform-and-staff.test.ts; `npm run platform:create-admin` |
 | Per-tenant rate-limit pools (student saves vs integration) | Tested | auth.test.ts lockout; Gate G 3,000-student load smoke verified |
+| Campus branding lifecycle (logo, primary/accent colors, header text, contact email, live document header preview) | Tested | mfa-and-sessions.test.ts, apps/web/test/mfa-and-sessions.test.tsx |
+| Tenant audit log viewer with filters and audited CSV export (`audit.exported`) | Tested | mfa-and-sessions.test.ts, apps/web/test/mfa-and-sessions.test.tsx |
 
 ## Identity and access
 | Feature | Status | Evidence |
@@ -24,7 +26,7 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Refresh rotation honours one retry inside a 30 s window after a lost response (one child revoked, family revoked on any further reuse); the client ends the session only on 401/403 from the refresh endpoint | Tested | scale-invariants.test.ts, auth.test.ts, apps/web/test/api-refresh.test.ts |
 | 3–4 named staff logins per tenant (service check + database trigger + platform-set limit), duty bundles grant every staff role, students unlimited and never staff roles, no self role/status change | Tested | platform-and-staff.test.ts |
 | OIDC (Microsoft Entra / Google Workspace): discovery, PKCE, nonce, JWKS verification, no JIT provisioning, domain allowlist | Tested | auth.test.ts (fake IdP) |
-| MFA for high-impact roles | Not Started | — |
+| MFA (TOTP RFC 6238) for privileged roles (CONTROLLER, SYSTEM_ADMIN, TENANT_ADMIN); step-up MFA challenge on publication, script export, and waivers; recovery codes; active session management and emergency tenant-wide logout | Tested | mfa-and-sessions.test.ts, apps/web/test/mfa-and-sessions.test.tsx |
 
 ## ERP integration (Simple API)
 | Feature | Status | Evidence |

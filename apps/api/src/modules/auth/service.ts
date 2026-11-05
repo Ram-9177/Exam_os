@@ -1,14 +1,15 @@
 import type { ClientNet } from '../../lib/client-net.js';
 import bcrypt from 'bcrypt';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { withTenantTx, type Knex } from '@examos/db';
 import type { AppDeps } from '../../types.js';
 import { AppError } from '../../lib/errors.js';
 import { randomToken, sha256Hex } from '../../lib/crypto.js';
 import { audit } from '../../lib/audit.js';
-import { USER_TRANSITIONS, assertTransition } from '@examos/contracts';
+import { USER_TRANSITIONS, assertTransition, PRIVILEGED_MFA_ROLES } from '@examos/contracts';
 import { issueActivation, issuePasswordReset } from '../users/service.js';
 import type { JwtService } from './jwt.js';
+import { newTotpSecret, verifyTotp } from '../platform/totp.js';
 
 const BCRYPT_ROUNDS = 12;
 const MAX_FAILED_LOGINS = 5;
@@ -33,8 +34,8 @@ export class AuthService {
     return bcrypt.hash(pw, BCRYPT_ROUNDS);
   }
 
-  /** Local password login with lockout. SSO is the default where configured (spec §4). */
-  async login(tenantId: string, email: string, password: string, requestId: string, fingerprint?: string, net?: ClientNet): Promise<TokenPair> {
+  /** Local password login with lockout and optional TOTP MFA. SSO is the default where configured (spec §4). */
+  async login(tenantId: string, email: string, password: string, requestId: string, fingerprint?: string, net?: ClientNet, mfaCode?: string): Promise<TokenPair> {
     const now = this.deps.clock.now();
     const user = await withTenantTx(this.deps.db, tenantId, (trx) => trx('users').where({ tenant_id: tenantId, email: email.toLowerCase() }).first());
     // Constant-work path: compare against a dummy hash when the user does not exist.
@@ -58,6 +59,32 @@ export class AuthService {
       }
       throw AppError.unauthorized('INVALID_CREDENTIALS', 'Invalid e-mail or password');
     }
+
+    // MFA Challenge for accounts with TOTP enabled
+    if (user.totp_enabled && user.totp_secret_ref) {
+      if (!mfaCode) {
+        throw AppError.unauthorized('MFA_REQUIRED', 'Two-factor authentication code required');
+      }
+      const secret = await this.deps.secrets.resolve(user.totp_secret_ref);
+      const step = verifyTotp(secret, mfaCode, now, Number(user.totp_last_step ?? -1));
+      let recoveryUsed = false;
+      if (step === null) {
+        if (Array.isArray(user.recovery_codes) && user.recovery_codes.includes(mfaCode.toUpperCase())) {
+          recoveryUsed = true;
+        } else {
+          throw AppError.unauthorized('MFA_CODE_INVALID', 'Invalid two-factor authentication code');
+        }
+      }
+      await withTenantTx(this.deps.db, tenantId, async (trx) => {
+        if (recoveryUsed) {
+          const updatedCodes = (user.recovery_codes as string[]).filter((c) => c !== mfaCode.toUpperCase());
+          await trx('users').where('id', user.id).update({ recovery_codes: updatedCodes });
+        } else if (step !== null) {
+          await trx('users').where('id', user.id).update({ totp_last_step: step });
+        }
+      });
+    }
+
     return withTenantTx(this.deps.db, tenantId, async (trx) => {
       await trx('users').where('id', user.id).update({ failed_login_count: 0, locked_until: null, last_login_at: trx.fn.now(), updated_at: trx.fn.now() });
       await audit(trx, { tenantId, actorType: 'USER', actorId: user.id, action: 'auth.login', entityType: 'user', entityId: user.id, requestId, metadata: { ip: net?.ip ?? null } });
@@ -97,6 +124,10 @@ export class AuthService {
         if (!withinGrace || alreadyRetried) return reuse;
       }
       if (new Date(session.expires_at) < now) return { kind: 'expired' as const };
+      const tenantRow = await trx('tenants').where('id', tenantId).first('sessions_revoked_at');
+      if (tenantRow?.sessions_revoked_at && new Date(session.issued_at) <= new Date(tenantRow.sessions_revoked_at)) {
+        return { kind: 'revoked' as const };
+      }
       const user = await trx('users').where({ id: session.user_id, tenant_id: tenantId }).first();
       if (!user || user.status !== 'ACTIVE') return { kind: 'revoked' as const };
       if (session.rotated_at) {
@@ -193,6 +224,186 @@ export class AuthService {
       const user = await trx('users').where({ id: t.user_id }).first();
       await audit(trx, { tenantId, actorType: 'USER', actorId: t.user_id, action: 'auth.activated', entityType: 'user', entityId: t.user_id, requestId });
       return this.issueTokens(trx, tenantId, user, { familyId: randomUUID(), parentId: null, net });
+    });
+  }
+
+  async getMfaStatus(tenantId: string, userId: string): Promise<{ enabled: boolean; required: boolean }> {
+    return withTenantTx(this.deps.db, tenantId, async (trx) => {
+      const user = await trx('users').where({ id: userId, tenant_id: tenantId }).first('totp_enabled');
+      const grants = await trx('role_grants').where({ tenant_id: tenantId, user_id: userId }).whereNull('revoked_at').select('role_code');
+      const required = grants.some((g) => PRIVILEGED_MFA_ROLES.includes(g.role_code as any));
+      return { enabled: Boolean(user?.totp_enabled), required };
+    });
+  }
+
+  async setupMfa(tenantId: string, userId: string, requestId: string): Promise<{ secret: string; qrUri: string; recoveryCodes: string[] }> {
+    return withTenantTx(this.deps.db, tenantId, async (trx) => {
+      const user = await trx('users').where({ id: userId, tenant_id: tenantId }).first('email');
+      const tenant = await trx('tenants').where('id', tenantId).first('name');
+      if (!user) throw AppError.notFound('USER_NOT_FOUND');
+
+      const secret = newTotpSecret();
+      const sealedSecret = await this.deps.secrets.seal(secret);
+      const recoveryCodes = Array.from({ length: 8 }, () => randomBytes(4).toString('hex').toUpperCase());
+
+      await trx('users').where('id', userId).update({
+        totp_secret_ref: sealedSecret,
+        recovery_codes: recoveryCodes,
+        updated_at: trx.fn.now(),
+      });
+
+      const issuer = encodeURIComponent(tenant?.name ?? 'ExamOS');
+      const label = encodeURIComponent(user.email);
+      const qrUri = `otpauth://totp/${issuer}:${label}?secret=${secret}&issuer=${issuer}&period=30&digits=6`;
+
+      await audit(trx, {
+        tenantId,
+        actorType: 'USER',
+        actorId: userId,
+        action: 'auth.mfa_setup_initiated',
+        entityType: 'user',
+        entityId: userId,
+        requestId,
+      });
+
+      return { secret, qrUri, recoveryCodes };
+    });
+  }
+
+  async activateMfa(tenantId: string, userId: string, code: string, requestId: string): Promise<{ success: boolean }> {
+    return withTenantTx(this.deps.db, tenantId, async (trx) => {
+      const user = await trx('users').where({ id: userId, tenant_id: tenantId }).first();
+      if (!user || !user.totp_secret_ref) throw AppError.badRequest('MFA_NOT_INITIALIZED', 'MFA setup has not been initiated');
+
+      const secret = await this.deps.secrets.resolve(user.totp_secret_ref);
+      const step = verifyTotp(secret, code, this.deps.clock.now(), -1);
+      if (step === null) throw AppError.badRequest('MFA_CODE_INVALID', 'Invalid verification code');
+
+      await trx('users').where('id', userId).update({
+        totp_enabled: true,
+        totp_last_step: step,
+        updated_at: trx.fn.now(),
+      });
+
+      await audit(trx, {
+        tenantId,
+        actorType: 'USER',
+        actorId: userId,
+        action: 'auth.mfa_activated',
+        entityType: 'user',
+        entityId: userId,
+        requestId,
+      });
+
+      return { success: true };
+    });
+  }
+
+  async disableMfa(tenantId: string, userId: string, code: string, requestId: string): Promise<{ success: boolean }> {
+    return withTenantTx(this.deps.db, tenantId, async (trx) => {
+      const user = await trx('users').where({ id: userId, tenant_id: tenantId }).first();
+      if (!user || !user.totp_enabled || !user.totp_secret_ref) {
+        throw AppError.badRequest('MFA_NOT_ENABLED', 'MFA is not enabled');
+      }
+
+      const grants = await trx('role_grants').where({ tenant_id: tenantId, user_id: userId }).whereNull('revoked_at').select('role_code');
+      const isPrivileged = grants.some((g) => PRIVILEGED_MFA_ROLES.includes(g.role_code as any));
+      if (isPrivileged) {
+        throw AppError.forbidden('MFA_MANDATORY_FOR_ROLE', 'MFA cannot be disabled for privileged university accounts');
+      }
+
+      const secret = await this.deps.secrets.resolve(user.totp_secret_ref);
+      const step = verifyTotp(secret, code, this.deps.clock.now(), Number(user.totp_last_step ?? -1));
+      if (step === null) throw AppError.badRequest('MFA_CODE_INVALID', 'Invalid authentication code');
+
+      await trx('users').where('id', userId).update({
+        totp_enabled: false,
+        totp_secret_ref: null,
+        recovery_codes: null,
+        updated_at: trx.fn.now(),
+      });
+
+      await audit(trx, {
+        tenantId,
+        actorType: 'USER',
+        actorId: userId,
+        action: 'auth.mfa_disabled',
+        entityType: 'user',
+        entityId: userId,
+        requestId,
+      });
+
+      return { success: true };
+    });
+  }
+
+  async listUserSessions(tenantId: string, userId: string, currentFamilyId: string): Promise<any[]> {
+    return withTenantTx(this.deps.db, tenantId, async (trx) => {
+      const rows = await trx('auth_sessions')
+        .where({ tenant_id: tenantId, user_id: userId })
+        .whereNull('revoked_at')
+        .where('expires_at', '>', trx.fn.now())
+        .orderBy('issued_at', 'desc');
+
+      const seen = new Set<string>();
+      const sessions = [];
+      for (const r of rows) {
+        if (!seen.has(r.family_id)) {
+          seen.add(r.family_id);
+          sessions.push({
+            id: r.id,
+            familyId: r.family_id,
+            ip: r.ip,
+            userAgent: r.user_agent,
+            issuedAt: r.issued_at.toISOString(),
+            expiresAt: r.expires_at.toISOString(),
+            isCurrent: r.family_id === currentFamilyId,
+          });
+        }
+      }
+      return sessions;
+    });
+  }
+
+  async revokeUserSession(tenantId: string, userId: string, sessionId: string, requestId: string): Promise<void> {
+    return withTenantTx(this.deps.db, tenantId, async (trx) => {
+      const session = await trx('auth_sessions').where({ id: sessionId, tenant_id: tenantId, user_id: userId }).first('family_id');
+      if (!session) throw AppError.notFound('SESSION_NOT_FOUND', 'Session not found');
+      await this.revokeFamily(trx, tenantId, session.family_id, 'user_self_revocation');
+      await audit(trx, {
+        tenantId,
+        actorType: 'USER',
+        actorId: userId,
+        action: 'auth.session_revoked',
+        entityType: 'auth_session',
+        entityId: sessionId,
+        requestId,
+      });
+    });
+  }
+
+  async revokeOtherUserSessions(tenantId: string, userId: string, currentFamilyId: string, requestId: string): Promise<void> {
+    return withTenantTx(this.deps.db, tenantId, async (trx) => {
+      const families = await trx('auth_sessions')
+        .where({ tenant_id: tenantId, user_id: userId })
+        .whereNot('family_id', currentFamilyId)
+        .whereNull('revoked_at')
+        .distinct('family_id');
+
+      for (const f of families) {
+        await this.revokeFamily(trx, tenantId, f.family_id, 'revoke_other_sessions');
+      }
+
+      await audit(trx, {
+        tenantId,
+        actorType: 'USER',
+        actorId: userId,
+        action: 'auth.other_sessions_revoked',
+        entityType: 'user',
+        entityId: userId,
+        requestId,
+        metadata: { revokedCount: families.length },
+      });
     });
   }
 }

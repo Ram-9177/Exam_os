@@ -16,6 +16,7 @@ import {
   XlsxImportRequestSchema,
   MailBounceReconcileSchema,
   UserSignatureUploadSchema,
+  TenantBrandingSchema,
 } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
@@ -66,8 +67,217 @@ export function tenantAdminRoutes(deps: AppDeps, jwt: JwtService): Router {
     '/',
     asyncHandler(async (req, res) => {
       const t = requireTenant(req);
-      const sso = await tenantTx(deps, req, (trx) => trx('tenant_sso_configs').where({ tenant_id: t.id, enabled: true }).first('provider'));
-      res.json({ id: t.id, slug: t.slug, name: t.name, timezone: t.timezone, ssoProvider: sso?.provider ?? null });
+      const row = await tenantTx(deps, req, async (trx) => {
+        const tenant = await trx('tenants').where('id', t.id).first('branding', 'name', 'slug', 'timezone', 'sessions_revoked_at');
+        const sso = await trx('tenant_sso_configs').where({ tenant_id: t.id, enabled: true }).first('provider');
+        return { tenant, sso };
+      });
+      res.json({
+        id: t.id,
+        slug: row.tenant?.slug ?? t.slug,
+        name: row.tenant?.name ?? t.name,
+        timezone: row.tenant?.timezone ?? t.timezone,
+        ssoProvider: row.sso?.provider ?? null,
+        branding: row.tenant?.branding ?? {},
+        sessionsRevokedAt: row.tenant?.sessions_revoked_at ?? null,
+      });
+    }),
+  );
+
+  r.get(
+    '/branding',
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const row = await tenantTx(deps, req, (trx) => trx('tenants').where('id', t.id).first('branding', 'name', 'slug'));
+      res.json({ branding: row?.branding ?? {}, name: row?.name ?? t.name, slug: row?.slug ?? t.slug });
+    }),
+  );
+
+  r.put(
+    '/branding',
+    user,
+    requirePermission('tenant:manage'),
+    validateBody(TenantBrandingSchema),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      const branding = body<typeof TenantBrandingSchema>(req);
+      await tenantTx(deps, req, async (trx) => {
+        await trx('tenants').where('id', t.id).update({ branding: JSON.stringify(branding), updated_at: trx.fn.now() });
+        await audit(trx, {
+          tenantId: t.id,
+          actorType: 'USER',
+          actorId: p.userId,
+          action: 'tenant.branding_updated',
+          entityType: 'tenant',
+          entityId: t.id,
+          requestId: req.ctx.requestId,
+          metadata: branding,
+        });
+      });
+      res.json({ branding });
+    }),
+  );
+
+  r.post(
+    '/revoke-all-sessions',
+    user,
+    requirePermission('tenant:manage'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      const now = deps.clock.now();
+      await tenantTx(deps, req, async (trx) => {
+        await trx('tenants').where('id', t.id).update({ sessions_revoked_at: now, updated_at: trx.fn.now() });
+        await trx('auth_sessions').where({ tenant_id: t.id }).whereNull('revoked_at').update({ revoked_at: now, revoked_reason: 'tenant_emergency_revocation' });
+        await audit(trx, {
+          tenantId: t.id,
+          actorType: 'USER',
+          actorId: p.userId,
+          action: 'tenant.all_sessions_revoked',
+          entityType: 'tenant',
+          entityId: t.id,
+          requestId: req.ctx.requestId,
+          metadata: { revokedAt: now.toISOString() },
+        });
+      });
+      res.json({ revokedAt: now.toISOString(), success: true });
+    }),
+  );
+
+  r.get(
+    '/sessions',
+    user,
+    requirePermission('tenant:manage'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const rows = await tenantTx(deps, req, async (trx) => {
+        return trx('auth_sessions as s')
+          .join('users as u', 'u.id', 's.user_id')
+          .where('s.tenant_id', t.id)
+          .whereNull('s.revoked_at')
+          .where('s.expires_at', '>', trx.fn.now())
+          .select(
+            's.id',
+            's.family_id as familyId',
+            's.user_id as userId',
+            'u.email',
+            'u.full_name as fullName',
+            'u.kind',
+            's.ip',
+            's.user_agent as userAgent',
+            's.issued_at as issuedAt',
+            's.expires_at as expiresAt',
+          )
+          .orderBy('s.issued_at', 'desc')
+          .limit(200);
+      });
+      // Deduplicate by familyId
+      const seen = new Set<string>();
+      const sessions = [];
+      for (const r of rows) {
+        if (!seen.has(r.familyId)) {
+          seen.add(r.familyId);
+          sessions.push(r);
+        }
+      }
+      res.json({ sessions });
+    }),
+  );
+
+  r.delete(
+    '/sessions/:id',
+    user,
+    requirePermission('tenant:manage'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      const sessionId = req.params['id'] as string;
+      await tenantTx(deps, req, async (trx) => {
+        const session = await trx('auth_sessions').where({ id: sessionId, tenant_id: t.id }).first('family_id');
+        if (!session) throw AppError.notFound('SESSION_NOT_FOUND', 'Session not found');
+        await trx('auth_sessions').where({ tenant_id: t.id, family_id: session.family_id }).whereNull('revoked_at').update({ revoked_at: trx.fn.now(), revoked_reason: 'admin_revocation' });
+        await audit(trx, {
+          tenantId: t.id,
+          actorType: 'USER',
+          actorId: p.userId,
+          action: 'auth.session_revoked_by_admin',
+          entityType: 'auth_session',
+          entityId: sessionId,
+          requestId: req.ctx.requestId,
+        });
+      });
+      res.status(204).end();
+    }),
+  );
+
+  r.get(
+    '/audit',
+    user,
+    requirePermission('audit:read'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const actor = req.query['actor'] ? String(req.query['actor']) : undefined;
+      const action = req.query['action'] ? String(req.query['action']) : undefined;
+      const entityType = req.query['entityType'] ? String(req.query['entityType']) : undefined;
+      const from = req.query['from'] ? new Date(String(req.query['from'])) : undefined;
+      const to = req.query['to'] ? new Date(String(req.query['to'])) : undefined;
+      const limit = Math.min(200, Math.max(1, Number(req.query['limit'] ?? 50)));
+      const offset = Math.max(0, Number(req.query['offset'] ?? 0));
+
+      const result = await tenantTx(deps, req, async (trx) => {
+        let q = trx('audit_events').where('tenant_id', t.id);
+        if (actor) q = q.where('actor_id', actor);
+        if (action) q = q.where('action', 'ilike', `%${action}%`);
+        if (entityType) q = q.where('entity_type', entityType);
+        if (from) q = q.where('created_at', '>=', from);
+        if (to) q = q.where('created_at', '<=', to);
+
+        const countRow = await q.clone().count('* as count').first();
+        const rows = await q.orderBy('created_at', 'desc').limit(limit).offset(offset);
+        return { total: Number(countRow?.count ?? 0), events: rows };
+      });
+      res.json(result);
+    }),
+  );
+
+  r.post(
+    '/audit/export',
+    user,
+    requirePermission('audit:read'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const p = userPrincipal(req);
+      const now = deps.clock.now();
+
+      const csvData = await tenantTx(deps, req, async (trx) => {
+        // Audit the export itself first!
+        await audit(trx, {
+          tenantId: t.id,
+          actorType: 'USER',
+          actorId: p.userId,
+          action: 'audit.exported',
+          entityType: 'audit_events',
+          entityId: t.id,
+          requestId: req.ctx.requestId,
+          metadata: { exportedAt: now.toISOString() },
+        });
+
+        const rows = await trx('audit_events')
+          .where('tenant_id', t.id)
+          .orderBy('created_at', 'desc')
+          .limit(5000);
+
+        const header = 'id,timestamp,actor_type,actor_id,action,entity_type,entity_id,request_id\n';
+        const lines = rows.map((r: any) =>
+          `"${r.id}","${new Date(r.created_at).toISOString()}","${r.actor_type}","${r.actor_id ?? ''}","${r.action}","${r.entity_type}","${r.entity_id ?? ''}","${r.request_id ?? ''}"`
+        ).join('\n');
+        return header + lines;
+      });
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="audit-log-${t.slug}-${now.getTime()}.csv"`);
+      res.send(csvData);
     }),
   );
 

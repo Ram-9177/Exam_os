@@ -6,13 +6,23 @@ Student exam requests after admission MUST send header `x-device-session: <devic
 
 ## Public (host tenant)
 GET  /tenant → {id, slug, name, timezone, ssoProvider}
-POST /auth/login {email,password} → {accessToken, refreshToken, expiresIn, user:{id,email,fullName,kind}}
+POST /auth/login {email,password,mfaCode?} → {accessToken, refreshToken, expiresIn, user:{id,email,fullName,kind}} (401 MFA_REQUIRED if 2FA enabled and mfaCode omitted)
 POST /auth/refresh {refreshToken} → same shape
 POST /auth/activate {token,password} → same shape (token comes from the activation e-mail link ?token=)
 POST /auth/logout (auth) → 204
 GET  /auth/me (auth) → {userId,email,kind,grants:[{role,scopeType,scopeId}],tenant}
 GET  /auth/oidc/start?redirectUri= → {authorizationUrl,state}; POST /auth/oidc/callback {code,state} → token pair
 GET  /student/verify/:attemptId/:version → {valid,published,version,publishedAt,total,max}   (public result verification page)
+
+## Authentication & User Security (2FA & Sessions)
+GET  /auth/mfa/status (auth) → {enabled:boolean, required:boolean, privileged:boolean}
+POST /auth/mfa/setup (auth) → {secret:string, uri:string, recoveryCodes:string[]}
+POST /auth/mfa/activate (auth) {code:string} → {enabled:true}
+POST /auth/mfa/disable (auth) {code:string} → {enabled:false}
+GET  /auth/sessions (auth) → {sessions:[{id,client_ip,user_agent,issued_at,expires_at}]}
+DELETE /auth/sessions/:id (auth) → {revoked:true}
+POST /auth/sessions/revoke-others (auth) → {revokedCount:number}
+Step-up MFA Challenge: privileged operations require `x-mfa-code` header or body `mfaCode` (401 STEP_UP_MFA_REQUIRED). Required on: POST /candidates/:attemptId/authorize-publication, GET /exams/:id/exports/scripts, GET /student/attempts/:attemptId/booklet.pdf.
 
 ## Student (role STUDENT; permission attempts:own)
 GET  /student/me/exams → {exams:[{examId,code,title,examType,academicYear,semester,examStatus,securityProfile,durationMinutes,windowStartAt,windowEndAt,courseCode,courseName,extraTimeMinutes,attemptId,attemptStatus,deadlineAt,hallTicketNumber,hallTicketVerification}]}
@@ -118,7 +128,14 @@ GET  /proctor/attempts/:id/timeline → {attempt,events,warnings,epochs,network:
 POST /tenant/users; GET /tenant/users?q&kind; POST|DELETE /tenant/users/:id/roles {role,scopeType,scopeId}
 GET /tenant/users/:id/signature; PUT /tenant/users/:id/signature {signatureDataUrl}; DELETE /tenant/users/:id/signature (users:write)
 PUT  /tenant/mail-config {transportKind,senderAddress,senderName,endpointSecret?,tokenSecret?,callbackSecret?,category?,settings}
-GET  /tenant/mail-dispatches; PUT /tenant/sso-config; POST /tenant/api-keys; DELETE /tenant/api-keys/:id; POST /tenant/webhooks; GET /tenant/webhooks/deliveries; POST /tenant/webhooks/deliveries/:id/replay; GET /tenant/audit
+GET  /tenant/mail-dispatches; PUT /tenant/sso-config; POST /tenant/api-keys; DELETE /tenant/api-keys/:id; POST /tenant/webhooks; GET /tenant/webhooks/deliveries; POST /tenant/webhooks/deliveries/:id/replay
+GET  /tenant/branding → {branding: TenantBranding | null}
+PUT  /tenant/branding {logoUrl?, primaryColor?, accentColor?, headerText?, contactEmail?} → {branding: TenantBranding}
+GET  /tenant/sessions → {sessions: UserSession[]}
+DELETE /tenant/sessions/:id → {revoked: true}
+POST /tenant/revoke-all-sessions → {message, revokedAt}
+GET  /tenant/audit?q&limit&offset → {events: AuditEvent[]}
+POST /tenant/audit/export {} → {csv: string, count: number} (audited as audit.exported)
 
 ## ERP Adapters, XLSX Import & Mail Completeness (Phase 7)
 GET  /integration/v1/roster/templates/:entity (roster:read) → CSV template download for PERSON | ACADEMIC_UNIT | COURSE | ENROLLMENT
