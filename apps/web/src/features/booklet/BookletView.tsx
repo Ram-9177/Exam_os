@@ -238,7 +238,7 @@ export function AnswerRender({ doc, className }: { doc: AnswerDoc | unknown; cla
 
         const text = typeof b.content === 'string' ? b.content : paragraphText(b) || (b.content != null ? String(b.content) : '');
         return (
-          <div key={b.id || `p-${i}`} className="ruled ruled-inset whitespace-pre-wrap text-[17px] min-h-16">
+          <div key={b.id || `p-${i}`} className="ruled ruled-inset whitespace-pre-wrap text-[16px] min-h-16">
             {text || ' '}
           </div>
         );

@@ -210,15 +210,15 @@ html.light {
       linear-gradient(to right, transparent 0, transparent calc(3.5rem - 1px), var(--margin-rose) calc(3.5rem - 1px), var(--margin-rose) 3.5rem, transparent 3.5rem),
       repeating-linear-gradient(to bottom, transparent 0, transparent calc(var(--lh) - 1px), var(--rule-blue) calc(var(--lh) - 1px), var(--rule-blue) var(--lh));
     background-attachment: local;
-    background-position: 0 4px;
+    background-position: 0 -2.5px;
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
   }
   .ruled-inset {
     padding-left: 4.25rem;
     padding-right: 1.5rem;
-    padding-top: 0;
-    padding-bottom: 0;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
   }
   .tabular {
     font-variant-numeric: tabular-nums;

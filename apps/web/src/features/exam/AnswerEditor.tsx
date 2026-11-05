@@ -352,7 +352,7 @@ const ParagraphBlock = forwardRef<
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="sentences"
-        className="ruled ruled-inset w-full resize-none border-0 pt-0 pb-0 text-[16px] leading-8 text-ink outline-none disabled:opacity-70"
+        className="ruled ruled-inset w-full resize-none border-0 text-[16px] leading-8 text-ink outline-none disabled:opacity-70"
         style={{ fontFamily: 'var(--font-sans)', minHeight: 160 }}
       />
     </div>
