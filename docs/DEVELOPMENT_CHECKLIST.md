@@ -40,6 +40,9 @@ Statuses: **Not Started** · **In Progress** · **Tested** (an automated test ex
 | Results pull (published only, no proctoring data) | Tested | exam-flow.e2e.test.ts |
 | XLSX import (L0) through the same roster service (download templates, preview, identity conflicts, per-row outcomes) | Tested | erp-adapters.test.ts, erp-import.test.tsx |
 | Adapters that pull from the ERP (`uos`, `generic-rest` with field mapping, dry-run & live sync) | Tested | erp-adapters.test.ts, erp-import.test.tsx |
+| Physical rooms domain & template import (rooms table, capacity, building, floor, RLS, preview & batch import) | Tested | erp-adapters.test.ts, erp-import.test.tsx |
+| Sync drift counters (real-time comparison between ERP sync jobs, outbox deliveries, and tenant DB entity counts) | Tested | erp-adapters.test.ts, erp-import.test.tsx |
+| Admin webhook delivery replay with payload status inspection | Tested | erp-adapters.test.ts, erp-import.test.tsx |
 
 ## Exam mail
 | Feature | Status | Evidence |

@@ -188,4 +188,84 @@ describe('Phase 7: ERP Adapters, XLSX Import & Mail Completeness UI', () => {
 
     expect(await screen.findByText('Mark an undelivered message as BOUNCED from an NDR or mail report.')).toBeInTheDocument();
   });
+
+  it('allows selecting ROOM entity for template and preview, and inspects sync drift on ERP connections', async () => {
+    const user = userEvent.setup();
+    const me = signInAs(['TENANT_ADMIN', 'INTEGRATION_ADMIN']);
+
+    mockFetch((call) => {
+      if (call.path === '/auth/me') return { json: me };
+      if (call.path === '/tenant') return { json: TENANT };
+      if (call.path === '/tenant/users?q=&kind=') return { json: { users: [] } };
+      if (call.path === '/tenant/erp-connections' && call.method === 'GET') {
+        return { json: { connections: mockConnections } };
+      }
+      if (call.path === '/tenant/erp-connections/conn-1/drift') {
+        return {
+          json: {
+            connectionId: 'conn-1',
+            provider: 'uos',
+            lastSyncAt: '2026-10-30T10:00:00Z',
+            driftCount: 5,
+            unresolvedConflicts: 1,
+            failedDeliveries: 0,
+            entityCounts: {
+              persons: 120,
+              courses: 15,
+              enrollments: 340,
+              rooms: 12,
+            },
+          },
+        };
+      }
+      if (call.path === '/tenant/roster/preview' && call.method === 'POST') {
+        return {
+          json: {
+            entity: 'ROOM',
+            total: 1,
+            summary: { created: 1, updated: 0, unchanged: 0, rejected: 0, identityConflicts: 0 },
+            sampleRows: [
+              { externalId: 'HALL-A', outcome: 'CREATED', data: {} },
+            ],
+          },
+        };
+      }
+      return undefined;
+    });
+
+    renderApp([{ path: '/admin', element: <AdminPage /> }], '/admin');
+
+    // 1. Check Drift Inspection in ERP tab
+    const erpTab = await screen.findByRole('tab', { name: 'ERP connections' });
+    await user.click(erpTab);
+
+    const driftButtons = await screen.findAllByRole('button', { name: 'Drift' });
+    expect(driftButtons.length).toBeGreaterThanOrEqual(1);
+    await user.click(driftButtons[0]!);
+
+    expect(await screen.findByText(/Sync Drift & Discrepancies/)).toBeInTheDocument();
+    expect(screen.getByText('Synced Drift Rows')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText('12')).toBeInTheDocument(); // rooms count
+
+    // Close drift dialog
+    await user.click(screen.getByRole('button', { name: 'Close inspection' }));
+
+    // 2. Check ROOM selection in Roster Import tab
+    const importTab = screen.getByRole('tab', { name: 'Roster import' });
+    await user.click(importTab);
+
+    // Select ROOM entity
+    const entitySelect = screen.getByLabelText(/Roster Entity/);
+    await user.selectOptions(entitySelect, 'ROOM');
+
+    expect(screen.getByRole('button', { name: 'Download ROOM template' })).toBeInTheDocument();
+
+    // Paste CSV and preview
+    const textarea = screen.getByPlaceholderText('Or paste CSV rows directly here...');
+    await user.type(textarea, 'code,name,building,capacity\nHALL-A,Hall A,Block 1,60');
+    await user.click(screen.getByRole('button', { name: 'Preview import' }));
+
+    expect(await screen.findByText('HALL-A')).toBeInTheDocument();
+  });
 });

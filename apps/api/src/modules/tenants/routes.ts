@@ -17,6 +17,7 @@ import {
   MailBounceReconcileSchema,
   UserSignatureUploadSchema,
   TenantBrandingSchema,
+  RoomSchema,
 } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { asyncHandler, validateBody, body, uuidParam } from '../../lib/http.js';
@@ -33,6 +34,7 @@ import {
   getErpConnection,
   updateErpConnection,
   executeErpSync,
+  getSyncDriftCounters,
 } from '../integration/sync-service.js';
 import { generateTemplate, previewRosterImport, executeRosterImport } from '../integration/csv-importer.js';
 import { getMailHealthMetrics } from '../notifications/health.js';
@@ -667,6 +669,19 @@ export function tenantAdminRoutes(deps: AppDeps, jwt: JwtService): Router {
     }),
   );
 
+  r.get(
+    '/erp-connections/:id/drift',
+    user,
+    requirePermission('integration:manage'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const summary = await tenantTx(deps, req, (trx) =>
+        getSyncDriftCounters(trx, t.id, uuidParam(req, 'id')),
+      );
+      res.json(summary);
+    }),
+  );
+
   // ---------------------------------------------------------------- Phase 7: Mail Health & Bounces
   r.get(
     '/mail/health',
@@ -702,10 +717,10 @@ export function tenantAdminRoutes(deps: AppDeps, jwt: JwtService): Router {
     requirePermission('roster:read'),
     asyncHandler(async (req, res) => {
       const entityParam = req.params['entity']?.toUpperCase();
-      if (!['PERSON', 'ACADEMIC_UNIT', 'COURSE', 'ENROLLMENT'].includes(entityParam ?? '')) {
-        throw AppError.badRequest('INVALID_ENTITY', 'Valid entities are PERSON, ACADEMIC_UNIT, COURSE, ENROLLMENT');
+      if (!['PERSON', 'ACADEMIC_UNIT', 'COURSE', 'ENROLLMENT', 'ROOM'].includes(entityParam ?? '')) {
+        throw AppError.badRequest('INVALID_ENTITY', 'Valid entities are PERSON, ACADEMIC_UNIT, COURSE, ENROLLMENT, ROOM');
       }
-      const template = generateTemplate(entityParam as 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT');
+      const template = generateTemplate(entityParam as 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT' | 'ROOM');
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="template-${entityParam?.toLowerCase()}.csv"`);
       res.send(template);
@@ -770,6 +785,53 @@ export function tenantAdminRoutes(deps: AppDeps, jwt: JwtService): Router {
           .limit(100),
       );
       res.json({ jobs: rows });
+    }),
+  );
+
+  r.get(
+    '/rooms',
+    user,
+    requirePermission('roster:read'),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
+      const rows = await tenantTx(deps, req, async (trx) => {
+        let query = trx('rooms').where({ tenant_id: t.id }).orderBy('code', 'asc');
+        if (q) {
+          query = query.andWhere((b) =>
+            b.whereILike('code', `%${q}%`).orWhereILike('name', `%${q}%`).orWhereILike('building', `%${q}%`),
+          );
+        }
+        return query;
+      });
+      res.json({ rooms: rows });
+    }),
+  );
+
+  r.post(
+    '/rooms',
+    user,
+    requirePermission('roster:write'),
+    validateBody(RoomSchema),
+    asyncHandler(async (req, res) => {
+      const t = requireTenant(req);
+      const input = body<typeof RoomSchema>(req);
+      const room = await tenantTx(deps, req, async (trx) => {
+        const [r] = await trx('rooms')
+          .insert({
+            tenant_id: t.id,
+            code: input.code,
+            name: input.name,
+            building: input.building,
+            floor: input.floor ?? null,
+            capacity: input.capacity,
+            active: input.active,
+            metadata: JSON.stringify(input.attributes ?? {}),
+          })
+          .returning('*');
+        return r;
+      });
+      res.status(201).json({ room });
     }),
   );
 

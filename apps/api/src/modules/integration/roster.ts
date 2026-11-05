@@ -1,5 +1,5 @@
 import type { Knex } from '@examos/db';
-import type { Person, AcademicUnit, Course, Enrollment, RosterBatchResponse } from '@examos/contracts';
+import type { Person, AcademicUnit, Course, Enrollment, Room, RosterBatchResponse } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { createUserWithActivation } from '../users/service.js';
 import { audit } from '../../lib/audit.js';
@@ -18,7 +18,7 @@ export interface RosterActor {
   sourceLabel?: string;
 }
 
-async function openJob(trx: Knex.Transaction, actor: RosterActor, entity: 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT', mode: Mode): Promise<string> {
+async function openJob(trx: Knex.Transaction, actor: RosterActor, entity: 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT' | 'ROOM', mode: Mode): Promise<string> {
   const [job] = await trx('roster_sync_jobs')
     .insert({ tenant_id: actor.tenantId, source: actor.source, connection_id: actor.connectionId ?? null, api_key_id: actor.apiKeyId ?? null, actor_user_id: actor.actorUserId ?? null, entity, mode, source_label: actor.sourceLabel ?? null })
     .returning('id');
@@ -220,4 +220,56 @@ export async function upsertEnrollments(trx: Knex.Transaction, actor: RosterActo
     }
   }
   return closeJob(trx, actor, jobId, 'ENROLLMENT', results);
+}
+
+export async function upsertRooms(
+  trx: Knex.Transaction,
+  actor: RosterActor,
+  rows: Room[],
+  mode: Mode,
+): Promise<RosterBatchResponse> {
+  const jobId = await openJob(trx, actor, 'ROOM', mode);
+  const results: RowResult[] = [];
+  for (const [index, r] of rows.entries()) {
+    try {
+      const existing = await trx('rooms').where({ tenant_id: actor.tenantId, code: r.code }).first();
+      if (existing) {
+        if (mode === 'CREATE_ONLY') {
+          results.push({ index, externalId: r.code, outcome: 'UNCHANGED', code: 'EXISTS' });
+          continue;
+        }
+        const changes: Record<string, unknown> = {};
+        if (existing.name !== r.name) changes['name'] = r.name;
+        if (existing.building !== r.building) changes['building'] = r.building;
+        if ((existing.floor ?? null) !== (r.floor ?? null)) changes['floor'] = r.floor ?? null;
+        if (Number(existing.capacity) !== Number(r.capacity)) changes['capacity'] = r.capacity;
+        if (Boolean(existing.active) !== Boolean(r.active)) changes['active'] = r.active;
+        if (r.attributes) changes['metadata'] = JSON.stringify({ ...(existing.metadata ?? {}), ...r.attributes });
+
+        if (Object.keys(changes).length) {
+          await trx('rooms').where('id', existing.id).update({ ...changes, updated_at: trx.fn.now() });
+        }
+        results.push({ index, externalId: r.code, outcome: Object.keys(changes).length ? 'UPDATED' : 'UNCHANGED' });
+      } else {
+        if (mode === 'UPDATE_ONLY') {
+          results.push({ index, externalId: r.code, outcome: 'REJECTED', code: 'NOT_FOUND' });
+          continue;
+        }
+        await trx('rooms').insert({
+          tenant_id: actor.tenantId,
+          code: r.code,
+          name: r.name,
+          building: r.building,
+          floor: r.floor ?? null,
+          capacity: r.capacity ?? 30,
+          active: r.active ?? true,
+          metadata: JSON.stringify(r.attributes ?? {}),
+        });
+        results.push({ index, externalId: r.code, outcome: 'CREATED' });
+      }
+    } catch (err: any) {
+      results.push({ index, externalId: r.code, outcome: 'REJECTED', code: 'ERROR', message: err instanceof Error ? err.message : 'unknown error' });
+    }
+  }
+  return closeJob(trx, actor, jobId, 'ROOM', results);
 }

@@ -447,4 +447,130 @@ describe('Phase 7: ERP Adapters, XLSX Import & Mail Completeness', () => {
     expect(healthRes.body.dailyExternalQuota.limit).toBe(2000);
     expect(healthRes.body.dailyExternalQuota.remaining).toBeLessThanOrEqual(2000);
   });
+
+  // ---------------------------------------------------------------- Rooms, Sync Drift & Webhook Replay
+  it('downloads room template, previews, imports rooms, checks tenant isolation, drift and webhook replay', async () => {
+    // 1. Download ROOM template
+    const templateRes = await call()
+      .get('/api/v1/tenant/roster/templates/ROOM')
+      .set(staffAuth());
+    expect(templateRes.status).toBe(200);
+    expect(templateRes.headers['content-type']).toContain('text/csv');
+    expect(templateRes.text).toContain('code,name,building,floor,capacity,active');
+    expect(templateRes.text).toContain('HALL-A');
+
+    // 2. Preview room import with valid and invalid rows
+    const roomCsv = [
+      'code,name,building,floor,capacity,active',
+      'HALL-101,Main Examination Hall 101,Academic Block A,1st Floor,60,true',
+      'LAB-202,Computer Science Lab 202,Tech Tower,2nd Floor,40,true',
+      ',Invalid Room Without Code,Tech Tower,2nd Floor,40,true',
+    ].join('\n');
+
+    const previewRes = await call()
+      .post('/api/v1/tenant/roster/preview')
+      .set(staffAuth())
+      .send({
+        entity: 'ROOM',
+        csvContent: roomCsv,
+        mode: 'UPSERT',
+      });
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.body.entity).toBe('ROOM');
+    expect(previewRes.body.summary.created).toBe(2);
+    expect(previewRes.body.summary.rejected).toBe(1);
+    expect(previewRes.body.sampleRows).toHaveLength(3);
+    expect(previewRes.body.sampleRows[0].outcome).toBe('CREATED');
+    expect(previewRes.body.sampleRows[2].outcome).toBe('REJECTED');
+
+    // 3. Execute room import
+    const validRoomCsv = [
+      'code,name,building,floor,capacity,active',
+      'HALL-101,Main Examination Hall 101,Academic Block A,1st Floor,60,true',
+      'LAB-202,Computer Science Lab 202,Tech Tower,2nd Floor,40,true',
+    ].join('\n');
+
+    const importRes = await call()
+      .post('/api/v1/tenant/roster/import')
+      .set(staffAuth())
+      .send({
+        entity: 'ROOM',
+        csvContent: validRoomCsv,
+        mode: 'UPSERT',
+        sourceLabel: 'Campus Hall Allocation CSV',
+      });
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.summary.created).toBe(2);
+
+    // 4. Verify rooms in DB and via GET /api/v1/tenant/rooms
+    const roomsRes = await call()
+      .get('/api/v1/tenant/rooms?q=HALL')
+      .set(staffAuth());
+    expect(roomsRes.status).toBe(200);
+    expect(roomsRes.body.rooms.length).toBe(1);
+    expect(roomsRes.body.rooms[0].code).toBe('HALL-101');
+    expect(roomsRes.body.rooms[0].capacity).toBe(60);
+
+    // 5. Tenant isolation check: provision second tenant and verify rooms are invisible
+    const t2 = await provisionTenant(ctx, 'p7t2');
+    const t2StaffAuth = { Host: t2.host, Authorization: `Bearer ${t2.admin.token}` };
+    const t2RoomsRes = await call()
+      .get('/api/v1/tenant/rooms')
+      .set(t2StaffAuth);
+    expect(t2RoomsRes.status).toBe(200);
+    expect(t2RoomsRes.body.rooms).toHaveLength(0);
+
+    // 6. Sync drift counters
+    const erpConn = await ctx.admin('tenant_erp_connections').where({ tenant_id: t.tenantId }).first();
+    if (erpConn) {
+      const driftRes = await call()
+        .get(`/api/v1/tenant/erp-connections/${erpConn.id}/drift`)
+        .set(staffAuth());
+      expect(driftRes.status).toBe(200);
+      expect(driftRes.body.connectionId).toBe(erpConn.id);
+      expect(driftRes.body.entityCounts.rooms).toBeGreaterThanOrEqual(2);
+    }
+
+    // 7. Webhook delivery replay
+    const [endpoint] = await ctx.admin('webhook_endpoints')
+      .insert({
+        tenant_id: t.tenantId,
+        url: 'https://webhook.smru.edu.in/events',
+        secret_ciphertext: 'enc:mock',
+        event_types: ['roster.sync.completed'],
+        status: 'ACTIVE',
+      })
+      .returning('*');
+
+    const [event] = await ctx.admin('integration_events')
+      .insert({
+        tenant_id: t.tenantId,
+        type: 'roster.sync.completed',
+        aggregate_type: 'roster_sync_job',
+        aggregate_id: randomUUID(),
+        payload: JSON.stringify({ count: 2 }),
+      })
+      .returning('*');
+
+    const [delivery] = await ctx.admin('webhook_deliveries')
+      .insert({
+        tenant_id: t.tenantId,
+        endpoint_id: endpoint.id,
+        integration_event_id: event.id,
+        event_type: 'roster.sync.completed',
+        status: 'DEAD',
+        attempts: 3,
+        last_error: '503 Service Unavailable',
+      })
+      .returning('*');
+
+    const replayRes = await call()
+      .post(`/api/v1/tenant/webhooks/deliveries/${delivery.id}/replay`)
+      .set(staffAuth());
+    expect(replayRes.status).toBe(202);
+
+    const replayedDelivery = await ctx.admin('webhook_deliveries').where({ id: delivery.id }).first();
+    expect(replayedDelivery.status).toBe('PENDING');
+    expect(replayedDelivery.attempts).toBe(0);
+  });
 });

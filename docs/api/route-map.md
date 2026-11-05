@@ -138,7 +138,7 @@ GET  /tenant/audit?q&limit&offset → {events: AuditEvent[]}
 POST /tenant/audit/export {} → {csv: string, count: number} (audited as audit.exported)
 
 ## ERP Adapters, XLSX Import & Mail Completeness (Phase 7)
-GET  /integration/v1/roster/templates/:entity (roster:read) → CSV template download for PERSON | ACADEMIC_UNIT | COURSE | ENROLLMENT
+GET  /integration/v1/roster/templates/:entity (roster:read) → CSV template download for PERSON | ACADEMIC_UNIT | COURSE | ENROLLMENT | ROOM
 POST /integration/v1/roster/preview {entity, csvContent, mode, provider?} (roster:write) → {entity, total, summary:{created, updated, unchanged, rejected, identityConflicts}, sampleRows}
 POST /integration/v1/roster/import-xlsx {entity, csvContent, mode, provider?, sourceLabel?} (roster:write) → 200 {syncJobId, summary, rows}
 POST /integration/v1/mail/bounces {providerMessageId?, toAddress, reason?, diagnosticCode?, bouncedAt?} → {reconciled:boolean, dispatchId, toAddress}
@@ -148,12 +148,15 @@ GET  /tenant/erp-connections/:id (integration:manage) → {connection}
 PUT  /tenant/erp-connections/:id {label?, baseUrl?, syncScheduleCron?, mapping?, status?, credentialSecret?, webhookSecret?} (integration:manage) → 204
 POST /tenant/erp-connections/:id/sync {entity, mode, dryRun} (integration:manage) → {dryRun:boolean, results | summary, sampleRows}
 GET  /tenant/erp-connections/:id/jobs (integration:manage) → {jobs:[{id,entity,mode,source,status,summary,started_at,completed_at}]}
+GET  /tenant/erp-connections/:id/drift (integration:manage) → {connectionId, provider, lastSyncAt, driftCount, unresolvedConflicts, failedDeliveries, entityCounts}
 GET  /tenant/mail/health (mail:manage) → {totalDispatches, accepted, delivered, bounced, failed, queued, sending, bounceRatePct, byTransport, byLane, dailyExternalQuota:{sentToday, limit, remaining}}
 POST /tenant/mail/bounces {providerMessageId?, toAddress, reason?, diagnosticCode?, bouncedAt?} (mail:manage) → {reconciled:boolean, dispatchId, toAddress}
-GET  /tenant/roster/templates/:entity (roster:read) → CSV template download
+GET  /tenant/roster/templates/:entity (roster:read) → CSV template download for PERSON | ACADEMIC_UNIT | COURSE | ENROLLMENT | ROOM
 POST /tenant/roster/preview {entity, csvContent, mode, provider?} (roster:write) → {entity, total, summary, sampleRows}
 POST /tenant/roster/import {entity, csvContent, mode, provider?, sourceLabel?} (roster:write) → {syncJobId, summary, rows}
 GET  /tenant/roster/sync-jobs?source (roster:read) → {jobs:[...]}
+GET  /tenant/rooms?q (roster:read) → {rooms:[{id, code, name, building, floor, capacity, active, metadata, created_at, updated_at}]}
+POST /tenant/rooms {code, name, building, floor?, capacity?, active?, attributes?} (roster:write) → 201 {room}
 
 ## Password reset and account recovery
 POST /auth/forgot-password {email} → 202 (always; ACTIVE gets reset link, PENDING gets new activation)

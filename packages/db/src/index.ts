@@ -96,6 +96,7 @@ export const TENANT_TABLES = [
   'departments',
   'programmes',
   'courses',
+  'rooms',
   'student_profiles',
   'course_enrollments',
   'idempotency_keys',

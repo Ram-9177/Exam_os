@@ -8,6 +8,7 @@ import type {
   AcademicUnit,
   Course,
   Enrollment,
+  SyncDriftSummary,
 } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
 import { getErpAdapter, type ErpConnectionRow, type ErpPullData } from './adapters/index.js';
@@ -311,6 +312,57 @@ async function simulateDryRun(
     total,
     summary: { created, updated, unchanged, rejected, identityConflicts },
     sampleRows: samples,
+  };
+}
+
+export async function getSyncDriftCounters(
+  trx: Knex.Transaction,
+  tenantId: string,
+  connectionId: string,
+): Promise<SyncDriftSummary> {
+  const conn = await getErpConnection(trx, tenantId, connectionId);
+
+  const recentJobs = await trx('roster_sync_jobs')
+    .where({ tenant_id: tenantId, connection_id: connectionId })
+    .orderBy('started_at', 'desc')
+    .limit(10);
+
+  let driftCount = 0;
+  let unresolvedConflicts = 0;
+
+  for (const job of recentJobs) {
+    if (job.summary) {
+      const summary = typeof job.summary === 'string' ? JSON.parse(job.summary) : job.summary;
+      driftCount += (summary.created ?? 0) + (summary.updated ?? 0);
+      unresolvedConflicts += (summary.identityConflicts ?? 0) + (summary.rejected ?? 0);
+    }
+  }
+
+  const failedDeliveriesRow = await trx('webhook_deliveries')
+    .where({ tenant_id: tenantId })
+    .whereIn('status', ['DEAD', 'RETRYING'])
+    .count('* as count')
+    .first();
+  const failedDeliveries = Number(failedDeliveriesRow?.count ?? 0);
+
+  const personsCount = Number((await trx('external_identities').where({ tenant_id: tenantId, provider: conn.provider }).count('* as c').first())?.c ?? 0);
+  const coursesCount = Number((await trx('courses').where({ tenant_id: tenantId }).count('* as c').first())?.c ?? 0);
+  const enrollmentsCount = Number((await trx('course_enrollments').where({ tenant_id: tenantId }).count('* as c').first())?.c ?? 0);
+  const roomsCount = Number((await trx('rooms').where({ tenant_id: tenantId }).count('* as c').first())?.c ?? 0);
+
+  return {
+    connectionId: conn.id,
+    provider: conn.provider,
+    lastSyncAt: conn.last_sync_at ? new Date(conn.last_sync_at).toISOString() : null,
+    driftCount,
+    unresolvedConflicts,
+    failedDeliveries,
+    entityCounts: {
+      persons: personsCount,
+      courses: coursesCount,
+      enrollments: enrollmentsCount,
+      rooms: roomsCount,
+    },
   };
 }
 

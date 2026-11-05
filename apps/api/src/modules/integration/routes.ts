@@ -215,10 +215,10 @@ export function integrationRoutes(deps: AppDeps): Router {
     limiter,
     asyncHandler(async (req, res) => {
       const entityParam = req.params['entity']?.toUpperCase();
-      if (!['PERSON', 'ACADEMIC_UNIT', 'COURSE', 'ENROLLMENT'].includes(entityParam ?? '')) {
-        throw AppError.badRequest('INVALID_ENTITY', 'Valid entities are PERSON, ACADEMIC_UNIT, COURSE, ENROLLMENT');
+      if (!['PERSON', 'ACADEMIC_UNIT', 'COURSE', 'ENROLLMENT', 'ROOM'].includes(entityParam ?? '')) {
+        throw AppError.badRequest('INVALID_ENTITY', 'Valid entities are PERSON, ACADEMIC_UNIT, COURSE, ENROLLMENT, ROOM');
       }
-      const template = generateTemplate(entityParam as 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT');
+      const template = generateTemplate(entityParam as 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT' | 'ROOM');
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="template-${entityParam?.toLowerCase()}.csv"`);
       res.send(template);

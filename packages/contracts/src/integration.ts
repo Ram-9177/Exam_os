@@ -57,6 +57,28 @@ export const EnrollmentSchema = z.object({
 });
 export type Enrollment = z.infer<typeof EnrollmentSchema>;
 
+export const RoomSchema = z.object({
+  code: Code,
+  name: z.string().trim().min(1).max(200),
+  building: z.string().trim().min(1).max(128),
+  floor: z.string().trim().max(32).optional(),
+  capacity: z.number().int().min(1).max(1000).default(30),
+  active: z.boolean().default(true),
+  attributes: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+});
+export type Room = z.infer<typeof RoomSchema>;
+
+export const SyncDriftSummarySchema = z.object({
+  connectionId: z.string(),
+  provider: z.string(),
+  lastSyncAt: z.string().datetime().nullable(),
+  driftCount: z.number().int().min(0),
+  unresolvedConflicts: z.number().int().min(0),
+  failedDeliveries: z.number().int().min(0),
+  entityCounts: z.record(z.string(), z.number().int()),
+});
+export type SyncDriftSummary = z.infer<typeof SyncDriftSummarySchema>;
+
 export const MAX_BATCH_ROWS = 500;
 const batch = <T extends z.ZodTypeAny>(item: T) =>
   z.object({

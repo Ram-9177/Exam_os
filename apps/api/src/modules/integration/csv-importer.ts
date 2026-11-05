@@ -4,14 +4,16 @@ import {
   type AcademicUnit,
   type Course,
   type Enrollment,
+  type Room,
   type RosterBatchResponse,
   PersonSchema,
   AcademicUnitSchema,
   CourseSchema,
   EnrollmentSchema,
+  RoomSchema,
 } from '@examos/contracts';
 import type { AppDeps } from '../../types.js';
-import { upsertPersons, upsertAcademicUnits, upsertCourses, upsertEnrollments, type RosterActor } from './roster.js';
+import { upsertPersons, upsertAcademicUnits, upsertCourses, upsertEnrollments, upsertRooms, type RosterActor } from './roster.js';
 import { AppError } from '../../lib/errors.js';
 
 export function parseCsv(csvText: string): Array<Record<string, string>> {
@@ -112,8 +114,15 @@ export function parseCsv(csvText: string): Array<Record<string, string>> {
   return parsedObjects;
 }
 
-export function generateTemplate(entity: 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT'): string {
+export function generateTemplate(entity: 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT' | 'ROOM'): string {
   switch (entity) {
+    case 'ROOM':
+      return [
+        'code,name,building,floor,capacity,active',
+        'HALL-A,Examination Hall A,Academic Block 1,Ground Floor,60,true',
+        'HALL-B,Examination Hall B,Academic Block 1,1st Floor,60,true',
+        'LAB-101,Computing Lab 1,Science Block,Ground Floor,45,true',
+      ].join('\n');
     case 'PERSON':
       return [
         'externalId,email,fullName,kind,status,departmentCode,programmeCode,admissionBatch,currentSemester,section,preferredLanguage,registerNumber',
@@ -170,7 +179,7 @@ export async function previewRosterImport(
   _deps: AppDeps,
   trx: Knex.Transaction,
   tenantId: string,
-  entity: 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT',
+  entity: 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT' | 'ROOM',
   csvContent: string,
   mode: 'UPSERT' | 'CREATE_ONLY' | 'UPDATE_ONLY' = 'UPSERT',
   provider = 'xlsx',
@@ -339,6 +348,38 @@ export async function previewRosterImport(
         }
         const existing = await trx('course_enrollments').where({ tenant_id: tenantId, user_id: identity.user_id, course_id: course.id, academic_year: e.academicYear, term: e.term }).first();
         outcomes.push({ index: i, externalId: e.studentExternalId, outcome: existing ? (mode === 'CREATE_ONLY' ? 'UNCHANGED' : 'UPDATED') : (mode === 'UPDATE_ONLY' ? 'REJECTED' : 'CREATED'), data: e as Record<string, unknown> });
+      } else if (entity === 'ROOM') {
+        const parsed = RoomSchema.safeParse({
+          code: raw['code'],
+          name: raw['name'],
+          building: raw['building'],
+          floor: raw['floor'] || undefined,
+          capacity: raw['capacity'] ? Number(raw['capacity']) : 30,
+          active: raw['active'] !== undefined ? String(raw['active']).toLowerCase() === 'true' || raw['active'] === '1' : true,
+        });
+        if (!parsed.success) {
+          outcomes.push({
+            index: i,
+            externalId: raw['code'] || `row-${i + 1}`,
+            outcome: 'REJECTED',
+            code: 'VALIDATION_FAILED',
+            message: parsed.error.issues.map((iss) => `${iss.path.join('.')}: ${iss.message}`).join('; '),
+            data: raw,
+          });
+          continue;
+        }
+        const rm = parsed.data;
+        const existing = await trx('rooms').where({ tenant_id: tenantId, code: rm.code }).first();
+        if (existing) {
+          if (mode === 'CREATE_ONLY') {
+            outcomes.push({ index: i, externalId: rm.code, outcome: 'UNCHANGED', code: 'EXISTS', data: rm as Record<string, unknown> });
+          } else {
+            const changed = existing.name !== rm.name || existing.building !== rm.building || (existing.floor ?? null) !== (rm.floor ?? null) || Number(existing.capacity) !== Number(rm.capacity) || Boolean(existing.active) !== Boolean(rm.active);
+            outcomes.push({ index: i, externalId: rm.code, outcome: changed ? 'UPDATED' : 'UNCHANGED', data: rm as Record<string, unknown> });
+          }
+        } else {
+          outcomes.push({ index: i, externalId: rm.code, outcome: mode === 'UPDATE_ONLY' ? 'REJECTED' : 'CREATED', code: mode === 'UPDATE_ONLY' ? 'NOT_FOUND' : undefined, data: rm as Record<string, unknown> });
+        }
       }
     } catch (err) {
       outcomes.push({
@@ -372,7 +413,7 @@ export async function executeRosterImport(
   deps: AppDeps,
   trx: Knex.Transaction,
   tenantId: string,
-  entity: 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT',
+  entity: 'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT' | 'ROOM',
   csvContent: string,
   mode: 'UPSERT' | 'CREATE_ONLY' | 'UPDATE_ONLY' = 'UPSERT',
   provider = 'xlsx',
@@ -462,6 +503,23 @@ export async function executeRosterImport(
       );
     }
     return upsertEnrollments(trx, actor, rows, mode);
+  }
+
+  if (entity === 'ROOM') {
+    const rows: Room[] = [];
+    for (const raw of records) {
+      rows.push(
+        RoomSchema.parse({
+          code: raw['code'],
+          name: raw['name'],
+          building: raw['building'],
+          floor: raw['floor'] || undefined,
+          capacity: raw['capacity'] ? Number(raw['capacity']) : 30,
+          active: raw['active'] !== undefined ? String(raw['active']).toLowerCase() === 'true' || raw['active'] === '1' : true,
+        }),
+      );
+    }
+    return upsertRooms(trx, actor, rows, mode);
   }
 
   throw AppError.badRequest('INVALID_ENTITY', `Unsupported entity type: ${entity}`);

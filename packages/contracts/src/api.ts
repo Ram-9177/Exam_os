@@ -687,7 +687,7 @@ export const ErpSyncRequestSchema = z.object({
 export type ErpSyncRequestInput = z.infer<typeof ErpSyncRequestSchema>;
 
 export const XlsxPreviewRequestSchema = z.object({
-  entity: z.enum(['PERSON', 'ACADEMIC_UNIT', 'COURSE', 'ENROLLMENT']),
+  entity: z.enum(['PERSON', 'ACADEMIC_UNIT', 'COURSE', 'ENROLLMENT', 'ROOM']),
   csvContent: z.string().min(1),
   mode: z.enum(['UPSERT', 'CREATE_ONLY', 'UPDATE_ONLY']).default('UPSERT'),
   provider: z.string().min(1).max(32).default('xlsx'),
@@ -695,7 +695,7 @@ export const XlsxPreviewRequestSchema = z.object({
 export type XlsxPreviewRequestInput = z.infer<typeof XlsxPreviewRequestSchema>;
 
 export const XlsxImportRequestSchema = z.object({
-  entity: z.enum(['PERSON', 'ACADEMIC_UNIT', 'COURSE', 'ENROLLMENT']),
+  entity: z.enum(['PERSON', 'ACADEMIC_UNIT', 'COURSE', 'ENROLLMENT', 'ROOM']),
   csvContent: z.string().min(1),
   mode: z.enum(['UPSERT', 'CREATE_ONLY', 'UPDATE_ONLY']).default('UPSERT'),
   provider: z.string().min(1).max(32).default('xlsx'),

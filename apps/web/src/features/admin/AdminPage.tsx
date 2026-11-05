@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect, type FormEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { API_KEY_SCOPES, MAIL_TRANSPORT_KINDS, ROLE_CODES, ROLE_PERMISSIONS, WEBHOOK_EVENT_TYPES, type Permission, type RoleCode, type TenantBranding } from '@examos/contracts';
+import { API_KEY_SCOPES, MAIL_TRANSPORT_KINDS, ROLE_CODES, ROLE_PERMISSIONS, WEBHOOK_EVENT_TYPES, type Permission, type RoleCode, type TenantBranding, type SyncDriftSummary } from '@examos/contracts';
 import { api, isApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDateTime } from '@/lib/time';
@@ -1466,6 +1466,7 @@ function ErpConnections({ tz }: { tz: string }) {
   const [syncOptions, setSyncOptions] = useState({ entity: 'ALL', mode: 'UPSERT', dryRun: true });
   const [syncing, setSyncing] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<DryRunSummary | null>(null);
+  const [driftConn, setDriftConn] = useState<ErpConnection | null>(null);
 
   const q = useQuery({
     queryKey: ['tenant', 'erp-connections'],
@@ -1476,6 +1477,12 @@ function ErpConnections({ tz }: { tz: string }) {
     queryKey: ['tenant', 'erp-connections', jobsConn?.id, 'jobs'],
     queryFn: () => api.get<{ jobs: ErpSyncJob[] }>(`/tenant/erp-connections/${jobsConn?.id}/jobs`),
     enabled: Boolean(jobsConn),
+  });
+
+  const driftQ = useQuery({
+    queryKey: ['tenant', 'erp-connections', driftConn?.id, 'drift'],
+    queryFn: () => api.get<SyncDriftSummary>(`/tenant/erp-connections/${driftConn!.id}/drift`),
+    enabled: Boolean(driftConn),
   });
 
   const handleCreate = async (e: FormEvent) => {
@@ -1570,6 +1577,15 @@ function ErpConnections({ tz }: { tz: string }) {
       align: 'right',
       render: (c) => (
         <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setDriftConn(c);
+            }}
+          >
+            Drift
+          </Button>
           <Button
             size="sm"
             variant="secondary"
@@ -1857,6 +1873,67 @@ function ErpConnections({ tz }: { tz: string }) {
           )}
         </div>
       </Dialog>
+
+      {/* Drift & Discrepancies Dialog */}
+      <Dialog
+        open={Boolean(driftConn)}
+        onClose={() => setDriftConn(null)}
+        title={`Sync Drift & Discrepancies: ${driftConn?.label ?? ''}`}
+        description="Real-time discrepancy detection between ERP records and local ExamOS database."
+      >
+        <div className="flex flex-col gap-4">
+          {driftQ.isLoading ? (
+            <Skeleton lines={4} />
+          ) : driftQ.data ? (
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-3 gap-3 text-center text-xs">
+                <div className="p-3 rounded bg-accent/10 text-accent font-semibold">
+                  <span className="block text-xl font-bold">{driftQ.data.driftCount}</span>
+                  Synced Drift Rows
+                </div>
+                <div className="p-3 rounded bg-stop/10 text-stop font-semibold">
+                  <span className="block text-xl font-bold">{driftQ.data.unresolvedConflicts}</span>
+                  Unresolved Conflicts
+                </div>
+                <div className="p-3 rounded bg-surface-2 text-ink-2 font-semibold">
+                  <span className="block text-xl font-bold">{driftQ.data.failedDeliveries}</span>
+                  Failed Deliveries
+                </div>
+              </div>
+
+              <div className="rounded border border-line bg-surface p-3 text-xs">
+                <h5 className="font-semibold text-ink mb-2">Live Tenant Database Counts</h5>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-ink-2">
+                  <div className="p-2 bg-surface-2 rounded text-center">
+                    <span className="block font-bold text-ink text-sm">{driftQ.data.entityCounts.persons ?? 0}</span>
+                    Persons
+                  </div>
+                  <div className="p-2 bg-surface-2 rounded text-center">
+                    <span className="block font-bold text-ink text-sm">{driftQ.data.entityCounts.courses ?? 0}</span>
+                    Courses
+                  </div>
+                  <div className="p-2 bg-surface-2 rounded text-center">
+                    <span className="block font-bold text-ink text-sm">{driftQ.data.entityCounts.enrollments ?? 0}</span>
+                    Enrollments
+                  </div>
+                  <div className="p-2 bg-surface-2 rounded text-center">
+                    <span className="block font-bold text-ink text-sm">{driftQ.data.entityCounts.rooms ?? 0}</span>
+                    Rooms
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <Button variant="secondary" onClick={() => setDriftConn(null)}>
+                  Close inspection
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-ink-3">Failed to load drift metrics.</p>
+          )}
+        </div>
+      </Dialog>
     </div>
   );
 }
@@ -1864,7 +1941,7 @@ function ErpConnections({ tz }: { tz: string }) {
 // ---------------------------------------------------------------- Phase 7: Roster import (XLSX / CSV)
 function RosterImport() {
   const { toast } = useToast();
-  const [entity, setEntity] = useState<'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT'>('PERSON');
+  const [entity, setEntity] = useState<'PERSON' | 'ACADEMIC_UNIT' | 'COURSE' | 'ENROLLMENT' | 'ROOM'>('PERSON');
   const [mode, setMode] = useState<'UPSERT' | 'CREATE_ONLY' | 'UPDATE_ONLY'>('UPSERT');
   const [csvContent, setCsvContent] = useState('');
   const [provider, setProvider] = useState('xlsx');
@@ -1959,6 +2036,7 @@ function RosterImport() {
               <option value="ACADEMIC_UNIT">Schools & Departments</option>
               <option value="COURSE">Courses</option>
               <option value="ENROLLMENT">Course Enrollments</option>
+              <option value="ROOM">Examination Rooms & Halls</option>
             </Select>
           )}
         </Field>
